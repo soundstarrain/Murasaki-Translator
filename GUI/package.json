@@ -1,0 +1,105 @@
+{
+  "name": "murasaki-translator",
+  "version": "1.0.0",
+  "main": "./out/main/index.js",
+  "author": "Antigravity",
+  "description": "Murasaki Local AI Translator",
+  "scripts": {
+    "format": "prettier --write .",
+    "lint": "eslint . --ext .js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "build:win": "electron-builder --win --x64",
+    "preview": "electron-vite preview",
+    "start": "electron-vite preview"
+  },
+  "build": {
+    "appId": "com.murasaki.translator",
+    "productName": "Murasaki Translator",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerLanguages": [
+        "zh_CN",
+        "en_US",
+        "ja_JP"
+      ],
+      "language": "2052"
+    },
+    "electronLanguages": [
+      "zh-CN",
+      "en-US",
+      "ja"
+    ],
+    "extraResources": [
+      {
+        "from": "../middleware",
+        "to": "middleware",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/*",
+          "!**/*.spec",
+          "!**/*.log",
+          "!**/hf_cache/*",
+          "!**/models/*.gguf",
+          "!**/LLaMA-Factory/*",
+          "!**/.git/*",
+          "!**/.gitignore",
+          "!**/temp_*.json"
+        ]
+      },
+      {
+        "from": "../python_env",
+        "to": "python_env",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/*",
+          "!**/Scripts/*.pdb",
+          "!**/Lib/test/*"
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.0",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@radix-ui/react-progress": "^1.1.8",
+    "@radix-ui/react-slot": "^1.2.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.562.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.12.0",
+    "recharts": "^3.6.0",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss-animate": "^1.0.7"
+  },
+  "devDependencies": {
+    "@electron-toolkit/eslint-config-prettier": "^2.0.0",
+    "@electron-toolkit/eslint-config-ts": "^2.0.0",
+    "@electron-toolkit/tsconfig": "^1.0.1",
+    "@types/node": "^18.19.9",
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.19",
+    "electron": "^28.2.0",
+    "electron-builder": "^24.9.1",
+    "electron-vite": "^2.0.0",
+    "eslint": "^8.56.0",
+    "eslint-plugin-react": "^7.33.2",
+    "postcss": "^8.4.38",
+    "prettier": "^3.2.4",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12"
+  }
+}

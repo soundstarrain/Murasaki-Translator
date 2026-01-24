@@ -1,0 +1,225 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    /* Murasaki Dark Purple Theme */
+    --background: 248 15% 14%;
+    /* #1e1e2e */
+    --foreground: 226 64% 88%;
+    /* #cdd6f4 */
+
+    --card: 249 15% 17%;
+    /* #252535 */
+    --card-foreground: 226 64% 88%;
+    /* #cdd6f4 */
+
+    --popover: 249 15% 17%;
+    /* #252535 */
+    --popover-foreground: 226 64% 88%;
+    /* #cdd6f4 */
+
+    --primary: 271 76% 53%;
+    /* #8a2be2 - Violet accent */
+    --primary-foreground: 0 0% 100%;
+    /* White */
+
+    --secondary: 249 15% 22%;
+    /* #2d2d3d */
+    --secondary-foreground: 226 64% 88%;
+    /* #cdd6f4 */
+
+    --muted: 249 15% 22%;
+    /* #2d2d3d */
+    --muted-foreground: 228 21% 59%;
+    /* #9399b2 */
+
+    --accent: 271 76% 53%;
+    /* #8a2be2 */
+    --accent-foreground: 0 0% 100%;
+    /* White */
+
+    --destructive: 0 72% 51%;
+    /* Red */
+    --destructive-foreground: 0 0% 100%;
+    /* White */
+
+    --border: 249 15% 25%;
+    /* Slightly lighter than card */
+    --input: 249 15% 22%;
+    /* #2d2d3d */
+    --ring: 271 76% 53%;
+    /* #8a2be2 */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* Smooth theme transition for all elements */
+  *,
+  *::before,
+  *::after {
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.15s ease, box-shadow 0.2s ease;
+  }
+
+  /* Disable transitions during initial load to prevent flash */
+  .no-transition,
+  .no-transition * {
+    transition: none !important;
+  }
+}
+
+/* Dark mode form elements */
+.dark select,
+.dark input,
+.dark textarea {
+  background-color: hsl(var(--secondary)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+/* Modern dropdown option styling */
+select option {
+  padding: 8px 12px;
+  background-color: hsl(var(--card));
+  color: hsl(var(--foreground));
+}
+
+select option:hover,
+select option:focus,
+select option:checked {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.dark select option {
+  background-color: hsl(var(--card));
+  color: hsl(var(--foreground));
+}
+
+.dark select option:hover,
+.dark select option:focus,
+.dark select option:checked {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: hsl(var(--secondary));
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
+
+/* Light mode scrollbar */
+:root ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:root ::-webkit-scrollbar-track {
+  background: hsl(var(--secondary));
+  border-radius: 4px;
+}
+
+:root ::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 4px;
+}
+
+/* Input range slider styling for dark mode */
+.dark input[type="range"] {
+  background: transparent !important;
+}
+
+.dark input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  background: hsl(var(--primary));
+  border-radius: 50%;
+  cursor: pointer;
+  margin-top: -6px;
+}
+
+/* Custom checkbox styling for dark mode */
+.dark input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  background: hsl(var(--secondary));
+  border: 2px solid hsl(var(--border));
+  border-radius: 4px;
+  cursor: pointer;
+  position: relative;
+}
+
+.dark input[type="checkbox"]:checked {
+  background: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+}
+
+.dark input[type="checkbox"]:checked::after {
+  content: '✓';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+}

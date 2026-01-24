@@ -1,0 +1,20 @@
+# Core dependencies
+# Note: Engine uses external llama-server.exe via subprocess.
+# No python binding required.
+
+# HTTP client for server mode
+requests>=2.28.0
+
+# EPUB handling
+ebooklib>=0.18
+lxml>=4.9.0
+
+# Utilities
+tqdm>=4.65.0
+
+# Traditional Chinese Support
+# Replaced opencc with opencc-python-reimplemented to avoid C++ build issues on Windows
+opencc-python-reimplemented>=0.1.7
+
+# Hardware Monitoring
+pynvml>=11.0.0

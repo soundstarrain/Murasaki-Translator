@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv
+venv-gpu/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Large Data & Models
+models/
+hf_cache/
+output/
+saves/
+archive/
+
+# Data (Ignore huge datasets, but keep config)
+data/*
+!data/dataset_info.json
+!data/.gitkeep
+!data/sft/.gitkeep
+
+# System
+thumbs.db
+desktop.ini
+
+docs/
+
+# GUI (Electron)
+GUI/node_modules/
+GUI/out/
+GUI/dist/
+GUI/.vite/
+GUI/*.log
+# GUI/package-lock.json (Keep this tracked for consistency)
+
+python_env/
+
+# External Binaries (Do not commit large runtime binaries)
+llama-b7770-*/
