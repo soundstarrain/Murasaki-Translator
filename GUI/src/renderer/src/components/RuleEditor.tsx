@@ -3,6 +3,8 @@ import { Trash, Plus, GripVertical, CheckCircle2, Circle, Save, PlayCircle, Sett
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/core"
 import { Button } from "./ui/core"
 import { translations, Language } from "../lib/i18n"
+import { AlertModal } from "./ui/AlertModal"
+import { useAlertModal } from "../hooks/useAlertModal"
 
 export type RuleType = 'replace' | 'regex' | 'format'
 
@@ -52,6 +54,7 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
     const [testInput, setTestInput] = useState("")
     const [testOutput, setTestOutput] = useState("")
     const [showPresets, setShowPresets] = useState(false)
+    const { alertProps, showConfirm } = useAlertModal()
 
     const storageKey = `config_rules_${mode}`
 
@@ -91,16 +94,21 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
     const toggleRule = (id: string) => setRules(rules.map(r => r.id === id ? { ...r, active: !r.active } : r))
 
     const handleReset = () => {
-        if (confirm(t.resetConfirm)) {
-            // 重置为推荐的默认预设
-            const defaultKey = mode === 'pre' ? 'pre_novel' : 'post_novel'
-            const preset = PRESET_TEMPLATES[defaultKey]
-            if (preset) {
-                const newRules = preset.map(r => ({ ...r, id: Math.random().toString(36).substr(2, 9) }))
-                setRules(newRules)
-                localStorage.setItem(storageKey, JSON.stringify(newRules))
+        showConfirm({
+            title: t.resetSystem,
+            description: t.resetConfirm,
+            variant: 'destructive',
+            onConfirm: () => {
+                // 重置为推荐的默认预设
+                const defaultKey = mode === 'pre' ? 'pre_novel' : 'post_novel'
+                const preset = PRESET_TEMPLATES[defaultKey]
+                if (preset) {
+                    const newRules = preset.map(r => ({ ...r, id: Math.random().toString(36).substr(2, 9) }))
+                    setRules(newRules)
+                    localStorage.setItem(storageKey, JSON.stringify(newRules))
+                }
             }
-        }
+        })
     }
 
     const applyPreset = (key: string, replace: boolean = false) => {
@@ -347,6 +355,7 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                     </Card>
                 </div>
             </div>
+            <AlertModal {...alertProps} />
         </div>
     )
 }

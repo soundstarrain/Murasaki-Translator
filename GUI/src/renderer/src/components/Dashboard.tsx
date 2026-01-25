@@ -10,6 +10,7 @@ import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { ThinkingStream } from "./ThinkingStream"
 import { HardwareMonitorBar, MonitorData } from "./HardwareMonitorBar"
 import { AlertModal } from "./ui/AlertModal"
+import { useAlertModal } from "../hooks/useAlertModal"
 
 // Window.api type is defined in src/types/api.d.ts
 
@@ -39,6 +40,7 @@ export function Dashboard({ lang, active }: DashboardProps) {
     const [modelsInfoMap, setModelsInfoMap] = useState<Record<string, { paramsB?: number, sizeGB?: number }>>({})
 
     const [modelInfo, setModelInfo] = useState<any>(null)
+    const { alertProps, showAlert } = useAlertModal()
 
     const fetchData = async () => {
         const m = await window.api?.getModels()
@@ -510,7 +512,7 @@ export function Dashboard({ lang, active }: DashboardProps) {
         const modelPath = localStorage.getItem("config_model")
         if (!modelPath) {
             // Use custom AlertModal
-            showAlert("Error", "Please select a model in the Model Management page first.", 'destructive')
+            showAlert({ title: "Error", description: "Please select a model in the Model Management page first.", variant: 'destructive' })
             window.api?.showNotification("Error", "Please select a model in the Model Management page first.")
             setIsRunning(false)
             return
@@ -615,17 +617,6 @@ export function Dashboard({ lang, active }: DashboardProps) {
         onCancel: () => void
     } | null>(null)
 
-    // Alert Modal State
-    const [alertState, setAlertState] = useState<{
-        open: boolean
-        title: string
-        description: string
-        variant?: 'default' | 'destructive'
-    }>({ open: false, title: '', description: '' })
-
-    const showAlert = (title: string, description: string, variant: 'default' | 'destructive' = 'default') => {
-        setAlertState({ open: true, title, description, variant })
-    }
 
     const handleStartQueue = async () => {
         if (fileQueue.length === 0) return
@@ -1337,13 +1328,7 @@ export function Dashboard({ lang, active }: DashboardProps) {
                 </div>
             )}
 
-            <AlertModal
-                open={alertState.open}
-                onOpenChange={(open) => setAlertState(prev => ({ ...prev, open }))}
-                title={alertState.title}
-                description={alertState.description}
-                variant={alertState.variant}
-            />
+            <AlertModal {...alertProps} />
         </div>
     )
 }

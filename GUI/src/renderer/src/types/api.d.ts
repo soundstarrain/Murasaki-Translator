@@ -89,7 +89,7 @@ export interface ElectronAPI {
     // Model Management
     getModels: () => Promise<string[]>
     getGlossaries: () => Promise<string[]>
-    createGlossaryFile: (filename: string) => Promise<{ success: boolean; path?: string; error?: string }>
+    createGlossaryFile: (arg: string | { filename: string; content?: string }) => Promise<{ success: boolean; path?: string; error?: string }>
     getModelInfo: (modelName: string) => Promise<any>
 
     // File Operations

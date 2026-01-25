@@ -33,40 +33,46 @@ from murasaki_translator.utils.line_aligner import LineAligner
 from murasaki_translator.fixer import NumberFixer, Normalizer, PunctuationFixer, KanaFixer, RubyCleaner
 
 def load_glossary(path: Optional[str]) -> Dict[str, str]:
-    """Load glossary from JSON or TXT file. Returns empty dict on error."""
-    if not path or not os.path.exists(path):
+    """
+    Robustly load glossary from JSON file.
+    Supports: 
+    - Murasaki Dict: {"jp": "zh"}
+    - 通用对象列表: [{"src": "jp", "dst": "zh"}]
+    """
+    if not path or not os.path.exists(path) or not path.lower().endswith('.json'):
         return {}
     
     try:
-        # JSON Support
-        if path.endswith('.json'):
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+        with open(path, 'r', encoding='utf-8-sig') as f:
+            data = json.load(f)
         
-        # TXT Support (Key=Value or Key:Value per line)
-        elif path.endswith('.txt'):
+        # Case 1: Standard Dict format {"src": "dst"}
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items() if k and v}
+        
+        # Case 2: List of objects
+        elif isinstance(data, list):
             glossary = {}
-            with open(path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'): continue
-                    
-                    # Try to split by first '=' or ':'
-                    if '=' in line:
-                        k, v = line.split('=', 1)
-                    elif ':' in line:
-                        k, v = line.split(':', 1)
-                    else:
-                        continue
-                        
-                    glossary[k.strip()] = v.strip()
+            for idx, entry in enumerate(data):
+                if not isinstance(entry, dict): continue
+                
+                # Heuristic search for source/target keys
+                src = entry.get('src') or entry.get('jp') or entry.get('original')
+                dst = entry.get('dst') or entry.get('zh') or entry.get('translation')
+                
+                if src and dst:
+                    s, d = str(src), str(dst)
+                    if s in glossary:
+                         print(f"[Debug] Overwriting glossary entry: {s} (Old: {glossary[s]}, New: {d})")
+                    glossary[s] = d
+            
+            print(f"[Init] Detected List format JSON. Parsed {len(glossary)} valid entries.")
             return glossary
             
-        else:
-            return {}
+        return {}
             
-    except (json.JSONDecodeError, IOError, Exception) as e:
-        print(f"[Warning] Failed to load glossary: {e}")
+    except Exception as e:
+        print(f"[Warning] Failed to load glossary {os.path.basename(path)}: {e}")
         return {}
 
 def load_rules(path: Optional[str]) -> List[Dict]:

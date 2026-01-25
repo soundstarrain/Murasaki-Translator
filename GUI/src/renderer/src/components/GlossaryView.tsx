@@ -1,7 +1,10 @@
 import { useState, useEffect } from "react"
-import { BookOpen, FileJson, FileText, FolderOpen, RefreshCw, Pen, Trash2, Save, Plus, X, Sparkles } from "lucide-react"
+import { BookOpen, FileJson, FileText, FolderOpen, RefreshCw, Pen, Trash2, Save, Plus, X, Sparkles, FileUp, AlertTriangle } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, Button } from "./ui/core"
 import { translations, Language } from "../lib/i18n"
+import { GlossaryConverter } from "./GlossaryConverter"
+import { AlertModal } from "./ui/AlertModal"
+import { useAlertModal } from "../hooks/useAlertModal"
 
 export function GlossaryView({ lang }: { lang: Language }) {
     const t = translations[lang]
@@ -15,6 +18,12 @@ export function GlossaryView({ lang }: { lang: Language }) {
     const [isEditing, setIsEditing] = useState(false)
     const [newFileName, setNewFileName] = useState("")
     const [creatingNew, setCreatingNew] = useState(false)
+    const [showConverter, setShowConverter] = useState(false)
+    const [viewMode, setViewMode] = useState<'table' | 'raw'>('table')
+    const [editableEntries, setEditableEntries] = useState<Array<{ src: string, dst: string }>>([])
+    const [originalFormat, setOriginalFormat] = useState<'dict' | 'list'>('dict')
+    const [converterInitialFile, setConverterInitialFile] = useState<{ name: string, content: string } | null>(null)
+    const { alertProps, showAlert, showConfirm } = useAlertModal()
 
     const fetchGlossaries = async () => {
         setLoading(true)
@@ -85,47 +94,62 @@ export function GlossaryView({ lang }: { lang: Language }) {
     const handleSave = async () => {
         if (!selectedGlossary) return
 
-        // Simple validation for JSON
-        if (selectedGlossary.endsWith('.json')) {
+        let finalContent = content
+        if (selectedGlossary.endsWith('.json') && viewMode === 'table') {
             try {
-                JSON.parse(content)
+                if (originalFormat === 'dict') {
+                    const dict: Record<string, string> = {}
+                    editableEntries.forEach(e => { if (e.src) dict[e.src] = e.dst })
+                    finalContent = JSON.stringify(dict, null, 2)
+                } else {
+                    const list = editableEntries.map(e => ({ src: e.src, dst: e.dst }))
+                    finalContent = JSON.stringify(list, null, 2)
+                }
+                setContent(finalContent) // Sync back to content
             } catch (e) {
-                alert(t.glossaryView.invalidJson)
+                showAlert({ title: "转换失败", description: "无法将表格数据转换为 JSON", variant: 'destructive' })
                 return
             }
         }
 
         try {
             // @ts-ignore
-            await window.api.saveGlossaryFile({ filename: selectedGlossary, content })
+            await window.api.saveGlossaryFile({ filename: selectedGlossary, content: finalContent })
             setIsEditing(false)
             window.api?.showNotification('Murasaki Translator', '保存成功')
         } catch (e) {
             console.error(e)
-            alert(t.glossaryView.saveFail)
+            showAlert({ title: "保存失败", description: t.glossaryView.saveFail, variant: 'destructive' })
         }
     }
 
     const handleDelete = async () => {
-        if (!selectedGlossary || !confirm(t.glossaryView.deleteConfirm.replace('{name}', selectedGlossary))) return
+        if (!selectedGlossary) return
 
-        try {
-            // @ts-ignore
-            await window.api.deleteGlossaryFile(selectedGlossary)
-            setSelectedGlossary("")
-            setContent("")
-            fetchGlossaries()
-        } catch (e) {
-            console.error(e)
-            alert(t.glossaryView.deleteFail)
-        }
+        showConfirm({
+            title: "确认删除",
+            description: t.glossaryView.deleteConfirm.replace('{name}', selectedGlossary),
+            variant: 'destructive',
+            onConfirm: async () => {
+                try {
+                    // @ts-ignore
+                    await window.api.deleteGlossaryFile(selectedGlossary)
+                    setSelectedGlossary("")
+                    setContent("")
+                    fetchGlossaries()
+                } catch (e) {
+                    console.error(e)
+                    showAlert({ title: "删除失败", description: t.glossaryView.deleteFail, variant: 'destructive' })
+                }
+            }
+        })
     }
 
     const handleCreate = async () => {
         if (!newFileName) return
 
         let finalName = newFileName
-        if (!finalName.endsWith('.json') && !finalName.endsWith('.txt')) {
+        if (!finalName.endsWith('.json')) {
             finalName += '.json'
         }
 
@@ -138,7 +162,7 @@ export function GlossaryView({ lang }: { lang: Language }) {
             // Select new file
             // setTimeout(() => handleSelect(finalName), 500)
         } catch (e: any) {
-            alert(e.message || t.glossaryView.createFail)
+            showAlert({ title: "创建失败", description: e.message || t.glossaryView.createFail, variant: 'destructive' })
         }
     }
 
@@ -152,6 +176,46 @@ export function GlossaryView({ lang }: { lang: Language }) {
         setRenameNewName(selectedGlossary)
     }
 
+    const startEditing = () => {
+        if (selectedGlossary.endsWith('.json') && viewMode === 'table') {
+            try {
+                const data = JSON.parse(content)
+                const entries: Array<{ src: string, dst: string }> = []
+                if (Array.isArray(data)) {
+                    setOriginalFormat('list')
+                    data.forEach(item => {
+                        const src = item.src || item.jp || item.original || item.source || ""
+                        const dst = item.dst || item.zh || item.translation || item.target || item.dest || ""
+                        entries.push({ src: String(src), dst: String(dst) })
+                    })
+                } else if (typeof data === 'object' && data !== null) {
+                    setOriginalFormat('dict')
+                    Object.entries(data).forEach(([k, v]) => {
+                        entries.push({ src: k, dst: String(v) })
+                    })
+                }
+                setEditableEntries(entries)
+            } catch (e) {
+                console.error("JSON Parse Error when entering edit mode", e)
+                // Fallback to empty entries if corrupted, or maybe just let raw mode handle it
+                setEditableEntries([])
+            }
+        }
+        setIsEditing(true)
+    }
+
+    const handleAddRow = () => {
+        setEditableEntries(prev => [...prev, { src: "", dst: "" }])
+    }
+
+    const handleRemoveRow = (index: number) => {
+        setEditableEntries(prev => prev.filter((_, i) => i !== index))
+    }
+
+    const handleUpdateRow = (index: number, field: 'src' | 'dst', value: string) => {
+        setEditableEntries(prev => prev.map((item, i) => i === index ? { ...item, [field]: value } : item))
+    }
+
     const handleRename = async () => {
         if (!renamingFile || !renameNewName || renamingFile === renameNewName) {
             setRenamingFile(null)
@@ -163,7 +227,7 @@ export function GlossaryView({ lang }: { lang: Language }) {
             const res = await window.api.renameGlossaryFile(renamingFile, renameNewName)
             if (res.success) {
                 setRenamingFile(null)
-                setSelectedGlossary(renameNewName.endsWith('.json') || renameNewName.endsWith('.txt') ? renameNewName : renameNewName + (renamingFile.endsWith('.json') ? '.json' : '.txt'))
+                setSelectedGlossary(renameNewName.endsWith('.json') ? renameNewName : renameNewName + '.json')
                 fetchGlossaries()
             } else {
                 alert("Rename Failed: " + res.error)
@@ -180,74 +244,148 @@ export function GlossaryView({ lang }: { lang: Language }) {
                     {t.glossary}
                     <span className="text-sm font-normal text-muted-foreground bg-secondary px-2 py-0.5 rounded-full">{glossaries.length}</span>
                 </h2>
-                <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setCreatingNew(true)} className="gap-2 bg-primary/5 text-primary border-primary/20 hover:bg-primary/10">
-                        <Plus className="w-4 h-4" />
-                        {t.glossaryView.new}
+                <div className="flex items-center gap-3">
+                    <Button variant="ghost" size="icon" onClick={fetchGlossaries} disabled={loading} className="w-8 h-8 text-muted-foreground hover:text-primary">
+                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
                     </Button>
-                    {/* Import Button */}
+                    <Button variant="ghost" size="icon" onClick={openFolder} className="w-8 h-8 text-muted-foreground hover:text-primary">
+                        <FolderOpen className="w-4 h-4" />
+                    </Button>
+                    <div className="w-px h-4 bg-border mx-1" />
                     <Button variant="outline" size="sm" onClick={async () => {
                         try {
                             // @ts-ignore
                             const result = await window.api.selectFile({
                                 title: t.glossaryView.importTitle,
-                                filters: [{ name: t.glossaryView.importFilter, extensions: ["json", "txt"] }]
+                                filters: [{ name: t.glossaryView.importFilter, extensions: ["json"] }]
                             })
                             if (result) {
                                 // @ts-ignore
+                                const content = await window.api.readFile(result)
+                                if (!content) return
+                                // Robustness check: Stricter heuristic for glossary shapes
+                                let isValid = false
+                                try {
+                                    const data = JSON.parse(content)
+                                    if (Array.isArray(data)) {
+                                        if (data.length === 0) isValid = true
+                                        else {
+                                            const slice = data.slice(0, 5) // Check first few items
+                                            isValid = slice.every(item =>
+                                                typeof item === 'object' && item !== null &&
+                                                Object.keys(item).some(k => ['src', 'jp', 'original', 'source'].includes(k.toLowerCase())) &&
+                                                Object.keys(item).some(k => ['dst', 'zh', 'translation', 'target', 'dest'].includes(k.toLowerCase()))
+                                            )
+                                        }
+                                    } else if (typeof data === 'object' && data !== null) {
+                                        const values = Object.values(data)
+                                        if (values.length === 0) isValid = true
+                                        else {
+                                            // Ensure it's a flat dict of strings/numbers (typical glossary)
+                                            isValid = values.slice(0, 20).every(v => typeof v === 'string' || typeof v === 'number')
+                                        }
+                                    }
+                                } catch (e) { isValid = false }
+
+                                if (!isValid) {
+                                    showConfirm({
+                                        title: t.glossaryView.formatIncompatible,
+                                        description: t.glossaryView.formatIncompatibleDesc,
+                                        onConfirm: () => {
+                                            const name = result.split(/[\\/]/).pop() || "import.json"
+                                            setConverterInitialFile({ name, content })
+                                            setShowConverter(true)
+                                        }
+                                    })
+                                    return
+                                }
+                                // @ts-ignore
                                 const importRes = await window.api.importGlossary(result)
                                 if (importRes.success) {
-                                    alert((t.glossaryView.importSuccess || "").replace('{path}', importRes.path || ""))
+                                    showAlert({ title: "导入成功", description: (t.glossaryView.importSuccess || "").replace('{path}', importRes.path || ""), variant: 'success' })
                                     fetchGlossaries()
                                 } else {
-                                    alert((t.glossaryView.importFail || "").replace('{error}', importRes.error || ""))
+                                    showAlert({ title: "导入失败", description: (t.glossaryView.importFail || "").replace('{error}', importRes.error || ""), variant: 'destructive' })
                                 }
                             }
-                        } catch (e: any) { alert((t.glossaryView.importError || "").replace('{message}', e.message || "")) }
-                    }} className="gap-2">
-                        <FolderOpen className="w-4 h-4" />
+                        } catch (e: any) { showAlert({ title: "导入错误", description: (t.glossaryView.importError || "").replace('{message}', e.message || ""), variant: 'destructive' }) }
+                    }} className="gap-2 h-9">
+                        <FileUp className="w-4 h-4 text-muted-foreground" />
                         {t.glossaryView.import}
                     </Button>
-                    <Button variant="outline" size="sm" onClick={openFolder} className="gap-2">
-                        <FolderOpen className="w-4 h-4" />
-                        {t.glossaryView.openFolder}
+                    <Button variant="outline" size="sm" onClick={() => setShowConverter(true)} className="gap-2 h-9 bg-amber-500/5 text-amber-600 border-amber-500/20 hover:bg-amber-500/10">
+                        <RefreshCw className="w-4 h-4" />
+                        {t.glossaryConverter?.title || "格式转换"}
                     </Button>
-                    <Button variant="outline" size="sm" onClick={fetchGlossaries} disabled={loading} className="gap-2">
-                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                        {t.glossaryView.refresh}
+                    <Button onClick={() => setCreatingNew(true)} className="gap-2 h-9 shadow-lg shadow-primary/20">
+                        <Plus className="w-4 h-4" />
+                        {t.glossaryView.new}
                     </Button>
                 </div>
             </div>
 
             {/* Format Description */}
-            <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs text-muted-foreground">
-                <p className="font-bold text-blue-500 flex items-center gap-1 mb-2">
-                    <BookOpen className="w-3 h-3" /> {t.glossaryView.formatTitle}
-                </p>
-                <div className="grid grid-cols-2 gap-4">
-                    <div>
-                        <span className="font-semibold text-foreground">{t.glossaryView.formatJson}</span>
-                        <pre className="mt-1 bg-black/20 p-2 rounded font-mono text-[10px] text-muted-foreground whitespace-pre">{`{
-  "Source": "Target",
-  "魔法": "Magic"
-}`}</pre>
+            <div className="mb-4 p-4 bg-card border border-border/60 rounded-2xl shadow-sm text-xs overflow-hidden shrink-0">
+                <div className="flex flex-col lg:flex-row gap-6">
+                    <div className="flex-1 space-y-3 min-w-[220px]">
+                        <div className="flex items-center gap-2">
+                            <div className="p-1.5 bg-primary/10 rounded-lg text-primary">
+                                <BookOpen className="w-3.5 h-3.5" />
+                            </div>
+                            <h3 className="text-sm font-bold tracking-tight">{t.glossaryView.standardFormat}</h3>
+                        </div>
+                        <div className="space-y-2">
+                            <p className="text-muted-foreground leading-relaxed">
+                                {t.glossaryView.standardFormatDesc}
+                            </p>
+                            <div className="flex flex-col gap-2">
+                                <div className="flex items-start gap-2 text-[10px] text-muted-foreground/80 bg-primary/5 p-2 rounded-lg border border-primary/10">
+                                    <Sparkles className="w-3 h-3 text-primary mt-0.5 shrink-0" />
+                                    <span><strong>智能适配</strong>：支持通过转换工具导入几乎所有第三方导出的术语表。</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div>
-                        <span className="font-semibold text-foreground">{t.glossaryView.formatTxt}</span>
-                        <pre className="mt-1 bg-black/20 p-2 rounded font-mono text-[10px] text-muted-foreground whitespace-pre">{`Source=Target
-魔法=Magic
-Name:Translated`}</pre>
+                    <div className="flex-[1.8] grid grid-cols-2 gap-3">
+                        <div className="space-y-1.5 flex flex-col min-w-0">
+                            <div className="flex items-center justify-between px-1">
+                                <span className="text-[9px] uppercase font-bold text-muted-foreground/60 tracking-widest">{t.glossaryView.dictMode}</span>
+                                <div className="w-1 h-1 rounded-full bg-primary/40" />
+                            </div>
+                            <pre className="flex-1 bg-secondary/30 p-2.5 rounded-xl border border-border/50 font-mono text-[9px] text-primary/80 overflow-y-auto max-h-[70px] scrollbar-none">{`{
+  "谭雅": "Tanya",
+  "维夏": "Visha"
+}`}</pre>
+                        </div>
+                        <div className="space-y-1.5 flex flex-col min-w-0">
+                            <div className="flex items-center justify-between px-1">
+                                <span className="text-[9px] uppercase font-bold text-muted-foreground/60 tracking-widest">{t.glossaryView.listMode}</span>
+                                <div className="w-1 h-1 rounded-full bg-primary/40" />
+                            </div>
+                            <pre className="flex-1 bg-secondary/30 p-2.5 rounded-xl border border-border/50 font-mono text-[9px] text-primary/80 overflow-y-auto max-h-[70px] scrollbar-none">{`[
+  {"src": "谭雅", "dst": "Tanya"},
+  {"src": "维夏", "dst": "Visha"}
+]`}</pre>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            {/* Auto Match Description */}
-            <div className="mb-4 p-3 bg-green-500/10 border border-green-500/20 rounded-lg text-xs text-muted-foreground">
-                <p className="font-bold text-green-600 dark:text-green-400 flex items-center gap-1 mb-1">
-                    <Sparkles className="w-3 h-3" /> {t.glossaryView.autoMatchTitle}
-                </p>
-                <p>{t.glossaryView.autoMatchDesc}</p>
+            {/* Auto Match Rule (Stand-alone Important) */}
+            <div className="mb-4 p-4 bg-green-500/5 border border-green-500/10 rounded-2xl flex items-center gap-4 group">
+                <div className="p-2.5 bg-green-500/10 rounded-xl text-green-600 group-hover:bg-green-500/20 transition-colors">
+                    <RefreshCw className="w-5 h-5 shrink-0" />
+                </div>
+                <div className="flex-1">
+                    <h4 className="text-xs font-bold text-green-700 dark:text-green-400 flex items-center gap-2 mb-0.5">
+                        {t.glossaryView.autoMatchRule}
+                    </h4>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        {t.glossaryView.autoMatchRuleDesc}
+                    </p>
+                </div>
             </div>
+
 
             {/* Create Modal (Simple inline) */}
             {creatingNew && (
@@ -287,8 +425,8 @@ Name:Translated`}</pre>
             )}
 
             <div className="flex gap-6 h-full overflow-hidden pb-12">
-                {/* List */}
-                <div className="w-1/3 overflow-y-auto space-y-2 p-1 pr-2">
+                {/* List (Left side) */}
+                <div className="w-1/3 overflow-y-auto space-y-2 p-1 pr-2 scrollbar-thin">
                     {glossaries.length === 0 ? (
                         <div className="text-center py-10 text-muted-foreground border-2 border-dashed border-border rounded-lg bg-card">
                             <p>{t.glossaryView.noGlossaries}</p>
@@ -311,8 +449,8 @@ Name:Translated`}</pre>
                                 )}
                                 <div className="overflow-hidden">
                                     <p className={`font-medium truncate ${selectedGlossary === file ? 'text-primary' : 'text-foreground'}`}>{file}</p>
-                                    <p className="text-xs text-muted-foreground truncate">
-                                        {file.endsWith('.json') ? 'Structured JSON' : 'Simple Text'}
+                                    <p className="text-[9px] uppercase font-bold text-muted-foreground/50 tracking-tight mt-0.5">
+                                        {file.endsWith('.json') ? 'Structured JSON' : t.glossaryView.legacyFormat}
                                     </p>
                                 </div>
                             </div>
@@ -320,38 +458,58 @@ Name:Translated`}</pre>
                     )}
                 </div>
 
-                {/* Preview */}
-                <Card className="flex-1 flex flex-col overflow-hidden shadow-sm bg-card">
-                    <CardHeader className="py-3 px-4 bg-secondary border-b border-border flex flex-row justify-between items-center">
-                        <CardTitle className="text-sm font-medium text-foreground flex items-center gap-2">
-                            <BookOpen className="w-4 h-4" />
-                            {selectedGlossary || t.glossaryView.preview}
-                            {isEditing && <span className="text-xs text-amber-500 font-normal ml-2">{t.glossaryView.editing}</span>}
-                        </CardTitle>
+                {/* Preview (Right side) */}
+                <Card className="flex-1 flex flex-col overflow-hidden shadow-xl border-border/40 bg-card/80 backdrop-blur-sm rounded-2xl relative">
+                    <CardHeader className="py-4 px-6 bg-secondary/20 border-b border-border/50 flex flex-row justify-between items-center shrink-0">
+                        <div className="flex flex-col gap-0.5 min-w-0 max-w-[50%]">
+                            <CardTitle className="text-sm font-bold text-foreground flex items-center gap-2 overflow-hidden">
+                                <BookOpen className="w-4 h-4 text-primary shrink-0" />
+                                <span className="truncate" title={selectedGlossary}>{selectedGlossary || t.glossaryView.preview}</span>
+                                {isEditing && <span className="text-[10px] bg-amber-500/10 text-amber-600 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ml-2 shrink-0">{t.glossaryView.editing}</span>}
+                            </CardTitle>
+                            {selectedGlossary && <p className="text-[10px] text-muted-foreground font-mono ml-6 opacity-60">Relative to glossary directory</p>}
+                        </div>
+
                         {selectedGlossary && (
-                            <div className="flex gap-2">
-                                {isEditing ? (
-                                    <>
-                                        <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)} className="h-6 px-2 text-xs">
-                                            <X className="w-3 h-3 mr-1" /> {t.glossaryView.cancel}
-                                        </Button>
-                                        <Button size="sm" onClick={handleSave} className="h-6 px-2 text-xs bg-primary text-primary-foreground hover:bg-primary/90">
-                                            <Save className="w-3 h-3 mr-1" /> {t.glossaryView.save}
-                                        </Button>
-                                    </>
-                                ) : (
-                                    <>
-                                        <Button size="sm" variant="ghost" onClick={handleDelete} className="h-6 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-50">
-                                            <Trash2 className="w-3 h-3 mr-1" /> {t.glossaryView.delete}
-                                        </Button>
-                                        <Button size="sm" variant="ghost" onClick={startRename} className="h-6 px-2 text-xs text-amber-600 hover:bg-amber-50">
-                                            <Pen className="w-3 h-3 mr-1" /> Rename
-                                        </Button>
-                                        <Button size="sm" variant="secondary" onClick={() => setIsEditing(true)} className="h-6 px-2 text-xs border border-border">
-                                            <Pen className="w-3 h-3 mr-1" /> {t.glossaryView.edit}
-                                        </Button>
-                                    </>
+                            <div className="flex items-center gap-4">
+                                {/* Table/RAW Toggle (Only when not editing and is JSON) */}
+                                {!isEditing && selectedGlossary.endsWith('.json') && (
+                                    <div className="flex bg-secondary/50 rounded-lg p-0.5 border border-border/50">
+                                        <button
+                                            onClick={() => setViewMode('table')}
+                                            className={`px-3 py-1 text-[9px] font-bold rounded-md transition-all ${viewMode === 'table' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                                        >表格</button>
+                                        <button
+                                            onClick={() => setViewMode('raw')}
+                                            className={`px-3 py-1 text-[9px] font-bold rounded-md transition-all ${viewMode === 'raw' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                                        >RAW</button>
+                                    </div>
                                 )}
+
+                                <div className="flex gap-2">
+                                    {isEditing ? (
+                                        <>
+                                            <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)} className="h-6 px-2 text-xs">
+                                                <X className="w-3 h-3 mr-1" /> {t.glossaryView.cancel}
+                                            </Button>
+                                            <Button size="sm" onClick={handleSave} className="h-6 px-2 text-xs bg-primary text-primary-foreground hover:bg-primary/90">
+                                                <Save className="w-3 h-3 mr-1" /> {t.glossaryView.save}
+                                            </Button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Button size="sm" variant="ghost" onClick={handleDelete} className="h-6 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-50">
+                                                <Trash2 className="w-3 h-3 mr-1" /> {t.glossaryView.delete}
+                                            </Button>
+                                            <Button size="sm" variant="ghost" onClick={startRename} className="h-6 px-2 text-xs text-amber-600 hover:bg-amber-50">
+                                                <Pen className="w-3 h-3 mr-1" /> Rename
+                                            </Button>
+                                            <Button size="sm" variant="secondary" onClick={startEditing} className="h-6 px-2 text-xs border border-border">
+                                                <Pen className="w-3 h-3 mr-1" /> {t.glossaryView.edit}
+                                            </Button>
+                                        </>
+                                    )}
+                                </div>
                             </div>
                         )}
                     </CardHeader>
@@ -362,12 +520,112 @@ Name:Translated`}</pre>
                                     <RefreshCw className="w-6 h-6 animate-spin" />
                                 </div>
                             ) : (
-                                <textarea
-                                    className={`w-full h-full p-4 font-mono text-sm bg-secondary text-foreground resize-none focus:outline-none ${isEditing ? 'ring-1 ring-inset ring-primary/50 bg-background' : ''}`}
-                                    value={content}
-                                    onChange={e => isEditing && setContent(e.target.value)}
-                                    readOnly={!isEditing}
-                                />
+                                <>
+                                    {selectedGlossary.endsWith('.json') && viewMode === 'table' ? (
+                                        isEditing ? (
+                                            <div className="w-full h-full flex flex-col bg-background overflow-hidden animate-in fade-in duration-300">
+                                                <div className="grid grid-cols-[1fr_1fr_40px] bg-muted/40 sticky top-0 z-10 py-3 px-6 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70 border-b border-border/50">
+                                                    <div>{t.glossaryView.sourceCol}</div>
+                                                    <div>{t.glossaryView.targetCol}</div>
+                                                    <div className="text-center">{t.glossaryView.actionCol}</div>
+                                                </div>
+                                                <div className="flex-1 overflow-y-auto divide-y divide-border/20 scrollbar-thin pb-20">
+                                                    {editableEntries.map((entry, idx) => (
+                                                        <div key={idx} className="grid grid-cols-[1fr_1fr_40px] px-4 py-2 hover:bg-primary/5 items-center gap-3">
+                                                            <input
+                                                                className="bg-secondary/30 border border-transparent focus:border-primary/30 p-2 rounded-lg text-xs font-mono outline-none transition-all"
+                                                                value={entry.src}
+                                                                onChange={e => handleUpdateRow(idx, 'src', e.target.value)}
+                                                                placeholder={t.glossaryView.sourcePlaceholder}
+                                                            />
+                                                            <input
+                                                                className="bg-secondary/30 border border-transparent focus:border-primary/30 p-2 rounded-lg text-xs font-mono outline-none transition-all text-primary font-bold"
+                                                                value={entry.dst}
+                                                                onChange={e => handleUpdateRow(idx, 'dst', e.target.value)}
+                                                                placeholder={t.glossaryView.targetPlaceholder}
+                                                            />
+                                                            <button
+                                                                onClick={() => handleRemoveRow(idx)}
+                                                                className="text-muted-foreground hover:text-red-500 transition-colors flex justify-center"
+                                                            >
+                                                                <Trash2 className="w-4 h-4" />
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                    <div className="p-4 flex justify-center">
+                                                        <Button variant="ghost" size="sm" onClick={handleAddRow} className="gap-2 text-xs opacity-60 hover:opacity-100">
+                                                            <Plus className="w-3 h-3" /> {t.glossaryView.addRow}
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            (() => {
+                                                try {
+                                                    const data = JSON.parse(content)
+                                                    // Standardize to dict
+                                                    const entries: Record<string, string> = {}
+                                                    if (Array.isArray(data)) {
+                                                        data.forEach(item => {
+                                                            const src = item.src || item.jp || item.original || item.source
+                                                            const dst = item.dst || item.zh || item.translation || item.target || item.dest
+                                                            if (src && dst) entries[String(src)] = String(dst)
+                                                        })
+                                                    } else if (typeof data === 'object' && data !== null) {
+                                                        Object.entries(data).forEach(([k, v]) => { entries[k] = String(v) })
+                                                    }
+
+                                                    return (
+                                                        <div className="w-full h-full flex flex-col bg-background/50 overflow-hidden animate-in fade-in duration-300">
+                                                            <div className="grid grid-cols-2 bg-muted/40 sticky top-0 z-10 py-3 px-6 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70 border-b border-border/50">
+                                                                <div>{t.glossaryView.sourceCol}</div>
+                                                                <div>{t.glossaryView.targetCol}</div>
+                                                            </div>
+                                                            <div className="flex-1 overflow-y-auto divide-y divide-border/20 scrollbar-thin">
+                                                                {Object.entries(entries).map(([k, v], i) => (
+                                                                    <div key={i} className="grid grid-cols-2 px-6 py-3.5 hover:bg-primary/5 transition-colors text-xs items-center group">
+                                                                        <div className="truncate pr-4 font-mono text-muted-foreground group-hover:text-foreground transition-colors" title={k}>{k}</div>
+                                                                        <div className="truncate text-primary font-mono font-bold" title={v}>{v}</div>
+                                                                    </div>
+                                                                ))}
+                                                                {Object.keys(entries).length === 0 && (
+                                                                    <div className="h-full flex flex-col items-center justify-center p-12 text-muted-foreground opacity-30 italic">
+                                                                        <RefreshCw className="w-12 h-12 mb-4 opacity-10" />
+                                                                        <p>{t.glossaryView.noContent}</p>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    )
+                                                } catch (e) {
+                                                    return (
+                                                        <div className="w-full h-full flex flex-col items-center justify-center p-12 text-red-500/70 bg-red-500/5">
+                                                            <AlertTriangle className="w-12 h-12 mb-4" />
+                                                            <p className="font-bold text-sm">{t.glossaryView.jsonCorrupted}</p>
+                                                            <p className="text-[10px] mt-2 opacity-70">{t.glossaryView.jsonCorruptedDesc}</p>
+                                                        </div>
+                                                    )
+                                                }
+                                            })()
+                                        )
+                                    ) : (
+                                        <div className="flex flex-col h-full">
+                                            {!selectedGlossary.endsWith('.json') && (
+                                                <div className="p-3 bg-amber-500/10 border-b border-amber-500/20 text-[10px] text-amber-700 font-bold flex items-center gap-2">
+                                                    <AlertTriangle className="w-3 h-3" />
+                                                    {t.glossaryView.legacyFormatDesc}
+                                                </div>
+                                            )}
+                                            <textarea
+                                                className={`w-full h-full p-6 font-mono text-xs leading-relaxed bg-transparent text-foreground/90 resize-none focus:outline-none scrollbar-thin ${isEditing ? 'bg-background/80' : 'opacity-80'}`}
+                                                value={content}
+                                                spellCheck={false}
+                                                onChange={e => isEditing && setContent(e.target.value)}
+                                                readOnly={!isEditing}
+                                            />
+                                        </div>
+                                    )}
+                                </>
                             )
                         ) : (
                             <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
@@ -378,6 +636,18 @@ Name:Translated`}</pre>
                     </CardContent>
                 </Card>
             </div>
+            {showConverter && (
+                <GlossaryConverter
+                    initialFile={converterInitialFile || undefined}
+                    lang={lang}
+                    onClose={() => {
+                        setShowConverter(false)
+                        setConverterInitialFile(null)
+                    }}
+                    onSuccess={fetchGlossaries}
+                />
+            )}
+            <AlertModal {...alertProps} />
         </div>
     )
 }

@@ -53,3 +53,7 @@ GUI/dist-native/
 dev_start.bat
 changelog.private
 *.diff
+
+# User Data & Glossaries
+middleware/glossaries/
+GUI/middleware/glossaries/

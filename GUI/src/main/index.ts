@@ -616,7 +616,7 @@ ipcMain.handle('get-glossaries', async () => {
     const userDataPath = getUserDataPath()
     const glossaryDir = join(userDataPath, 'glossaries')
     if (!fs.existsSync(glossaryDir)) return []
-    return fs.readdirSync(glossaryDir).filter(f => f.endsWith('.json') || f.endsWith('.txt'))
+    return fs.readdirSync(glossaryDir).filter(f => f.endsWith('.json'))
 })
 
 ipcMain.handle('open-glossary-folder', async () => {
@@ -655,8 +655,7 @@ ipcMain.handle('rename-glossary-file', async (_event, { oldName, newName }) => {
 
     // Auto-append .json if missing
     let safeNewName = newName
-    if (oldName.endsWith('.json') && !safeNewName.endsWith('.json')) safeNewName += '.json'
-    if (oldName.endsWith('.txt') && !safeNewName.endsWith('.txt')) safeNewName += '.txt'
+    if (!safeNewName.endsWith('.json')) safeNewName += '.json'
 
     const newPath = join(glossaryDir, safeNewName)
 

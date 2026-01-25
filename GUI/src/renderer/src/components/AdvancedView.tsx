@@ -3,10 +3,13 @@ import { Save, Sparkles, Info, RefreshCw, Zap } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/core"
 import { Button, Switch, Slider } from "./ui/core"
 import { translations, Language } from "../lib/i18n"
+import { AlertModal } from "./ui/AlertModal"
+import { useAlertModal } from "../hooks/useAlertModal"
 
 export function AdvancedView({ lang }: { lang: Language }) {
     const t = translations[lang]
     const [saved, setSaved] = useState(false)
+    const { alertProps, showAlert } = useAlertModal()
 
     // Model Config State
     const [gpuLayers, setGpuLayers] = useState("-1")
@@ -590,9 +593,11 @@ export function AdvancedView({ lang }: { lang: Language }) {
                                         try {
                                             const url = serverUrl || 'http://127.0.0.1:8080'
                                             const res = await fetch(`${url}/health`)
-                                            if (res.ok) alert("✓ 连接成功")
-                                            else alert("✗ 服务器返回错误: " + res.status)
-                                        } catch (e) { alert("✗ 连接失败: " + e) }
+                                            if (res.ok) showAlert({ title: "连接成功", description: "✓ 已成功建立与后端的连接", variant: 'success' })
+                                            else showAlert({ title: "连接失败", description: "✗ 服务器返回错误: " + res.status, variant: 'destructive' })
+                                        } catch (e) {
+                                            showAlert({ title: "连接错误", description: "✗ 无法连接至服务器: " + e, variant: 'destructive' })
+                                        }
                                     }}>
                                         测试连接
                                     </Button>
@@ -996,6 +1001,7 @@ export function AdvancedView({ lang }: { lang: Language }) {
                     {saved ? t.saved : t.save}
                 </Button>
             </div>
+            <AlertModal {...alertProps} />
         </div >
     )
 }
