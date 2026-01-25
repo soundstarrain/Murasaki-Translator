@@ -57,3 +57,5 @@ changelog.private
 # User Data & Glossaries
 middleware/glossaries/
 GUI/middleware/glossaries/
+
+diff
