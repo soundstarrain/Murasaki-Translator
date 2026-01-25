@@ -3,6 +3,7 @@
  * 用于长时间加载时的占位显示
  */
 
+import { translations, Language } from '../../lib/i18n'
 import { cn } from '../../lib/utils'
 
 interface SkeletonProps {
@@ -156,13 +157,17 @@ export function SkeletonDashboard() {
  */
 export function ModelLoadingProgress({
     progress = 0,
-    status = '加载中...',
-    modelName = ''
+    status,
+    modelName = '',
+    lang = 'zh'
 }: {
     progress?: number
     status?: string
     modelName?: string
+    lang?: Language
 }) {
+    const t = translations[lang]
+    const displayStatus = status || t.dashboard.processing
     return (
         <div className="flex flex-col items-center justify-center p-8 space-y-4">
             {/* 圆形进度指示器 */}
@@ -196,7 +201,7 @@ export function ModelLoadingProgress({
 
             {/* 状态文本 */}
             <div className="text-center">
-                <p className="text-sm font-medium text-foreground">{status}</p>
+                <p className="text-sm font-medium text-foreground">{displayStatus}</p>
                 {modelName && (
                     <p className="text-xs text-muted-foreground mt-1">{modelName}</p>
                 )}

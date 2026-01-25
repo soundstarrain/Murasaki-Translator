@@ -286,6 +286,12 @@ export function GlossaryConverter({ onClose, onSuccess, lang = 'zh', initialFile
 
                                 {/* Right Side: Controls (Actions) */}
                                 <div className="lg:col-span-2 flex flex-col gap-6">
+                                    <div className="p-4 bg-primary/5 rounded-xl border border-primary/10">
+                                        <p className="text-[10px] text-primary/70 leading-relaxed font-medium">
+                                            💡 <strong>{t.glossaryConverter.tipTitle}</strong>：{t.glossaryConverter.tipDesc}
+                                        </p>
+                                    </div>
+
                                     <div className="p-5 bg-card border border-border/80 rounded-2xl shadow-sm space-y-5">
                                         <div className="flex items-center gap-3 pb-4 border-b">
                                             <div className="p-2.5 bg-green-500/10 rounded-xl text-green-600">
@@ -317,12 +323,6 @@ export function GlossaryConverter({ onClose, onSuccess, lang = 'zh', initialFile
                                             {t.glossaryConverter.confirmExport}
                                             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                                         </Button>
-                                    </div>
-
-                                    <div className="p-4 bg-primary/5 rounded-xl border border-primary/10">
-                                        <p className="text-[10px] text-primary/70 leading-relaxed font-medium">
-                                            💡 <strong>{t.glossaryConverter.tipTitle}</strong>：{t.glossaryConverter.tipDesc}
-                                        </p>
                                     </div>
                                 </div>
                             </div>

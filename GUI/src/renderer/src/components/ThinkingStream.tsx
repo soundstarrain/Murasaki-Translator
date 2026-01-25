@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { ChevronDown, Brain } from 'lucide-react'
+import { translations, Language } from '../lib/i18n'
 
 interface ThinkingStreamProps {
     content: string // Raw text that may contain <think>...</think> tags
     isStreaming: boolean
+    lang?: Language
 }
 
 /**
@@ -13,7 +15,8 @@ interface ThinkingStreamProps {
  * - Typewriter animation during streaming
  * - Auto-expand while streaming, auto-collapse when done
  */
-export function ThinkingStream({ content, isStreaming }: ThinkingStreamProps) {
+export function ThinkingStream({ content, isStreaming, lang = 'zh' }: ThinkingStreamProps) {
+    const t = translations[lang]
     const [isExpanded, setIsExpanded] = useState(false)
     const [displayedText, setDisplayedText] = useState('')
     const contentRef = useRef<HTMLDivElement>(null)
@@ -75,9 +78,9 @@ export function ThinkingStream({ content, isStreaming }: ThinkingStreamProps) {
             >
                 <div className="flex items-center gap-2 text-purple-300 shrink-0">
                     <Brain className="w-3.5 h-3.5 group-hover:text-purple-200 transition-colors" />
-                    <span className="text-xs font-bold uppercase tracking-wider">Reasoning</span>
+                    <span className="text-xs font-bold uppercase tracking-wider">{t.dashboard.reasoning}</span>
                     {isStreaming && (
-                        <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded animate-pulse">Thinking...</span>
+                        <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded animate-pulse">{t.dashboard.thinking}</span>
                     )}
                 </div>
 

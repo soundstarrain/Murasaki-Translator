@@ -136,7 +136,7 @@ export function Sidebar({ lang, setLang, view, setView }: SidebarProps) {
                             console.log('[Theme] HTML class now:', html.className)
                         }}
                         className="p-1.5 rounded-lg bg-secondary hover:bg-primary/20 transition-colors group"
-                        title={isDark ? "切换到亮色模式" : "切换到暗色模式"}
+                        title={isDark ? t.nav.toggleLight : t.nav.toggleDark}
                     >
                         {isDark ? (
                             <Sun className="w-4 h-4 text-amber-400 group-hover:text-amber-300" />

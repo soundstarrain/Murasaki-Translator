@@ -3,6 +3,7 @@ import { Clock, Trash2, ChevronDown, ChevronRight, FileText, AlertCircle, CheckC
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/core"
 import { Button } from "./ui/core"
 import { AlertModal } from "./ui/AlertModal"
+import { translations, Language } from "../lib/i18n"
 
 // ============================================================================
 // Types - Translation History Data Structures
@@ -152,7 +153,8 @@ export const clearHistory = () => {
  * History view component displaying all past translation records.
  * Features: expandable cards, detailed logs, trigger events, statistics.
  */
-export function HistoryView({ lang: _lang }: { lang: string }) {
+export function HistoryView({ lang }: { lang: Language }) {
+    const t = translations[lang]
     const [records, setRecords] = useState<TranslationRecord[]>([])
     const [expandedId, setExpandedId] = useState<string | null>(null)
     const [alertOpen, setAlertOpen] = useState(false)
@@ -179,48 +181,49 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
      * Export detailed log for a specific record as text file
      */
     const handleExportLog = (record: TranslationRecord) => {
+        const e = t.historyView.export
         const lines = [
-            `# 翻译记录详细日志`,
+            e.title,
             ``,
-            `## 基本信息`,
-            `- 文件名: ${record.fileName}`,
-            `- 文件路径: ${record.filePath}`,
-            `- 模型: ${record.modelName || '未记录'}`,
-            `- 开始时间: ${record.startTime}`,
-            `- 结束时间: ${record.endTime || '未完成'}`,
-            `- 持续时间: ${formatDuration(record.duration)}`,
-            `- 状态: ${record.status}`,
+            e.basic,
+            `${e.fileName} ${record.fileName}`,
+            `${e.filePath} ${record.filePath}`,
+            `${e.modelName} ${record.modelName || (lang === 'en' ? 'Not recorded' : t.none)}`,
+            `${e.startTime} ${record.startTime}`,
+            `${e.endTime} ${record.endTime || (lang === 'en' ? 'Incomplete' : t.none)}`,
+            `${e.duration} ${formatDuration(record.duration)}`,
+            `${e.status} ${record.status}`,
             ``,
-            `## 统计数据`,
+            e.statsTitle,
             ``,
-            `### 源文本`,
-            `- 行数: ${record.sourceLines || '未记录'}`,
-            `- 字符数: ${record.sourceChars || '未记录'}`,
+            e.sourceTitle,
+            `${e.lines} ${record.sourceLines || (lang === 'en' ? 'Not recorded' : t.none)}`,
+            `${e.chars} ${record.sourceChars || (lang === 'en' ? 'Not recorded' : t.none)}`,
             ``,
-            `### 输出`,
-            `- 区块: ${record.completedBlocks}/${record.totalBlocks}`,
-            `- 行数: ${record.totalLines || 0}`,
-            `- 字符数: ${record.totalChars || 0}`,
-            `- 平均速度: ${record.avgSpeed || 0} 字/秒`,
+            e.outputTitle,
+            `${e.blocks} ${record.completedBlocks}/${record.totalBlocks}`,
+            `${e.lines} ${record.totalLines || 0}`,
+            `${e.chars} ${record.totalChars || 0}`,
+            `${e.avgSpeed} ${record.avgSpeed || 0} ${lang === 'en' ? 'chars/s' : t.dashboard.charPerSec}`,
             ``,
-            `## 配置参数`,
-            `- 温度: ${record.config.temperature}`,
-            `- 行数检查: ${record.config.lineCheck ? '开启' : '关闭'}`,
-            `- 重复惩罚基础: ${record.config.repPenaltyBase}`,
-            `- 最大重试: ${record.config.maxRetries}`,
+            e.configTitle,
+            `${e.temp} ${record.config.temperature}`,
+            `${e.lineCheck} ${record.config.lineCheck ? (lang === 'en' ? 'ON' : '开启') : (lang === 'en' ? 'OFF' : '关闭')}`,
+            `${e.repPenalty} ${record.config.repPenaltyBase}`,
+            `${e.maxRetries} ${record.config.maxRetries}`,
             ``
         ]
 
         if (record.triggers.length > 0) {
-            lines.push(`## 触发事件 (${record.triggers.length})`)
-            record.triggers.forEach((t, i) => {
-                lines.push(`${i + 1}. [Block ${t.block}] ${getTriggerTypeLabel(t.type)} - ${t.message}`)
+            lines.push(e.triggersTitle.replace('{count}', record.triggers.length.toString()))
+            record.triggers.forEach((tr, i) => {
+                lines.push(`${i + 1}. [Block ${tr.block}] ${getTriggerTypeLabel(tr.type)} - ${tr.message}`)
             })
             lines.push(``)
         }
 
         if (record.logs.length > 0) {
-            lines.push(`## 详细日志 (最近 ${record.logs.length} 条)`)
+            lines.push(e.logsTitle.replace('{count}', record.logs.length.toString()))
             lines.push('```')
             record.logs.forEach(log => lines.push(log))
             lines.push('```')
@@ -240,7 +243,8 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
 
     const formatDate = (iso: string) => {
         const d = new Date(iso)
-        return d.toLocaleString('zh-CN', {
+        const locale = lang === 'en' ? 'en-US' : (lang === 'jp' ? 'ja-JP' : 'zh-CN')
+        return d.toLocaleString(locale, {
             month: '2-digit',
             day: '2-digit',
             hour: '2-digit',
@@ -266,23 +270,8 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
     }
 
     const getTriggerTypeLabel = (type: TriggerEvent['type']) => {
-        switch (type) {
-            case 'empty_retry': return '空输出重试'
-            case 'rep_penalty_increase': return '重复惩罚提高'
-            case 'line_mismatch': return '行数不匹配 (重试)'
-            case 'parse_fallback': return '解析回退'
-            case 'kana_residue': return '假名残留 (重试)'
-            case 'hangeul_residue': return '谚文残留 (重试)'
-            case 'high_similarity': return '相似度过高 (重试)'
-            case 'glossary_missed': return '术语未生效 (重试)'
-            case 'warning_line_mismatch': return '行数不匹配 (警告)'
-            case 'warning_kana_residue': return '假名残留 (警告)'
-            case 'warning_hangeul_residue': return '谚文残留 (警告)'
-            case 'warning_high_similarity': return '相似度过高 (警告)'
-            case 'warning_glossary_missed': return '术语未生效 (警告)'
-            case 'warning_quality': return '质量警告'
-            default: return type
-        }
+        const labels = t.historyView.triggerLabels
+        return labels[type] || type
     }
 
     return (
@@ -292,17 +281,17 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                 <div className="flex items-center justify-between">
                     <h2 className="text-2xl font-bold text-foreground flex items-center gap-3">
                         <Clock className="w-6 h-6 text-primary" />
-                        翻译历史
+                        {t.historyView.title}
                     </h2>
                     {records.length > 0 && (
                         <Button variant="outline" size="sm" onClick={handleClearAll} className="text-red-500 hover:text-red-600">
                             <Trash2 className="w-4 h-4 mr-2" />
-                            清空全部
+                            {t.historyView.clearAll}
                         </Button>
                     )}
                 </div>
                 <p className="text-sm text-muted-foreground mt-2">
-                    查看过去的翻译记录，包括日志和设置触发事件。保留最近 50 条记录。
+                    {t.historyView.subtitle}
                 </p>
             </div>
 
@@ -311,7 +300,7 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                 {records.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
                         <FileText className="w-12 h-12 mb-4 opacity-30" />
-                        <p>暂无翻译历史</p>
+                        <p>{t.historyView.noHistory}</p>
                     </div>
                 ) : (
                     <div className="space-y-4">
@@ -333,7 +322,7 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                                         <div className="flex items-center gap-2">
                                             {record.triggers.length > 0 && (
                                                 <span className="text-xs bg-amber-500/10 text-amber-600 px-2 py-0.5 rounded">
-                                                    {record.triggers.length} 触发
+                                                    {t.historyView.triggerCount.replace('{count}', record.triggers.length.toString())}
                                                 </span>
                                             )}
                                             <Button
@@ -351,7 +340,7 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                                                 variant="ghost"
                                                 size="sm"
                                                 onClick={() => handleExportLog(record)}
-                                                title="导出详细日志"
+                                                title={t.historyView.exportLog}
                                             >
                                                 <Download className="w-4 h-4" />
                                             </Button>
@@ -373,37 +362,37 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                                             {/* Stats */}
                                             <div className="grid grid-cols-6 gap-3 text-sm">
                                                 <div>
-                                                    <p className="text-muted-foreground text-xs">区块</p>
+                                                    <p className="text-muted-foreground text-xs">{t.historyView.stats.blocks}</p>
                                                     <p className="font-medium">{record.completedBlocks}/{record.totalBlocks}</p>
                                                 </div>
                                                 <div>
-                                                    <p className="text-muted-foreground text-xs">有效行数 (源/译)</p>
-                                                    <p className="font-medium truncate" title={`源: ${record.sourceLines || '-'} / 译: ${record.totalLines || '-'}`}>
+                                                    <p className="text-muted-foreground text-xs">{t.historyView.stats.lines}</p>
+                                                    <p className="font-medium truncate" title={`${lang === 'zh' ? '源' : 'Src'}: ${record.sourceLines || '-'} / ${lang === 'zh' ? '译' : 'Dst'}: ${record.totalLines || '-'}`}>
                                                         {record.sourceLines || '-'} <span className="text-muted-foreground">/</span> {record.totalLines || '-'}
                                                     </p>
                                                 </div>
                                                 <div>
-                                                    <p className="text-muted-foreground text-xs">字符数 (源/译)</p>
-                                                    <p className="font-medium truncate" title={`源: ${record.sourceChars?.toLocaleString() || '-'} / 译: ${record.totalChars?.toLocaleString() || '-'}`}>
+                                                    <p className="text-muted-foreground text-xs">{t.historyView.stats.chars}</p>
+                                                    <p className="font-medium truncate" title={`${lang === 'zh' ? '源' : 'Src'}: ${record.sourceChars?.toLocaleString() || '-'} / ${lang === 'zh' ? '译' : 'Dst'}: ${record.totalChars?.toLocaleString() || '-'}`}>
                                                         {record.sourceChars?.toLocaleString() || '-'} <span className="text-muted-foreground">/</span> {record.totalChars?.toLocaleString() || '-'}
                                                     </p>
                                                 </div>
                                                 <div>
-                                                    <p className="text-muted-foreground text-xs">速度</p>
-                                                    <p className="font-medium">{record.avgSpeed ? `${record.avgSpeed} 字/秒` : '-'}</p>
+                                                    <p className="text-muted-foreground text-xs">{t.historyView.stats.speed}</p>
+                                                    <p className="font-medium">{record.avgSpeed ? `${record.avgSpeed} ${t.dashboard.charPerSec}` : '-'}</p>
                                                 </div>
                                                 <div>
-                                                    <p className="text-muted-foreground text-xs">温度</p>
+                                                    <p className="text-muted-foreground text-xs">{t.historyView.stats.temperature}</p>
                                                     <p className="font-medium">{record.config.temperature}</p>
                                                 </div>
                                                 <div>
-                                                    <p className="text-muted-foreground text-xs">重试次数</p>
+                                                    <p className="text-muted-foreground text-xs">{t.historyView.stats.retries}</p>
                                                     <p className="font-medium">
-                                                        {record.triggers.filter(t =>
-                                                            t.type === 'empty_retry' ||
-                                                            t.type === 'line_mismatch' ||
-                                                            t.type === 'rep_penalty_increase' ||
-                                                            t.type === 'parse_fallback'
+                                                        {record.triggers.filter(tr =>
+                                                            tr.type === 'empty_retry' ||
+                                                            tr.type === 'line_mismatch' ||
+                                                            tr.type === 'rep_penalty_increase' ||
+                                                            tr.type === 'parse_fallback'
                                                         ).length}
                                                     </p>
                                                 </div>
@@ -412,14 +401,14 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                                             {/* Model Info */}
                                             {record.modelName && (
                                                 <p className="text-xs text-muted-foreground">
-                                                    模型: <span className="font-medium text-foreground">{record.modelName}</span>
+                                                    {t.historyView.labels.model} <span className="font-medium text-foreground">{record.modelName}</span>
                                                 </p>
                                             )}
 
                                             {/* Triggers */}
                                             {record.triggers.length > 0 && (
                                                 <div>
-                                                    <p className="text-xs font-medium text-muted-foreground mb-2">触发事件</p>
+                                                    <p className="text-xs font-medium text-muted-foreground mb-2">{t.advancedView.validationRules}</p>
                                                     <div className="space-y-1">
                                                         {record.triggers.map((t, i) => (
                                                             <div key={i} className="flex items-center gap-2 text-xs bg-secondary/50 rounded px-2 py-1">
@@ -435,7 +424,9 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                                             {/* Logs */}
                                             {record.logs.length > 0 && (
                                                 <div>
-                                                    <p className="text-xs font-medium text-muted-foreground mb-2">日志 (共 {record.logs.length} 条)</p>
+                                                    <p className="text-xs font-medium text-muted-foreground mb-2">
+                                                        {t.dashboard.terminal} (共 {record.logs.length} 条)
+                                                    </p>
                                                     <div className="bg-black/90 rounded p-3 max-h-80 overflow-y-auto font-mono text-xs text-green-400 space-y-0.5 scrollbar-thin scrollbar-thumb-gray-600">
                                                         {record.logs.map((log, i) => (
                                                             <div key={i} className="whitespace-pre-wrap">{log}</div>
@@ -448,14 +439,14 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                                             <div className="space-y-1.5 text-xs">
                                                 {/* Source File */}
                                                 <div className="flex items-center gap-2 text-muted-foreground">
-                                                    <span className="w-12 shrink-0">源文件:</span>
+                                                    <span className="w-16 shrink-0">{t.historyView.labels.sourceFile}</span>
                                                     <span className="truncate flex-1">{record.filePath}</span>
                                                     <Button
                                                         variant="ghost"
                                                         size="sm"
                                                         className="h-6 px-2"
                                                         onClick={() => window.api?.openPath?.(record.filePath)}
-                                                        title="打开源文件"
+                                                        title={t.historyView.labels.openFile}
                                                     >
                                                         <ExternalLink className="w-3 h-3" />
                                                     </Button>
@@ -467,7 +458,7 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                                                             const folderPath = record.filePath.substring(0, Math.max(record.filePath.lastIndexOf('\\'), record.filePath.lastIndexOf('/')))
                                                             window.api?.openFolder?.(folderPath)
                                                         }}
-                                                        title="打开源文件夹"
+                                                        title={t.historyView.labels.openFolder}
                                                     >
                                                         <FolderOpen className="w-3 h-3" />
                                                     </Button>
@@ -475,14 +466,14 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                                                 {/* Output File */}
                                                 {record.outputPath && (
                                                     <div className="flex items-center gap-2 text-muted-foreground">
-                                                        <span className="w-12 shrink-0">输出:</span>
+                                                        <span className="w-16 shrink-0">{t.historyView.labels.outputFile}</span>
                                                         <span className="truncate flex-1">{record.outputPath}</span>
                                                         <Button
                                                             variant="ghost"
                                                             size="sm"
                                                             className="h-6 px-2"
                                                             onClick={() => window.api?.openPath?.(record.outputPath!)}
-                                                            title="打开输出文件"
+                                                            title={t.historyView.labels.openFile}
                                                         >
                                                             <ExternalLink className="w-3 h-3" />
                                                         </Button>
@@ -494,7 +485,7 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
                                                                 const folderPath = record.outputPath!.substring(0, Math.max(record.outputPath!.lastIndexOf('\\'), record.outputPath!.lastIndexOf('/')))
                                                                 window.api?.openFolder?.(folderPath)
                                                             }}
-                                                            title="打开输出文件夹"
+                                                            title={t.historyView.labels.openFolder}
                                                         >
                                                             <FolderOpen className="w-3 h-3" />
                                                         </Button>
@@ -512,8 +503,8 @@ export function HistoryView({ lang: _lang }: { lang: string }) {
             <AlertModal
                 open={alertOpen}
                 onOpenChange={setAlertOpen}
-                title="确认清空"
-                description="确定要清空所有翻译历史吗？此操作无法撤销。"
+                title={t.historyView.clearConfirmTitle}
+                description={t.historyView.clearConfirmDesc}
                 variant="destructive"
                 onConfirm={handleConfirmClear}
                 showCancel={true}

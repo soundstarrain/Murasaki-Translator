@@ -61,7 +61,7 @@ export function SettingsView({ lang }: { lang: Language }) {
             } else {
                 setUpdateStatus('error')
                 const errorMsg = res.error?.includes('timeout') || res.error?.includes('ECONN')
-                    ? `${res.error} (请尝试开启代理)`
+                    ? `${res.error} (${t.config.proofread.openProxy})`
                     : res.error
                 setUpdateInfo({ latestVersion: '', releaseNotes: '', url: '', error: errorMsg })
             }
@@ -239,7 +239,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     type="text"
                                     readOnly
                                     className="flex-1 border border-border p-2 rounded bg-secondary text-muted-foreground text-sm"
-                                    placeholder="默认 (源文件同目录)"
+                                    placeholder={t.settingsView.outputDirPlaceholder}
                                     value={outputDir}
                                 />
                                 <Button
@@ -248,7 +248,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     onClick={handleSelectDir}
                                 >
                                     <FolderOpen className="w-4 h-4 mr-2" />
-                                    选择文件夹
+                                    {t.settingsView.selectDir}
                                 </Button>
                                 {outputDir && (
                                     <Button
@@ -263,8 +263,8 @@ export function SettingsView({ lang }: { lang: Language }) {
                             </div>
                             <p className="text-xs text-muted-foreground">
                                 {outputDir
-                                    ? "翻译文件将保存到指定目录。"
-                                    : "翻译文件将保存在源文件的同一目录下。"}
+                                    ? t.settingsView.outputDirDesc
+                                    : t.settingsView.outputDirDefaultDesc}
                             </p>
                         </div>
 
@@ -308,7 +308,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     type="text"
                                     readOnly
                                     className="flex-1 border border-border p-2 rounded bg-secondary text-muted-foreground text-sm"
-                                    placeholder="默认 (输出文件同目录)"
+                                    placeholder={t.settingsView.cacheDirPlaceholder}
                                     value={cacheDir}
                                 />
                                 <Button
@@ -321,7 +321,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     }}
                                 >
                                     <FolderOpen className="w-4 h-4 mr-2" />
-                                    选择文件夹
+                                    {t.settingsView.selectDir}
                                 </Button>
                                 {cacheDir && (
                                     <Button
@@ -336,8 +336,8 @@ export function SettingsView({ lang }: { lang: Language }) {
                             </div>
                             <p className="text-xs text-muted-foreground">
                                 {cacheDir
-                                    ? "缓存文件将保存到指定目录，可用于断点续传和人工校对。"
-                                    : "缓存文件默认保存在输出文件的同一目录下，可用于断点续传和人工校对。"}
+                                    ? t.settingsView.cacheDirDesc
+                                    : t.settingsView.cacheDirDefaultDesc}
                             </p>
                         </CardContent>
                     </Card>
@@ -347,11 +347,11 @@ export function SettingsView({ lang }: { lang: Language }) {
                 <div className="pt-6">
                     <h3 className="text-sm font-bold text-foreground flex items-center gap-2 mb-3 px-1">
                         <RefreshCw className="w-4 h-4 text-primary" />
-                        软件更新
+                        {t.settingsView.checkUpdate}
                     </h3>
                     <Card>
                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-base">版本状态</CardTitle>
+                            <CardTitle className="text-base">{t.settingsView.versionStatus}</CardTitle>
                             <span className="px-2 py-0.5 rounded-md bg-secondary text-secondary-foreground text-[10px] font-mono border">
                                 v{APP_CONFIG.version}
                             </span>
@@ -368,19 +368,19 @@ export function SettingsView({ lang }: { lang: Language }) {
                                                         updateStatus === 'idle' ? "bg-zinc-300 dark:bg-zinc-700" : "bg-red-500"
                                         )} />
                                         <p className="text-sm font-medium">
-                                            {updateStatus === 'idle' && "点击按钮检查更新"}
-                                            {updateStatus === 'checking' && "正在检查更新..."}
+                                            {updateStatus === 'idle' && t.settingsView.checkHint}
+                                            {updateStatus === 'checking' && t.settingsView.checking}
                                             {updateStatus === 'found' && (
                                                 <span className="text-primary font-bold">
-                                                    发现新版本: v{updateInfo?.latestVersion}
+                                                    {t.settingsView.foundNew.replace('{version}', updateInfo?.latestVersion || '')}
                                                 </span>
                                             )}
-                                            {updateStatus === 'none' && "已是最新版本"}
-                                            {updateStatus === 'error' && <span className="text-red-500">连接失败</span>}
+                                            {updateStatus === 'none' && t.settingsView.upToDate}
+                                            {updateStatus === 'error' && <span className="text-red-500">{t.settingsView.connFail}</span>}
                                         </p>
                                     </div>
                                     <p className="text-xs text-muted-foreground">
-                                        {updateStatus === 'error' ? updateInfo?.error : "获取最新功能、模型优化及安全补丁"}
+                                        {updateStatus === 'error' ? updateInfo?.error : t.settingsView.updateDesc}
                                     </p>
                                 </div>
                                 <Button
@@ -391,16 +391,16 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     className="gap-2 h-8"
                                 >
                                     <RefreshCw className={cn("w-3.5 h-3.5", updateStatus === 'checking' && "animate-spin")} />
-                                    {updateStatus === 'found' ? "重新检查" : "立即检查"}
+                                    {updateStatus === 'found' ? t.settingsView.reCheck : t.settingsView.checkNow}
                                 </Button>
                             </div>
 
                             {updateStatus === 'found' && updateInfo && (
                                 <div className="p-3 rounded-lg bg-primary/5 border border-primary/10 space-y-3 animate-in fade-in slide-in-from-top-2 duration-300">
                                     <div className="space-y-1">
-                                        <span className="text-[10px] font-bold uppercase text-primary/70">新版本特性</span>
+                                        <span className="text-[10px] font-bold uppercase text-primary/70">{t.settingsView.newFeatures}</span>
                                         <div className="text-xs text-foreground/80 max-h-32 overflow-y-auto font-sans whitespace-pre-wrap leading-relaxed italic border-l-2 border-primary/20 pl-2">
-                                            {updateInfo.releaseNotes || "无更新说明"}
+                                            {updateInfo.releaseNotes || t.settingsView.noNotes}
                                         </div>
                                     </div>
 
@@ -410,7 +410,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                         onClick={() => window.api?.openExternal(updateInfo.url)}
                                     >
                                         <Globe className="w-3.5 h-3.5" />
-                                        前往 GitHub 下载官方安装包
+                                        {t.settingsView.goGithub}
                                     </Button>
                                 </div>
                             )}
@@ -478,7 +478,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     <Github className="w-5 h-5 text-zinc-700 dark:text-zinc-300" />
                                     <ExternalLink className="w-3 h-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </div>
-                                <span className="font-semibold text-sm">Source Code</span>
+                                <span className="font-semibold text-sm">{t.settingsView.sourceCode}</span>
                                 <span className="text-[10px] text-muted-foreground">
                                     Project {APP_CONFIG.name}
                                 </span>
@@ -493,7 +493,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     <span className="text-lg">🤗</span>
                                     <ExternalLink className="w-3 h-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </div>
-                                <span className="font-semibold text-sm">Model Hub</span>
+                                <span className="font-semibold text-sm">{t.settingsView.modelHub}</span>
                                 <span className="text-[10px] text-muted-foreground">
                                     Download Updates
                                 </span>
