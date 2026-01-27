@@ -188,7 +188,7 @@ ipcMain.handle('select-file', async (_event, options?: { title?: string; default
         title: options?.title,
         defaultPath: options?.defaultPath,
         properties: ['openFile'],
-        filters: options?.filters || [{ name: 'Documents', extensions: ['txt', 'epub'] }]
+        filters: options?.filters || [{ name: 'Documents', extensions: ['txt', 'epub', 'srt'] }]
     })
     if (canceled) return null
     return filePaths[0]
@@ -236,7 +236,7 @@ ipcMain.handle('list-cache-files', async (_event, folderPath: string) => {
 ipcMain.handle('select-files', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
         properties: ['openFile', 'multiSelections'],
-        filters: [{ name: 'Documents', extensions: ['txt', 'epub'] }]
+        filters: [{ name: 'Documents', extensions: ['txt', 'epub', 'srt'] }]
     })
     if (canceled) return []
     return filePaths
