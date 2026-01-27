@@ -27,9 +27,11 @@ import {
     FileCheck,
     FileText,
     History,
+    Terminal,
+    Clock,
 
 } from 'lucide-react'
-import { translations, defaultLang, Language } from '../lib/i18n'
+import { Language } from '../lib/i18n'
 
 // 缓存 Block 类型
 interface CacheBlock {
@@ -62,21 +64,30 @@ interface CacheData {
 interface ProofreadViewProps {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     t: any
+    lang: Language
+    onUnsavedChangesChange?: (hasChanges: boolean) => void
 }
 
 import { ResultChecker } from './ResultChecker'
 import { findHighSimilarityLines } from '../lib/quality-check'
+import { AlertModal } from './ui/AlertModal'
+import { useAlertModal } from '../hooks/useAlertModal'
 
 // ...
 
-export default function ProofreadView({ }: ProofreadViewProps) {
-    const language = (localStorage.getItem('language') as Language) || defaultLang
-    const t = translations[language]
+export default function ProofreadView({ t, lang, onUnsavedChangesChange }: ProofreadViewProps) {
+
+    const { alertProps, showAlert, showConfirm } = useAlertModal()
 
     // 状态
     const [cacheData, setCacheData] = useState<CacheData | null>(null)
     const [cachePath, setCachePath] = useState<string>('')
     const [loading, setLoading] = useState(false)
+
+    // Log viewing state
+    const [blockLogs, setBlockLogs] = useState<Record<number, string[]>>({})
+    const [showLogModal, setShowLogModal] = useState<number | null>(null)
+    const logScrollRef = useRef<HTMLDivElement>(null)
 
     // Quality Check Panel
     const [showQualityCheck, setShowQualityCheck] = useState(false)
@@ -86,6 +97,7 @@ export default function ProofreadView({ }: ProofreadViewProps) {
     const [editingBlockId, setEditingBlockId] = useState<number | null>(null)
     const [editingText, setEditingText] = useState('')
     const textareaRef = useRef<HTMLTextAreaElement>(null)
+    const [retranslatingBlocks, setRetranslatingBlocks] = useState<Set<number>>(new Set())
 
     // 搜索与过滤
     const [searchKeyword, setSearchKeyword] = useState('')
@@ -101,12 +113,37 @@ export default function ProofreadView({ }: ProofreadViewProps) {
 
     // History & Folder Browser
     const [showHistoryModal, setShowHistoryModal] = useState(false)
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
 
-
-    // Initial Load
+    // Sync with parent for navigation guard
     useEffect(() => {
-        // Any other initial load logic if needed
+        // Intercept navigation if active tasks (loading/retranslating) are running, or if there are unsaved changes
+        const isBusy = hasUnsavedChanges || loading || retranslatingBlocks.size > 0
+        onUnsavedChangesChange?.(isBusy)
+    }, [hasUnsavedChanges, loading, retranslatingBlocks.size, onUnsavedChangesChange])
+
+
+    // Initial Load - Setup Listeners
+    useEffect(() => {
+        const handler = (data: { index: number, text: string, isError?: boolean }) => {
+            setBlockLogs(prev => ({
+                ...prev,
+                [data.index]: [...(prev[data.index] || []), data.text]
+            }))
+        }
+
+        window.api?.onRetranslateLog(handler)
+        return () => {
+            window.api?.removeRetranslateLogListener()
+        }
     }, [])
+
+    // Auto-scroll log modal
+    useEffect(() => {
+        if (showLogModal !== null && logScrollRef.current) {
+            logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight
+        }
+    }, [blockLogs, showLogModal])
 
     // Search Effect
     useEffect(() => {
@@ -217,6 +254,7 @@ export default function ProofreadView({ }: ProofreadViewProps) {
 
         setCacheData(data)
         setCachePath(path)
+        setHasUnsavedChanges(false) // Reset on load
         setCurrentPage(1)
         setEditingBlockId(null)
 
@@ -285,24 +323,36 @@ export default function ProofreadView({ }: ProofreadViewProps) {
 
     // Load Cache (File Dialog)
     const loadCache = async () => {
-        try {
-            const defaultPath = localStorage.getItem("config_cache_dir") || undefined
-            const result = await window.api?.selectFile({
-                title: '选择翻译缓存文件',
-                defaultPath: defaultPath,
-                filters: [{ name: 'Cache Files', extensions: ['cache.json'] }]
-            } as any)
-            if (result) {
-                setLoading(true)
-                const data = await window.api?.loadCache(result)
-                if (data) {
-                    await processLoadedData(data, result)
+        const executeLoad = async () => {
+            try {
+                const defaultPath = localStorage.getItem("config_cache_dir") || undefined
+                const result = await window.api?.selectFile({
+                    title: '选择翻译缓存文件',
+                    defaultPath: defaultPath,
+                    filters: [{ name: 'Cache Files', extensions: ['cache.json'] }]
+                } as any)
+                if (result) {
+                    setLoading(true)
+                    const data = await window.api?.loadCache(result)
+                    if (data) {
+                        await processLoadedData(data, result)
+                    }
+                    setLoading(false)
                 }
+            } catch (error) {
+                console.error('Failed to load cache:', error)
                 setLoading(false)
             }
-        } catch (error) {
-            console.error('Failed to load cache:', error)
-            setLoading(false)
+        }
+
+        if (hasUnsavedChanges) {
+            showConfirm({
+                title: t.config.proofread.unsavedChanges.split('，')[0],
+                description: t.config.proofread.unsavedChanges,
+                onConfirm: executeLoad
+            })
+        } else {
+            executeLoad()
         }
     }
 
@@ -311,11 +361,45 @@ export default function ProofreadView({ }: ProofreadViewProps) {
         if (!cacheData || !cachePath) return
         try {
             setLoading(true)
-            await window.api?.saveCache(cachePath, cacheData)
+            // 1. Save JSON Cache
+            const cacheOk = await window.api?.saveCache(cachePath, cacheData)
+            if (!cacheOk) throw new Error('Failed to save cache JSON')
+
+            // 2. Sync to Translated File (EPUB/TXT/SRT/ASS)
+            if (cacheData.outputPath) {
+                const ext = cacheData.outputPath.split('.').pop()?.toLowerCase();
+
+                // For complex formats, trigger Python rebuild
+                if (['epub', 'srt', 'ass', 'ssa'].includes(ext || '')) {
+                    const rebuildResult = await window.api?.rebuildDoc({ cachePath })
+                    if (!rebuildResult?.success) {
+                        throw new Error(`文档重建失败: ${rebuildResult?.error || '模型后端未正常返回结果'}`)
+                    }
+                } else if (ext === 'txt') {
+                    // Direct write for TXT (matching Murasaki \n\n rule)
+                    const content = cacheData.blocks
+                        .sort((a, b) => a.index - b.index)
+                        .map(b => b.dst.trim())
+                        .join('\n\n') + '\n'
+                    await window.api?.writeFile(cacheData.outputPath, content)
+                }
+            }
+
+            setHasUnsavedChanges(false) // Reset on save
             setLoading(false)
+            showAlert({
+                title: '保存成功',
+                description: '翻译缓存与输出文件已同步。',
+                variant: 'success'
+            })
         } catch (error) {
             console.error('Failed to save cache:', error)
             setLoading(false)
+            showAlert({
+                title: '保存失败',
+                description: String(error),
+                variant: 'destructive'
+            })
         }
     }
 
@@ -349,10 +433,22 @@ export default function ProofreadView({ }: ProofreadViewProps) {
     // Update Block
     const updateBlockDst = (index: number, newDst: string) => {
         if (!cacheData) return
-        const newBlocks = cacheData.blocks.map(b =>
-            b.index === index ? { ...b, dst: newDst, status: 'edited' as const } : b
-        )
-        setCacheData({ ...cacheData, blocks: newBlocks })
+        const newBlocks = [...cacheData.blocks]
+        const blockIndex = newBlocks.findIndex(b => b.index === index)
+        if (blockIndex !== -1) {
+            // Also strip tags if model re-inserted them
+            const cleanDst = newDst.replace(/(\s*)[(\[]?\b(line_mismatch|high_similarity|kana_residue|glossary_missed|hangeul_residue)\b[)\]]?(\s*)/g, '')
+
+            newBlocks[blockIndex] = {
+                ...newBlocks[blockIndex],
+                dst: cleanDst,
+                status: 'edited'
+            }
+            const newData = { ...cacheData, blocks: newBlocks }
+            setCacheData(newData)
+            setHasUnsavedChanges(true)
+            // onUnsavedChangesChange?.(true) // This line was not in the original context, so I'm not adding it.
+        }
     }
 
     // Retranslate
@@ -361,25 +457,47 @@ export default function ProofreadView({ }: ProofreadViewProps) {
         const block = cacheData.blocks.find(b => b.index === index)
         if (!block) return
 
+        // Global Lock: Enforce single-threading for manual re-translation
+        if (retranslatingBlocks.size > 0 || loading) {
+            showAlert({
+                title: '请等待',
+                description: '当前有正在进行的重翻或保存任务，请等待其完成。',
+                variant: 'destructive'
+            })
+            return
+        }
+
         const modelPath = localStorage.getItem("config_model")
         if (!modelPath) {
-            alert('请先在模型管理页面选择一个模型！')
+            showAlert({
+                title: t.advancedFeatures,
+                description: '请先在模型管理页面选择一个模型！',
+                variant: 'destructive'
+            })
             return
         }
 
         try {
             setLoading(true)
+            setRetranslatingBlocks(prev => new Set(prev).add(index))
+            // Clear previous logs for this block on start
+            setBlockLogs(prev => ({ ...prev, [index]: [] }))
+
             const config = {
                 gpuLayers: localStorage.getItem("config_gpu"),
                 ctxSize: localStorage.getItem("config_ctx") || "4096",
                 preset: localStorage.getItem("config_preset") || "training",
                 temperature: parseFloat(localStorage.getItem("config_temperature") || "0.7"),
+                repPenaltyBase: parseFloat(localStorage.getItem("config_rep_penalty_base") || "1.0"),
+                repPenaltyMax: parseFloat(localStorage.getItem("config_rep_penalty_max") || "1.5"),
                 textProtect: localStorage.getItem("config_text_protect") === "true",
                 glossaryPath: localStorage.getItem("config_glossary_path"),
                 deviceMode: localStorage.getItem("config_device_mode") || "auto",
                 rulesPre: JSON.parse(localStorage.getItem("config_rules_pre") || "[]"),
                 rulesPost: JSON.parse(localStorage.getItem("config_rules_post") || "[]"),
-                strictMode: localStorage.getItem("config_strict_mode") || "subs",
+                strictMode: localStorage.getItem("config_strict_mode") || "off", // Default to off for manual retry unless set
+                flashAttn: localStorage.getItem("config_flash_attn") !== "false", // Most models support it now
+                kvCacheType: localStorage.getItem("config_kv_cache_type") || "q8_0",
             }
 
             const result = await window.api?.retranslateBlock({
@@ -391,14 +509,32 @@ export default function ProofreadView({ }: ProofreadViewProps) {
 
             if (result?.success) {
                 updateBlockDst(index, result.dst)
+                showAlert({
+                    title: t.config.proofread.retranslateSuccess,
+                    description: t.config.proofread.retranslateSuccessDesc.replace('{index}', (index + 1).toString()),
+                    variant: 'success'
+                })
             } else {
-                alert(`重翻失败: ${result?.error || 'Unknown error'}`)
+                showAlert({
+                    title: '重翻失败',
+                    description: result?.error || 'Unknown error',
+                    variant: 'destructive'
+                })
             }
         } catch (error) {
             console.error('Failed to retranslate:', error)
-            alert(`重翻错误: ${error}`)
+            showAlert({
+                title: '重翻错误',
+                description: String(error),
+                variant: 'destructive'
+            })
         } finally {
             setLoading(false)
+            setRetranslatingBlocks(prev => {
+                const next = new Set(prev)
+                next.delete(index)
+                return next
+            })
         }
     }
 
@@ -452,31 +588,43 @@ export default function ProofreadView({ }: ProofreadViewProps) {
     // Replace All: Replace ALL occurrences in ALL DST blocks
     const replaceAll = () => {
         if (!cacheData || !searchKeyword) return
-        if (!confirm(`${t.config.proofread.replace} ${matchList.filter(m => m.type === 'dst').length}?`)) return
 
-        try {
-            const flags = isRegex ? 'gi' : 'i'
-            const pattern = isRegex ? searchKeyword : searchKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-            const regex = new RegExp(pattern, flags)
+        const executeReplace = () => {
+            try {
+                const flags = isRegex ? 'gi' : 'i'
+                const pattern = isRegex ? searchKeyword : searchKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                const regex = new RegExp(pattern, flags)
 
-            let replaceCount = 0
-            const newBlocks = cacheData.blocks.map(block => {
-                if (!regex.test(block.dst)) return block
+                let replaceCount = 0
+                const newBlocks = cacheData.blocks.map(block => {
+                    if (!regex.test(block.dst)) return block
 
-                // Count matches for stats
-                const matches = block.dst.match(regex)
-                if (matches) replaceCount += matches.length
+                    // Count matches for stats
+                    const matches = block.dst.match(regex)
+                    if (matches) replaceCount += matches.length
 
-                const newDst = block.dst.replace(regex, replaceText)
-                return { ...block, dst: newDst, status: 'edited' as const }
-            })
+                    const newDst = block.dst.replace(regex, replaceText)
+                    return { ...block, dst: newDst, status: 'edited' as const }
+                })
 
-            setCacheData({ ...cacheData, blocks: newBlocks })
-            alert(t.config.proofread.replaced.replace('{count}', replaceCount.toString()))
+                setCacheData({ ...cacheData, blocks: newBlocks })
+                setHasUnsavedChanges(true)
+                showAlert({
+                    title: t.config.proofread.replaceAll,
+                    description: t.config.proofread.replaced.replace('{count}', replaceCount.toString()),
+                    variant: 'success'
+                })
 
-        } catch (e) {
-            console.error(e)
+            } catch (e) {
+                console.error(e)
+            }
         }
+
+        showConfirm({
+            title: t.config.proofread.replaceAll,
+            description: `${t.config.proofread.replace} ${matchList.filter(m => m.type === 'dst').length}?`,
+            onConfirm: executeReplace
+        })
     }
 
     // --- In-Place Edit Handlers ---
@@ -851,8 +999,15 @@ export default function ProofreadView({ }: ProofreadViewProps) {
                         <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={loadCache}>
                             <FolderOpen className="w-3.5 h-3.5 mr-1" /> {t.config.proofread.openBtn}
                         </Button>
-                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={saveCache} disabled={loading}>
-                            <Save className="w-3.5 h-3.5 mr-1" /> {t.config.proofread.saveBtn}
+                        <Button
+                            variant={hasUnsavedChanges ? "default" : "outline"}
+                            size="sm"
+                            className={`h-7 text-xs relative ${hasUnsavedChanges ? 'ring-1 ring-amber-500' : ''}`}
+                            onClick={saveCache}
+                            disabled={loading}
+                        >
+                            <Save className={`w-3.5 h-3.5 mr-1 ${hasUnsavedChanges ? 'animate-pulse' : ''}`} />
+                            {t.config.proofread.saveBtn}
                         </Button>
                         <Button variant="default" size="sm" className="h-7 text-xs" onClick={exportTranslation} disabled={loading}>
                             <Download className="w-3.5 h-3.5 mr-1" /> {t.config.proofread.exportBtn}
@@ -921,16 +1076,34 @@ export default function ProofreadView({ }: ProofreadViewProps) {
                                         <span className="text-xs font-mono text-muted-foreground/50">{block.index + 1}</span>
                                         <StatusIndicator block={block} />
 
-                                        {/* Hover Actions */}
-                                        <div className="mt-auto flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        {/* Gutter Actions */}
+                                        <div className="mt-auto flex flex-col gap-2">
                                             <button
                                                 onClick={() => retranslateBlock(block.index)}
-                                                className="p-1 hover:text-blue-500 transition-colors"
+                                                className={`
+                                                    w-7 h-7 flex items-center justify-center rounded-full transition-all shadow-sm
+                                                    ${loading ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary hover:bg-primary hover:text-white hover:scale-110 active:scale-95'}
+                                                    opacity-0 group-hover:opacity-100
+                                                `}
                                                 title="重新翻译此块"
                                                 disabled={loading}
                                             >
-                                                <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+                                                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
                                             </button>
+
+                                            {blockLogs[block.index] && (
+                                                <button
+                                                    onClick={() => setShowLogModal(block.index)}
+                                                    className={`
+                                                        w-7 h-7 flex items-center justify-center rounded-full transition-all shadow-sm
+                                                        bg-amber-500/10 text-amber-500 hover:bg-amber-500 hover:text-white hover:scale-110 active:scale-95
+                                                        ${loading && editingBlockId === null ? 'animate-pulse' : ''}
+                                                    `}
+                                                    title="查看重翻推理日志 (Virtual Log)"
+                                                >
+                                                    <Terminal className="w-3.5 h-3.5" />
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
 
@@ -1025,7 +1198,7 @@ export default function ProofreadView({ }: ProofreadViewProps) {
                     </div>
                     <div className="flex-1 min-h-0 overflow-hidden">
                         <ResultChecker
-                            lang={language}
+                            lang={lang}
                             cacheData={cacheData}
                             glossary={glossary}
                             onNavigateToBlock={(blockIndex) => {
@@ -1041,6 +1214,53 @@ export default function ProofreadView({ }: ProofreadViewProps) {
                     </div>
                 </div>
             )}
+
+            {/* --- Log Modal (Terminal) --- */}
+            {showLogModal !== null && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowLogModal(null)} />
+                    <div className="relative w-full max-w-3xl max-h-[80vh] bg-zinc-900 rounded-xl border border-zinc-800 shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+                        <div className="p-4 border-b border-zinc-800 bg-zinc-900/50 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-amber-500/10 rounded-lg">
+                                    <Terminal className="w-5 h-5 text-amber-500" />
+                                </div>
+                                <div>
+                                    <h3 className="text-sm font-medium text-zinc-100">推理细节 - 区块 {showLogModal + 1}</h3>
+                                    <p className="text-xs text-zinc-500">Manual Retranslation Virtual Log</p>
+                                </div>
+                            </div>
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-zinc-400 hover:text-white" onClick={() => setShowLogModal(null)}>
+                                <X className="w-4 h-4" />
+                            </Button>
+                        </div>
+                        <div
+                            ref={logScrollRef}
+                            className="flex-1 overflow-y-auto p-6 font-mono text-sm leading-relaxed text-zinc-300 scrollbar-thin scrollbar-thumb-zinc-700 bg-black/20"
+                        >
+                            {(blockLogs[showLogModal] || []).length === 0 ? (
+                                <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">
+                                    <Clock className="w-8 h-8 opacity-20" />
+                                    <p>等待日志输出...</p>
+                                </div>
+                            ) : (
+                                (blockLogs[showLogModal] || []).map((line, i) => (
+                                    <div key={i} className="mb-1 last:mb-0 break-words whitespace-pre-wrap">
+                                        {line}
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                        <div className="p-3 border-t border-zinc-800 bg-zinc-900/80 flex justify-end">
+                            <Button variant="ghost" size="sm" className="text-zinc-400" onClick={() => setShowLogModal(null)}>
+                                关闭
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            <AlertModal {...alertProps} />
         </div>
     )
 }

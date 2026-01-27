@@ -243,11 +243,8 @@ def translate_single_block(args):
     engine = InferenceEngine(
         server_path=args.server,
         model_path=args.model,
-        gpu_layers=args.gpu_layers,
-        ctx_size=args.ctx,
-        temperature=args.temperature,
-        rep_base=getattr(args, 'rep_penalty_base', 1.0),
-        rep_max=getattr(args, 'rep_penalty_max', 1.5),
+        n_gpu_layers=args.gpu_layers,
+        n_ctx=args.ctx,
         no_spawn=getattr(args, 'no_server_spawn', False),
         flash_attn=getattr(args, 'flash_attn', False),
         kv_cache_type=getattr(args, 'kv_cache_type', "q8_0"),
@@ -260,11 +257,13 @@ def translate_single_block(args):
     glossary = load_glossary(args.glossary)
     
     # Load Rules (Optional)
-    rules_pre = load_rules(args.rules_pre) if hasattr(args, 'rules_pre') and args.rules_pre else []
-    rules_post = load_rules(args.rules_post) if hasattr(args, 'rules_post') and args.rules_post else []
+    pre_rules = load_rules(args.rules_pre) if hasattr(args, 'rules_pre') and args.rules_pre else []
+    post_rules = load_rules(args.rules_post) if hasattr(args, 'rules_post') and args.rules_post else []
     
-    pre_processor = RuleProcessor(rules_pre)
-    post_processor = RuleProcessor(rules_post)
+    pre_processor = RuleProcessor(pre_rules)
+    post_processor = RuleProcessor(post_rules)
+    prompt_builder = PromptBuilder(glossary)
+    parser = ResponseParser()
     
     # Initialize Text Protector
     protector = None
@@ -304,11 +303,15 @@ def translate_single_block(args):
         if not src_text or not src_text.strip():
             raise ValueError("Input text is empty")
             
+        print(f"[Init] Retranslate started for block {args.file or 'Manual'}")
+        
         # 2. Pre-processing & Protection
+        print(f"[Process] Applying pre-processing rules (Strict: {enforce_strict_alignment})...")
         processed_src = pre_processor.process(src_text, strict_line_count=enforce_strict_alignment)
         processed_src = Normalizer.normalize(processed_src)
             
         if protector:
+            print(f"[Process] Applying text protection...")
             processed_src = protector.protect(processed_src)
             
         # 3. Build Prompt
@@ -318,24 +321,113 @@ def translate_single_block(args):
             preset=args.preset
         )
         
-        # 4. Translate
-        raw_output, block_usage = engine.chat_completion(
-            messages=messages,
-            temperature=args.temperature,
-            rep_base=getattr(args, 'rep_penalty_base', 1.0),
-            rep_max=getattr(args, 'rep_penalty_max', 1.5),
-            block_id=0
-        )
+        # 4. Translation Loop with Coverage Check
+        print(f"[Inference] Starting chat completion (Temp: {args.temperature})...")
         
-        if raw_output:
-            # 5. Parse & Post-process
-            parsed_lines, cot_content = parser.parse(raw_output)
-            base_text = '\n'.join(parsed_lines)
+        max_retries = getattr(args, 'coverage_retries', 3)
+        current_temp = args.temperature
+        current_rep_base = getattr(args, 'rep_penalty_base', 1.0)
+        feedback_prompt = ""
+        
+        final_dst = ""
+        cot_content = ""
+        last_error = ""
+
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                print(f"\n[Retry] Low coverage detected. Attempt {attempt}/{max_retries}...")
+                current_temp += getattr(args, 'retry_temp_boost', 0.2)
+                current_rep_base += getattr(args, 'retry_rep_boost', 0.1)
+                
+            # Re-build messages if feedback prompt exists
+            if feedback_prompt:
+                messages = prompt_builder.build_messages(
+                    processed_src + f"\n\n{feedback_prompt}", 
+                    enable_cot=args.debug,
+                    preset=args.preset
+                )
             
-            # Unified Rule Processor Application (Integrated Restoration)
-            # This replaces the hardcoded NumberFixer, PunctuationFixer, KanaFixer calls
-            final_dst = post_processor.process(base_text, src_text=src_text, protector=protector, strict_line_count=enforce_strict_alignment)
+            accumulated_output = ""
+            def on_stream_chunk(chunk):
+                nonlocal accumulated_output
+                accumulated_output += chunk
+                # sys.stdout.write(chunk)
+                # sys.stdout.flush()
+                pass
+
+            raw_output, block_usage = engine.chat_completion(
+                messages=messages,
+                temperature=min(current_temp, 1.5),
+                stream=True,
+                stream_callback=on_stream_chunk,
+                rep_base=current_rep_base,
+                rep_max=getattr(args, 'rep_penalty_max', 1.5),
+                block_id=0
+            )
+
+            if not raw_output:
+                last_error = "Empty output from model"
+                continue
+
+            # Parse
+            parsed_lines, current_cot = parser.parse(raw_output)
+            temp_dst = '\n'.join(parsed_lines)
             
+            # Post-process (Rule Restoration)
+            processed_dst = post_processor.process(
+                temp_dst, 
+                src_text=src_text, 
+                protector=protector, 
+                strict_line_count=enforce_strict_alignment
+            )
+
+            # Coverage Check
+            is_passed, out_cov, cot_cov, hits, total = calculate_glossary_coverage(
+                src_text,
+                processed_dst,
+                glossary,
+                cot_text=current_cot,
+                output_hit_threshold=getattr(args, 'output_hit_threshold', 60.0),
+                cot_coverage_threshold=getattr(args, 'cot_coverage_threshold', 80.0)
+            )
+
+            # [Log] Simulate main verification flow
+            
+            # Defense against empty glossary / non-list hits
+            hits_count = len(hits) if isinstance(hits, (list, tuple, dict)) else 0
+            
+            print(f"\n[Audit] Glossary Coverage Check: {'PASS' if is_passed else 'FAIL'}")
+            if total > 0:
+                print(f"        Output Coverage: {out_cov:.1f}% ({hits_count}/{total})")
+            else:
+                 print(f"        Output Coverage: N/A (No glossary terms found)")
+
+            if args.debug:
+                print(f"        CoT Coverage:    {cot_cov:.1f}%")
+            
+            if not is_passed:
+                print(f"        Missing Terms: {total - len(hits)}")
+
+            if is_passed or attempt == max_retries:
+                if attempt == max_retries and not is_passed:
+                    print(f"[Warn] Reached max retries ({max_retries}). Accepting result despite low coverage.")
+                
+                final_dst = processed_dst
+                cot_content = current_cot
+                break
+            
+            # If failed, construct feedback for next attempt (if enabled)
+            if getattr(args, 'retry_prompt_feedback', True) and glossary:
+                missed = [t for t, d in glossary.items() if len(t) > 1 and t in src_text and d not in processed_dst]
+                if missed:
+                    missed_str = "、".join(missed[:5])
+                    print(f"[Retry] Feedback: Missing terms -> {missed_str}")
+                    feedback_prompt = "注意：以下术语在上次翻译中遗漏，请务必在本次翻译中使用：" + missed_str
+
+        print("\n[Inference] Done.")
+        
+        if final_dst:
+            print(f"\n[Retranslate] Success! Generated {len(final_dst)} chars.")
             result = {
                 'success': True,
                 'src': src_text,
@@ -347,7 +439,7 @@ def translate_single_block(args):
                 'success': False,
                 'src': src_text,
                 'dst': '',
-                'error': 'Translation failed or empty output'
+                'error': last_error or 'Translation failed'
             }
         
         # Output
@@ -382,7 +474,7 @@ def main():
     default_model = os.path.join(middleware_dir, "models", "ACGN-8B-Step150-Q4_K_M.gguf")
     
     parser = argparse.ArgumentParser(description="Murasaki Translator - High Fidelity System 2 Translation")
-    parser.add_argument("--file", required=True, help="Input file path")
+    parser.add_argument("--file", help="Input file path") # Check manually later
     parser.add_argument("--server", default=default_server)
     parser.add_argument("--model", default=default_model)
     parser.add_argument("--glossary", help="Glossary JSON path")
@@ -437,6 +529,7 @@ def main():
     parser.add_argument("--cache-path", help="Custom directory to store cache files")
     parser.add_argument("--single-block", help="Translate a single block (for proofreading retranslate)")
     parser.add_argument("--json-output", action="store_true", help="Output result as JSON (for single-block mode)")
+    parser.add_argument("--rebuild-from-cache", help="Rebuild document from specified cache JSON file")
     parser.add_argument("--no-server-spawn", action="store_true", help="Client mode: connect to existing server")
     
     parser.add_argument("--concurrency", type=int, default=1, help="Parallel slots count (default 1)")
@@ -454,6 +547,10 @@ def main():
     parser.add_argument("--balance-count", type=int, default=3, help="Tail balance range count (default 3)")
     
     args = parser.parse_args()
+
+    # Manual validation for --file
+    if not args.single_block and not args.rebuild_from_cache and not args.file:
+        parser.error("the following arguments are required: --file")
     
     # High-Fidelity Logic is now handled by the frontend.
     # The backend simply respects the explicit arguments passed for kv_cache, batch size, etc.
@@ -463,6 +560,62 @@ def main():
     if args.concurrency > 16:
         print(f"[Warning] Concurrency {args.concurrency} exceeds system limit of 16. Capping to 16.")
         args.concurrency = 16
+
+    # ========================================
+    # Rebuild Mode (Non-translation)
+    # ========================================
+    if args.rebuild_from_cache:
+        try:
+            print(f"[Rebuild] Loading cache from: {args.rebuild_from_cache}")
+            if not os.path.exists(args.rebuild_from_cache):
+                print(f"[Error] Cache file not found: {args.rebuild_from_cache}")
+                return
+            
+            with open(args.rebuild_from_cache, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            
+            source_path = cache_data.get('sourcePath')
+            output_path = args.output or cache_data.get('outputPath')
+            
+            if not source_path or not os.path.exists(source_path):
+                print(f"[Error] Source file not found or not recorded in cache: {source_path}")
+                # Fallback: if output_path is txt, we can still rebuild it without source
+                if output_path and output_path.lower().endswith('.txt'):
+                     print(f"[Rebuild] Falling back to text-only rebuild for {output_path}")
+                else:
+                    sys.exit(1) # Signal failure to Electron
+            
+            from murasaki_translator.core.chunker import TextBlock
+            blocks = []
+            for b_data in cache_data.get('blocks', []):
+                blocks.append(TextBlock(
+                    id=b_data['index'],
+                    prompt_text=b_data['dst'], # Use dst as the new text
+                    metadata=b_data.get('metadata') # Try to get metadata if saved (v2.1+)
+                ))
+            
+            # Re-sort to ensure order
+            blocks.sort(key=lambda x: x.id)
+            
+            # Use DocumentFactory
+            if source_path and os.path.exists(source_path):
+                doc = DocumentFactory.create(source_path)
+                print(f"[Rebuild] Loaded document structure from: {source_path}")
+                doc.save(output_path, blocks)
+            elif output_path.lower().endswith('.txt'):
+                # Simple TXT rebuild
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    for b in blocks:
+                        f.write(b.prompt_text + "\n\n")
+            
+            print(f"[Success] Document rebuilt successfully: {output_path}")
+            return
+            
+        except Exception as e:
+            print(f"[Error] Rebuild failed: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
 
     # ========================================
     # 单块翻译模式 (用于校对界面重翻)
@@ -708,7 +861,7 @@ def main():
         last_progress_time = 0 # For rate limiting
         
         # 初始化翻译缓存（用于校对界面）
-        translation_cache = TranslationCache(output_path, custom_cache_dir=args.cache_path) if args.save_cache else None
+        translation_cache = TranslationCache(output_path, custom_cache_dir=args.cache_path, source_path=input_path) if args.save_cache else None
         
         # Load legacy custom protection patterns file if provided via CLI
         if args.protect_patterns and os.path.exists(args.protect_patterns):

@@ -38,7 +38,7 @@ export function AlertModal({
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
-            <Card className="w-[400px] max-w-[90vw] shadow-lg border-border bg-background animate-in zoom-in-95 duration-200">
+            <Card className="w-full max-w-lg shadow-lg border-border bg-background animate-in zoom-in-95 duration-200">
                 <div className="p-6">
                     <div className="flex items-start gap-4">
                         <div className="shrink-0 mt-1">
@@ -48,9 +48,9 @@ export function AlertModal({
                             <h3 className="font-semibold text-lg leading-none tracking-tight">
                                 {title}
                             </h3>
-                            <div className="text-sm text-muted-foreground">
+                            <div className="text-sm text-muted-foreground mt-2 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                                 {typeof description === 'string' ? (
-                                    <p className="whitespace-pre-wrap">{description}</p>
+                                    <p className="whitespace-pre-wrap break-words text-xs font-mono">{description}</p>
                                 ) : (
                                     description
                                 )}

@@ -111,6 +111,10 @@ export const translations = {
                 saveBtn: '保存',
                 exportBtn: '导出',
                 openProxy: '请尝试开启代理',
+                retranslateSuccess: '重翻成功',
+                retranslateSuccessDesc: '区块 {index} 已更新。注意：更改尚未写入文件，需点击“保存”以更新缓存。',
+                unsavedChanges: '当前有未保存的更改，确定要离开吗？',
+
             },
         },
         processing: {
@@ -669,6 +673,10 @@ export const translations = {
                 saveBtn: 'Save',
                 exportBtn: 'Export',
                 openProxy: 'Please try enabling a proxy',
+                retranslateSuccess: 'Retranslate Success',
+                retranslateSuccessDesc: 'Block {index} updated. note: changes NOT saved to file yet, click "Save" to persist.',
+                unsavedChanges: 'You have unsaved changes. Are you sure you want to leave?',
+
             }
         },
         processing: {
@@ -1227,6 +1235,9 @@ export const translations = {
                 saveBtn: '保存',
                 exportBtn: 'エクスポート',
                 openProxy: 'プロキシ設定を確認してください',
+                retranslateSuccess: '再翻訳成功',
+                retranslateSuccessDesc: 'ブロック {index} が更新されました。注意：変更はまだ保存されていません。「保存」をクリックしてキャッシュを更新してください。',
+                unsavedChanges: '保存されていない変更があります。移動してもよろしいですか？',
             }
         },
         processing: {

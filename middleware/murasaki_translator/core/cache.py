@@ -73,8 +73,9 @@ class TranslationCache:
     
     CACHE_SUFFIX = '.cache.json'
     
-    def __init__(self, output_path: str, custom_cache_dir: Optional[str] = None):
+    def __init__(self, output_path: str, custom_cache_dir: Optional[str] = None, source_path: str = ""):
         self.output_path = output_path
+        self.source_path = source_path
         
         if custom_cache_dir and os.path.isdir(custom_cache_dir):
             filename = os.path.basename(output_path) + self.CACHE_SUFFIX
@@ -111,6 +112,7 @@ class TranslationCache:
             data = {
                 'version': '2.0',  # block-based version
                 'outputPath': self.output_path,
+                'sourcePath': self.source_path,
                 'modelName': model_name,
                 'glossaryPath': glossary_path,
                 'stats': {
@@ -138,6 +140,7 @@ class TranslationCache:
             with open(self.cache_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             self.metadata = data
+            self.source_path = data.get('sourcePath', '')
             self.blocks = [CacheBlock.from_dict(b) for b in data.get('blocks', [])]
             return True
         except Exception as e:

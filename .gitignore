@@ -62,5 +62,7 @@ GUI/middleware/glossaries/
 diff
 middleware/temp_rules_post.json
 middleware/temp_rules_pre.json
+middleware/temp_retry_post.json
+
 
 release/

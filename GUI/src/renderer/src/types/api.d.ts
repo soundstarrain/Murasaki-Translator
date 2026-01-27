@@ -110,6 +110,7 @@ export interface ElectronAPI {
     // Cache Operations
     loadCache: (path: string) => Promise<any>
     saveCache: (path: string, data: any) => Promise<boolean>
+    rebuildDoc: (options: { cachePath: string; outputPath?: string }) => Promise<{ success: boolean; error?: string }>
     exportTranslation: (cachePath: string, outputPath: string) => Promise<boolean>
 
     // Translation Process
@@ -123,6 +124,10 @@ export interface ElectronAPI {
     removeLogListener: () => void
     removeExitListener: () => void
     removeProcessExitListener: () => void
+
+    // Retranslate Progress
+    onRetranslateLog: (callback: (data: { index: number, text: string, isError?: boolean }) => void) => void
+    removeRetranslateLogListener: () => void
 
     // Server Management
     serverStatus: () => Promise<ServerStatus>

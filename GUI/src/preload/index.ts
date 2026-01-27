@@ -36,6 +36,7 @@ const api = {
     // 校对界面相关 API
     loadCache: (cachePath: string) => ipcRenderer.invoke('load-cache', cachePath),
     saveCache: (cachePath: string, data: any) => ipcRenderer.invoke('save-cache', cachePath, data),
+    rebuildDoc: (options: { cachePath: string; outputPath?: string }) => ipcRenderer.invoke('rebuild-doc', options),
     writeFile: (path: string, content: string) => ipcRenderer.invoke('write-file', path, content),
     saveFile: (options: any) => ipcRenderer.invoke('save-file', options),
     retranslateBlock: (options: any) => ipcRenderer.invoke('retranslate-block', options),
@@ -58,6 +59,11 @@ const api = {
 
     // Rule System
     testRules: (text: string, rules: any[]) => ipcRenderer.invoke('test-rules', { text, rules }),
+
+    // Retranslate Progress
+    onRetranslateLog: (callback: (data: { index: number, text: string, isError?: boolean }) => void) =>
+        ipcRenderer.on('retranslate-log', (_event, value) => callback(value)),
+    removeRetranslateLogListener: () => ipcRenderer.removeAllListeners('retranslate-log'),
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

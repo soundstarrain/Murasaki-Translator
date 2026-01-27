@@ -13,22 +13,41 @@ import { ErrorBoundary } from "./components/ErrorBoundary"
 import { useAppHotkeys } from "./lib/useHotkeys"
 
 import { RuleEditor } from "./components/RuleEditor"
+import { AlertModal } from './components/ui/AlertModal'
+import { useAlertModal } from './hooks/useAlertModal'
 
 export type View = 'dashboard' | 'settings' | 'model' | 'glossary' | 'pre' | 'post' | 'advanced' | 'history' | 'proofread'
 
 function AppContent() {
     const [lang, setLang] = useState<Language>('zh')
     const [view, setView] = useState<View>('dashboard')
+    const [proofreadHasChanges, setProofreadHasChanges] = useState(false)
+    const { alertProps, showConfirm } = useAlertModal()
 
     // Dashboard ref for triggering translation
     const dashboardRef = useRef<{ startTranslation?: () => void; stopTranslation?: () => void }>(null)
 
     // 快捷键处理
     const handleSwitchView = useCallback((newView: string) => {
-        if (['dashboard', 'settings', 'advanced', 'glossary', 'proofread', 'history'].includes(newView)) {
-            setView(newView as View)
+        const validViews: View[] = ['dashboard', 'settings', 'model', 'advanced', 'glossary', 'proofread', 'history', 'pre', 'post']
+
+        if (validViews.includes(newView as View)) {
+            const executeSwitch = () => {
+                setView(newView as View)
+            }
+
+            if (view === 'proofread' && proofreadHasChanges && newView !== 'proofread') {
+                const t = translations[lang]
+                showConfirm({
+                    title: t.config.proofread.unsavedChanges.split('，')[0], // "当前有未保存的更改"
+                    description: t.config.proofread.unsavedChanges,
+                    onConfirm: executeSwitch
+                })
+            } else {
+                executeSwitch()
+            }
         }
-    }, [])
+    }, [view, proofreadHasChanges, lang, showConfirm])
 
     // 注册全局快捷键
     useAppHotkeys({
@@ -39,7 +58,12 @@ function AppContent() {
 
     return (
         <div className="flex h-screen w-screen bg-background font-sans text-foreground overflow-hidden">
-            <Sidebar lang={lang} setLang={setLang} view={view} setView={setView} />
+            <Sidebar
+                lang={lang}
+                setLang={setLang}
+                view={view}
+                setView={handleSwitchView}
+            />
             {/* Keep Dashboard mounted to preserve translation state (logs, process listeners) */}
             <div className={`flex-1 ${view === 'dashboard' ? 'flex' : 'hidden'}`}>
                 <Dashboard lang={lang} active={view === 'dashboard'} />
@@ -53,10 +77,15 @@ function AppContent() {
             {view === 'history' && <HistoryView lang={lang} />}
             {view === 'proofread' && (
                 <div className="flex-1 overflow-hidden">
-                    <ProofreadView t={translations[lang]} />
+                    <ProofreadView
+                        t={translations[lang]}
+                        lang={lang}
+                        onUnsavedChangesChange={setProofreadHasChanges}
+                    />
                 </div>
             )}
 
+            <AlertModal {...alertProps} />
         </div>
     )
 }

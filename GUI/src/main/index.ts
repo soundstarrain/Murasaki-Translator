@@ -287,156 +287,6 @@ ipcMain.handle('server-warmup', async () => {
 // --------------------------
 
 // Single Block Retranslation
-ipcMain.handle('retranslate-block', async (_event, { src, modelPath, config }) => {
-    try {
-        const isDev = process.env.NODE_ENV === 'development'
-        // Resolve middleware directory
-        const middlewareDir = isDev
-            ? join(__dirname, '../../middleware')
-            : join(process.resourcesPath, 'middleware')
-
-        // Python Executable
-        const pythonCmd = isDev
-            ? 'python' // In dev, assume python is in PATH or venv
-            : join(process.resourcesPath, 'python_env', 'python.exe')
-
-        // Find llama-server.exe
-        let serverExePath = ''
-        const subdirs = fs.readdirSync(middlewareDir)
-        for (const subdir of subdirs) {
-            const candidate = join(middlewareDir, subdir, 'llama-server.exe')
-            if (fs.existsSync(candidate)) {
-                serverExePath = candidate
-                break
-            }
-        }
-        if (!serverExePath) throw new Error('llama-server.exe not found')
-
-        // Resolve Model Path
-        let effectiveModelPath = modelPath
-        const userDataPath = getUserDataPath()
-
-        if (effectiveModelPath && !effectiveModelPath.includes('\\') && !effectiveModelPath.includes('/')) {
-            effectiveModelPath = join(userDataPath, 'models', effectiveModelPath)
-        }
-        if (!effectiveModelPath || !fs.existsSync(effectiveModelPath)) {
-            throw new Error(`Model not found: ${modelPath}`)
-        }
-
-        // Build Args
-        // 注意：retranslate-block 暂时复用 main.py，通过 --single-block 传递
-        const args = [
-            join('murasaki_translator', 'main.py'),
-            '--file', 'dummy.txt', // 占位，main.py 需要
-            '--model', effectiveModelPath,
-            '--single-block', src,
-            '--json-output'
-        ]
-
-        if (config && config.daemonMode) {
-            const sm = ServerManager.getInstance()
-            const status = sm.getStatus()
-            // Assume server is running if daemonMode is true (Frontend should ensure)
-            // But checking won't hurt
-            if (status.running) {
-                args.push('--server', `http://127.0.0.1:${status.port}`)
-                args.push('--no-server-spawn')
-            } else {
-                // Warning: Daemon requested but not running? Fallback to legacy or error?
-                // Let's fallback to legacy logic for safety if possible, or error.
-                // Fallback requires serverExePath to be passed.
-                args.push('--server', serverExePath)
-            }
-        } else {
-            args.push('--server', serverExePath)
-        }
-
-        // Config Options
-        if (config) {
-            if (config.deviceMode === 'cpu') args.push('--gpu-layers', '0')
-            else if (config.gpuLayers) args.push('--gpu-layers', config.gpuLayers)
-
-            if (config.ctxSize) args.push('--ctx', config.ctxSize)
-            if (config.preset) args.push('--preset', config.preset)
-            if (config.temperature) args.push('--temperature', config.temperature.toString())
-            if (config.strictMode) args.push('--strict-mode', config.strictMode)
-
-            // Glossary
-            if (config.glossaryPath) {
-                let gPath = config.glossaryPath
-                try {
-                    if (!fs.existsSync(gPath)) {
-                        const managedPath = join(middlewareDir, 'glossaries', gPath)
-                        if (fs.existsSync(managedPath)) gPath = managedPath
-                    }
-                } catch (e) {
-                    // Ignore fs errors, let backend handle it
-                }
-                args.push('--glossary', gPath)
-            }
-
-            // Rules
-            if (config.rulesPre && config.rulesPre.length > 0) {
-                const preRulesPath = join(middlewareDir, 'temp_retry_pre.json')
-                fs.writeFileSync(preRulesPath, JSON.stringify(config.rulesPre), 'utf8')
-                args.push('--rules-pre', preRulesPath)
-            }
-            if (config.rulesPost && config.rulesPost.length > 0) {
-                const postRulesPath = join(middlewareDir, 'temp_retry_post.json')
-                fs.writeFileSync(postRulesPath, JSON.stringify(config.rulesPost), 'utf8')
-                args.push('--rules-post', postRulesPath)
-            }
-        }
-
-        console.log('[Retranslate] Spawning:', pythonCmd, args)
-
-        return new Promise((resolve, reject) => {
-            const child = spawn(pythonCmd, args, {
-                cwd: middlewareDir,
-                env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-            })
-
-            let output = ''
-            let errorOut = ''
-
-            child.stdout.on('data', (data) => {
-                const str = data.toString()
-                output += str
-                // Check for JSON result
-                const match = str.match(/JSON_RESULT:(.+)/)
-                if (match) {
-                    try {
-                        const result = JSON.parse(match[1])
-                        resolve(result)
-                    } catch (e) {
-                        // wait for more data? or reject
-                    }
-                }
-            })
-
-            child.stderr.on('data', (data) => {
-                errorOut += data.toString()
-                console.log('[Retranslate Stderr]:', data.toString())
-            })
-
-            child.on('close', (code) => {
-                if (code !== 0) {
-                    reject(new Error(`Process exited with code ${code}: ${errorOut}`))
-                } else {
-                    // Fallback if no JSON found (should resolve in stdout handler)
-                    // If we are here, maybe we missed the JSON line or it wasn't printed
-                    if (!output.includes('JSON_RESULT')) {
-                        reject(new Error('No JSON result received from backend'))
-                    }
-                }
-            })
-        })
-
-    } catch (error) {
-        console.error('Retranslate Error:', error)
-        return { success: false, error: (error as Error).message }
-    }
-})
 
 // Select folder and get all supported files
 ipcMain.handle('select-folder-files', async () => {
@@ -853,6 +703,201 @@ ipcMain.handle('save-cache', async (_event, cachePath: string, data: any) => {
         console.error('save-cache error:', e)
         return false
     }
+})
+
+// 重建文档（从缓存）
+ipcMain.handle('rebuild-doc', async (_event, { cachePath, outputPath }) => {
+    try {
+        const middlewareDir = getMiddlewarePath()
+        const scriptPath = join(middlewareDir, 'murasaki_translator', 'main.py')
+        const pythonCmd = getPythonPath()
+
+        const args = [
+            scriptPath,
+            '--file', 'REBUILD_STUB', // Parser requires --file
+            '--rebuild-from-cache', cachePath
+        ]
+
+        if (outputPath) {
+            args.push('--output', outputPath)
+        }
+
+        console.log('[Rebuild] Executing:', pythonCmd, args.join(' '))
+
+        return new Promise((resolve) => {
+            const { spawn } = require('child_process')
+            const proc = spawn(pythonCmd, args, { cwd: middlewareDir })
+
+            let errorOutput = ''
+            proc.stderr.on('data', (data: Buffer) => {
+                errorOutput += data.toString()
+            })
+
+            proc.on('close', (code: number) => {
+                if (code === 0) {
+                    resolve({ success: true })
+                } else {
+                    resolve({ success: false, error: errorOutput || `Process exited with code ${code}` })
+                }
+            })
+        })
+    } catch (e: any) {
+        return { success: false, error: e.message }
+    }
+})
+
+// 单块重翻（用于校对界面）
+ipcMain.handle('retranslate-block', async (event, { src, index, modelPath, config }) => {
+    const middlewareDir = getMiddlewarePath()
+    const scriptPath = join(middlewareDir, 'murasaki_translator', 'main.py')
+    const pythonCmd = getPythonPath() // Use the same python as main translation
+
+    if (!fs.existsSync(scriptPath)) {
+        return { success: false, error: `Script not found` }
+    }
+
+    // Model Resolution Logic (Match start-translation)
+    let effectiveModelPath = modelPath
+    const userDataPath = getUserDataPath()
+
+    // 1. Check if direct path
+    if (!fs.existsSync(effectiveModelPath)) {
+        // 2. Check User Data models
+        const userModel = join(userDataPath, 'models', basename(modelPath))
+        if (fs.existsSync(userModel)) {
+            effectiveModelPath = userModel
+        } else {
+            // 3. Check Middleware models (bundled)
+            const bundledModel = join(middlewareDir, 'models', basename(modelPath))
+            if (fs.existsSync(bundledModel)) {
+                effectiveModelPath = bundledModel
+            }
+        }
+    }
+
+    const args = [
+        'murasaki_translator/main.py', // Use relative path in cwd
+        '--file', 'dummy.txt', // Required by argparse
+        '--single-block', src,
+        '--model', effectiveModelPath,
+        '--json-output', // Force JSON output for easy parsing
+        '--debug' // Enable CoT logs
+    ]
+
+    // Apply Config (Reusing logic from start-translation simplified)
+    if (config) {
+        if (config.deviceMode === 'cpu') args.push('--gpu-layers', '0')
+        else if (config.gpuLayers) args.push('--gpu-layers', config.gpuLayers)
+
+        if (config.ctxSize) args.push('--ctx', config.ctxSize)
+        if (config.temperature) args.push('--temperature', config.temperature.toString())
+        if (config.repPenaltyBase) args.push('--rep-penalty-base', config.repPenaltyBase.toString())
+        if (config.repPenaltyMax) args.push('--rep-penalty-max', config.repPenaltyMax.toString())
+        if (config.preset) args.push('--preset', config.preset)
+
+        // Force f16 KV Cache for single block re-translation (Quality Priority)
+        args.push('--kv-cache-type', 'f16')
+
+        // Glossary Coverage Check
+        if (config.outputHitThreshold) args.push('--output-hit-threshold', config.outputHitThreshold.toString())
+        if (config.cotCoverageThreshold) args.push('--cot-coverage-threshold', config.cotCoverageThreshold.toString())
+
+        // Glossary Path
+        if (config.glossaryPath && fs.existsSync(config.glossaryPath)) {
+            args.push('--glossary', config.glossaryPath)
+        }
+    }
+
+    // Server Handling: Assume server is already running or provided
+    // For single block, we might want to attach to existing server if possible?
+    // main.py creates InferenceEngine which tries to find server. 
+    // If not running, it spawns one. Optimally, we want to reuse the one from Dashboard.
+    // Dashboard typically starts one if daemon mode. 
+    // Let's check if ServerManager has a running instance.
+    const sm = ServerManager.getInstance()
+    const status = sm.getStatus()
+    if (status.running) {
+        args.push('--server', `http://127.0.0.1:${status.port}`)
+        args.push('--no-server-spawn')
+    }
+
+    console.log('[Retranslate] Spawning:', pythonCmd, args.join(' '))
+
+    return new Promise((resolve) => {
+        const proc = spawn(pythonCmd, args, {
+            cwd: middlewareDir,
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8', CUDA_VISIBLE_DEVICES: config?.gpuDeviceId },
+            stdio: ['ignore', 'pipe', 'pipe']
+        })
+
+        let outputBuffer = ''
+        let errorBuffer = ''
+
+        if (proc.stdout) {
+            proc.stdout.on('data', (data) => {
+                const str = data.toString()
+                outputBuffer += str
+
+                // Stream log to renderer
+                // Filter out JSON_RESULT line from log view to keep it clean, or keep it?
+                // The main log loop in main.py prints raw CoT.
+                if (!str.startsWith('JSON_RESULT:')) {
+                    event.sender.send('retranslate-log', { index, text: str })
+                }
+            })
+        }
+
+        if (proc.stderr) {
+            proc.stderr.on('data', (data) => {
+                const str = data.toString()
+                errorBuffer += str
+
+                // Filter out noisy llama-server logs (Same as start-translation)
+                if (str.trim() === '.' ||
+                    str.includes('llama_') ||
+                    str.includes('common_init') ||
+                    str.includes('srv ') ||
+                    str.startsWith('slot ') ||
+                    str.includes('sched_reserve')) {
+                    return
+                }
+
+                event.sender.send('retranslate-log', { index, text: str, isError: true })
+            })
+        }
+
+        proc.on('close', (code) => {
+            if (code !== 0) {
+                resolve({ success: false, error: errorBuffer || `Process exited with code ${code}` })
+                return
+            }
+
+            // Parse Output
+            try {
+                // Find "JSON_RESULT:{...}"
+                const marker = "JSON_RESULT:"
+                const lines = outputBuffer.split('\n')
+                let jsonStr = ""
+                for (const line of lines) {
+                    if (line.trim().startsWith(marker)) {
+                        jsonStr = line.trim().substring(marker.length)
+                        break
+                    }
+                }
+
+                if (jsonStr) {
+                    const result = JSON.parse(jsonStr)
+                    resolve(result)
+                } else {
+                    // Fallback: try to find the last non-empty line if it looks like the result (legacy)
+                    // But we used --json-output so it should be there.
+                    resolve({ success: false, error: "No JSON result found in output" })
+                }
+            } catch (e: any) {
+                resolve({ success: false, error: e.message })
+            }
+        })
+    })
 })
 
 // 保存文件对话框
