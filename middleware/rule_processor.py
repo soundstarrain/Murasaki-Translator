@@ -216,9 +216,9 @@ class RuleProcessor:
                 return protector.restore(text)
             return text
 
-        if format_name == 'clean_empty':
+        if format_name in ['clean_empty', 'clean_empty_lines']:
             if strict_line_count:
-                logger.warning(f"[RuleProcessor] Skipping 'clean_empty' in strict mode (EPUB/SRT support).")
+                logger.warning(f"[RuleProcessor] Skipping '{format_name}' in strict mode (EPUB/SRT support).")
                 return text
             # Remove empty lines
             lines = [line for line in text.splitlines() if line.strip()]
@@ -274,6 +274,50 @@ class RuleProcessor:
             # Preserve leading indentation (use rstrip instead of strip)
             lines = [line.rstrip() for line in text.splitlines() if line.strip()]
             return "\n\n".join(lines)
+
+        elif format_name == 'merge_short_lines':
+            if strict_line_count:
+                logger.warning(f"[RuleProcessor] Skipping 'merge_short_lines' in strict mode.")
+                return text
+            lines = text.splitlines()
+            if not lines: return text
+            
+            merged_lines = []
+            current_line = ""
+            
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    if current_line:
+                        merged_lines.append(current_line)
+                        current_line = ""
+                    merged_lines.append("") 
+                    continue
+                
+                if not current_line:
+                    current_line = line
+                    continue
+                
+                # Heuristic for merging: 
+                # 1. Previous line is short (e.g. < 15 chars) 
+                # 2. Previous line doesn't end with sentence-final punctuation
+                # Use rstrip to ignore trailing spaces for punc check
+                is_short = len(current_line.strip()) < 15
+                ends_with_punc = re.search(r'[。！？！？!?.…」』”"\']\s*$', current_line.rstrip())
+                
+                if is_short and not ends_with_punc:
+                    # Merge with a space if it's alphanumeric, or directly if it's CJK
+                    # For simplicity in this context, we just join. 
+                    # Most cases in LN translation are CJK.
+                    current_line += stripped
+                else:
+                    merged_lines.append(current_line)
+                    current_line = line
+            
+            if current_line:
+                merged_lines.append(current_line)
+                
+            return "\n".join(merged_lines)
         
         # --- Experimental Fixers Integrated as Formats ---
         elif format_name == 'ruby_cleaner':

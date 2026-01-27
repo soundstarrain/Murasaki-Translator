@@ -4,6 +4,7 @@ import os
 from .base import BaseDocument
 from .txt import TxtDocument
 from .srt import SrtDocument
+from .ass import AssDocument
 from .epub import EpubDocument
 
 class DocumentFactory:
@@ -13,6 +14,8 @@ class DocumentFactory:
         
         if ext == '.srt':
             return SrtDocument(path)
+        elif ext in ['.ass', '.ssa']:
+            return AssDocument(path)
         elif ext == '.epub':
             return EpubDocument(path)
         else:

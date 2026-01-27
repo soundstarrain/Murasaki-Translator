@@ -564,6 +564,9 @@ export function Dashboard({ lang, active }: DashboardProps) {
             lineCheck: localStorage.getItem("config_line_check") !== "false",
             lineToleranceAbs: parseInt(localStorage.getItem("config_line_tolerance_abs") || "10"),
             lineTolerancePct: parseInt(localStorage.getItem("config_line_tolerance_pct") || "20"),
+            strictMode: (localStorage.getItem("config_line_check") !== "false")
+                ? (localStorage.getItem("config_strict_mode") || "off")
+                : "off",
             repPenaltyBase: parseFloat(localStorage.getItem("config_rep_penalty_base") || "1.0"),
             repPenaltyMax: parseFloat(localStorage.getItem("config_rep_penalty_max") || "1.5"),
             maxRetries: parseInt(localStorage.getItem("config_max_retries") || "3"),

@@ -188,7 +188,7 @@ ipcMain.handle('select-file', async (_event, options?: { title?: string; default
         title: options?.title,
         defaultPath: options?.defaultPath,
         properties: ['openFile'],
-        filters: options?.filters || [{ name: 'Documents', extensions: ['txt', 'epub', 'srt'] }]
+        filters: options?.filters || [{ name: 'Documents', extensions: ['txt', 'epub', 'srt', 'ass', 'ssa'] }]
     })
     if (canceled) return null
     return filePaths[0]
@@ -236,7 +236,7 @@ ipcMain.handle('list-cache-files', async (_event, folderPath: string) => {
 ipcMain.handle('select-files', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
         properties: ['openFile', 'multiSelections'],
-        filters: [{ name: 'Documents', extensions: ['txt', 'epub', 'srt'] }]
+        filters: [{ name: 'Documents', extensions: ['txt', 'epub', 'srt', 'ass', 'ssa'] }]
     })
     if (canceled) return []
     return filePaths
@@ -359,6 +359,7 @@ ipcMain.handle('retranslate-block', async (_event, { src, modelPath, config }) =
             if (config.ctxSize) args.push('--ctx', config.ctxSize)
             if (config.preset) args.push('--preset', config.preset)
             if (config.temperature) args.push('--temperature', config.temperature.toString())
+            if (config.strictMode) args.push('--strict-mode', config.strictMode)
 
             // Glossary
             if (config.glossaryPath) {
@@ -445,7 +446,7 @@ ipcMain.handle('select-folder-files', async () => {
     if (canceled || !filePaths[0]) return []
     const folderPath = filePaths[0]
     const files = fs.readdirSync(folderPath)
-        .filter(f => /\.(txt|epub)$/i.test(f))
+        .filter(f => /\.(txt|epub|srt|ass|ssa)$/i.test(f))
         .map(f => join(folderPath, f))
     return files
 })
@@ -1127,6 +1128,10 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
 
         if (config.lineFormat) {
             args.push('--line-format', config.lineFormat)
+        }
+
+        if (config.strictMode) {
+            args.push('--strict-mode', config.strictMode)
         }
 
         // Debug/Save Options

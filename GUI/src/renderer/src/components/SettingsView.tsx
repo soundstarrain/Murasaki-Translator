@@ -104,13 +104,23 @@ export function SettingsView({ lang }: { lang: Language }) {
             title: t.dangerZone,
             description: t.resetConfirm,
             onConfirm: () => {
-                // Clear all config_ keys
+                // Determine keys to keep or specifically clear
+                const keysToClear = [
+                    'selected_model',
+                    'last_input_path',
+                    'last_output_dir',
+                    'translation_history',
+                    'last_preview_blocks',
+                    'config_rules_pre',
+                    'config_rules_post'
+                ]
+
                 Object.keys(localStorage).forEach(key => {
-                    if (key.startsWith('config_')) {
+                    if (key.startsWith('config_') || keysToClear.includes(key)) {
                         localStorage.removeItem(key)
                     }
                 })
-                // Reload to apply defaults
+                // Reload to apply defaults across all components
                 window.location.reload()
             }
         })

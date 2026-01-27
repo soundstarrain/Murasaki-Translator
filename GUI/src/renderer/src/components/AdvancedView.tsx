@@ -50,6 +50,7 @@ export function AdvancedView({ lang }: { lang: Language }) {
     const [repPenaltyBase, setRepPenaltyBase] = useState(1.0)
     const [repPenaltyMax, setRepPenaltyMax] = useState(1.5)
     const [maxRetries, setMaxRetries] = useState(3)
+    const [strictMode, setStrictMode] = useState("off")
 
     // Glossary Coverage Check (术语表覆盖率检测)
     const [enableCoverageCheck, setEnableCoverageCheck] = useState(true)
@@ -143,6 +144,7 @@ export function AdvancedView({ lang }: { lang: Language }) {
         if (savedRepMax) setRepPenaltyMax(parseFloat(savedRepMax))
         const savedMaxRetries = localStorage.getItem("config_max_retries")
         if (savedMaxRetries) setMaxRetries(parseInt(savedMaxRetries))
+        setStrictMode(localStorage.getItem("config_strict_mode") || "off")
 
         // Load Glossary Coverage Check Config
         setEnableCoverageCheck(localStorage.getItem("config_coverage_check") !== "false")
@@ -261,6 +263,7 @@ export function AdvancedView({ lang }: { lang: Language }) {
         localStorage.setItem("config_rep_penalty_base", String(repPenaltyBase))
         localStorage.setItem("config_rep_penalty_max", String(repPenaltyMax))
         localStorage.setItem("config_max_retries", String(maxRetries))
+        localStorage.setItem("config_strict_mode", strictMode)
 
         // Save Text Protect Config
         localStorage.setItem("config_text_protect", enableTextProtect.toString())
@@ -1377,27 +1380,60 @@ export function AdvancedView({ lang }: { lang: Language }) {
                                         {t.advancedView.lineCheckDesc}
                                     </p>
                                     {enableLineCheck && (
-                                        <div className="border-l-2 border-primary/30 pl-4 ml-2 mt-2">
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div className="space-y-1">
-                                                    <label className="text-xs text-muted-foreground">{t.advancedView.absTolerance}</label>
-                                                    <input
-                                                        type="number"
-                                                        className="w-full border p-1.5 rounded text-sm bg-secondary text-center"
-                                                        value={lineToleranceAbs}
-                                                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setLineToleranceAbs(parseInt(e.target.value) || 20)}
-                                                    />
-                                                </div>
-                                                <div className="space-y-1">
-                                                    <label className="text-xs text-muted-foreground">{t.advancedView.pctTolerance}</label>
-                                                    <input
-                                                        type="number"
-                                                        className="w-full border p-1.5 rounded text-sm bg-secondary text-center"
-                                                        value={lineTolerancePct}
-                                                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setLineTolerancePct(parseInt(e.target.value) || 20)}
-                                                    />
-                                                </div>
+                                        <div className="border-l-2 border-primary/30 pl-4 ml-2 mt-2 space-y-4">
+                                            {/* 1. Strict Mode Policy (Priority) */}
+                                            <div className="space-y-2">
+                                                <label className="text-xs text-muted-foreground flex items-center justify-between font-medium">
+                                                    <span>严格对齐模式 (Strict Mode)</span>
+                                                </label>
+                                                <select
+                                                    className="w-full border border-border p-1.5 rounded bg-secondary text-foreground text-xs"
+                                                    value={strictMode}
+                                                    onChange={(e) => setStrictMode(e.target.value)}
+                                                >
+                                                    <option value="off">关闭 (使用阈值 / Use Tolerance)</option>
+                                                    <option value="subs">自动 (仅字幕文件强制 / Subs Only)</option>
+                                                    <option value="all">强制开启 (所有文件 / Always On)</option>
+                                                </select>
+                                                <p className="text-[10px] text-muted-foreground italic leading-relaxed">
+                                                    {strictMode === 'off' ? '手动设置允许的行数误差范围。' :
+                                                        strictMode === 'subs' ? '字幕文件强制行数一致，其他文件使用下方阈值。' :
+                                                            <span className="text-amber-500 font-medium flex items-start gap-1">
+                                                                <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                                                                非字幕或代码等特殊场景不建议开启。模型合并、拆分段落属于正常优化，强制对齐可能增加重试风险。开启该选项后，如果行数有任何不一致，都会触发重试。
+                                                            </span>}
+                                                </p>
                                             </div>
+
+                                            {/* 2. Tolerance Inputs (Conditional) */}
+                                            {strictMode !== 'all' && (
+                                                <div className={`grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-1 duration-300 ${strictMode === 'subs' ? 'opacity-80' : ''}`}>
+                                                    <div className="space-y-1">
+                                                        <label className="text-xs text-muted-foreground">
+                                                            {strictMode === 'subs' ? t.advancedView.absTolerance + ' (非字幕)' : t.advancedView.absTolerance}
+                                                        </label>
+                                                        <input
+                                                            type="number"
+                                                            className="w-full border p-1.5 rounded text-sm bg-secondary text-center"
+                                                            value={lineToleranceAbs}
+                                                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setLineToleranceAbs(parseInt(e.target.value) || 20)}
+                                                        />
+                                                    </div>
+                                                    <div className="space-y-1">
+                                                        <label className="text-xs text-muted-foreground">
+                                                            {strictMode === 'subs' ? t.advancedView.pctTolerance + ' (非字幕)' : t.advancedView.pctTolerance}
+                                                        </label>
+                                                        <input
+                                                            type="number"
+                                                            className="w-full border p-1.5 rounded text-sm bg-secondary text-center"
+                                                            value={lineTolerancePct}
+                                                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setLineTolerancePct(parseInt(e.target.value) || 20)}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* 3. Strict Mode Info Banner Removed for cleanliness */}
                                         </div>
                                     )}
                                 </div>
@@ -1578,22 +1614,6 @@ export function AdvancedView({ lang }: { lang: Language }) {
                     </div>
 
 
-                    {/* --- Workflow & Experimental Section (工作流与实验性功能) --- */}
-                    <div className="space-y-4 pt-4">
-                        <h3 className="text-lg font-semibold flex items-center gap-2 border-b pb-2">
-                            {t.advancedView.experimental}
-                        </h3>
-
-                        <Card>
-                            <CardContent className="space-y-6 pt-6">
-
-                                {/* Spacer */}
-
-
-                                <div className="h-2" /> {/* Spacer */}
-                            </CardContent>
-                        </Card>
-                    </div>
                 </div>
             </div>
 

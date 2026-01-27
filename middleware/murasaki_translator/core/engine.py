@@ -245,9 +245,9 @@ class InferenceEngine:
                 payload["stream_options"] = {"include_usage": True}
             
             try:
-                if penalty > 1.0:
+                if idx > 0:
                     prefix = f"[Block {block_id}] " if block_id is not None else ""
-                    logger.info(f"{prefix}Detected loop. Retrying with RepetitionPenalty={penalty}...")
+                    logger.info(f"{prefix}Detected loop. Internal retry ({idx}) with RepetitionPenalty={penalty}...")
                     # Notify GUI of retry
                     retry_data = {
                         "block": block_id,

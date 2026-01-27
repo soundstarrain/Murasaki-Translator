@@ -79,10 +79,7 @@ const PATTERN_METADATA: Record<string, { label: string, description: string, isE
     }
 }
 
-const DEFAULT_POST_RULES: Rule[] = [
-    { id: 'o1', type: 'format', active: true, pattern: 'ensure_double_newline', replacement: '', label: PATTERN_METADATA['ensure_double_newline'].label, description: PATTERN_METADATA['ensure_double_newline'].description },
-    { id: 'o2', type: 'format', active: true, pattern: 'smart_quotes', replacement: '', label: PATTERN_METADATA['smart_quotes'].label, description: PATTERN_METADATA['smart_quotes'].description }
-]
+
 
 const PRESET_TEMPLATES: { [key: string]: Rule[] } = {
     pre_novel: [],
@@ -115,12 +112,23 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
     useEffect(() => {
         const savedRules = localStorage.getItem(storageKey)
         if (savedRules) {
-            try { setRules(JSON.parse(savedRules)) } catch (e) { console.error(e) }
-        } else if (mode === 'post') {
-            setRules(DEFAULT_POST_RULES)
-            localStorage.setItem(storageKey, JSON.stringify(DEFAULT_POST_RULES))
+            try {
+                setRules(JSON.parse(savedRules))
+            } catch (e) {
+                console.error("Failed to parse rules:", e)
+                setRules([])
+            }
+        } else {
+            // Load defaults if no saved rules (Important for first load after reset)
+            const defaultKey = mode === 'pre' ? 'pre_novel' : 'post_novel'
+            const preset = PRESET_TEMPLATES[defaultKey]
+            if (preset) {
+                const newRules = preset.map(r => ({ ...r, id: Math.random().toString(36).substr(2, 9) }))
+                setRules(newRules)
+                localStorage.setItem(storageKey, JSON.stringify(newRules))
+            }
         }
-    }, [mode])
+    }, [storageKey])
 
     const handleSave = () => {
         localStorage.setItem(storageKey, JSON.stringify(rules))
@@ -194,10 +202,13 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
             const newRules = preset.map(r => ({ ...r, id: Math.random().toString(36).substr(2, 9) }))
             if (replace) {
                 setRules(newRules)
+                localStorage.setItem(storageKey, JSON.stringify(newRules))
             } else {
                 const existingPatterns = new Set(rules.map(r => r.pattern))
                 const uniqueNewRules = newRules.filter(r => !existingPatterns.has(r.pattern))
-                setRules([...rules, ...uniqueNewRules])
+                const finalRules = [...rules, ...uniqueNewRules]
+                setRules(finalRules)
+                localStorage.setItem(storageKey, JSON.stringify(finalRules))
             }
         }
         setShowPresets(false)

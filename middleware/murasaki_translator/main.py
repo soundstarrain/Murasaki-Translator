@@ -272,6 +272,30 @@ def translate_single_block(args):
          # Try to get patterns from app data or default
          protector = TextProtector()
     
+    
+    # 针对 SRT/ASS 的特殊工程化处理 (Rule Melting)
+    is_sub = getattr(args, 'file', '').lower().endswith(('.srt', '.ass', '.ssa')) if args.file else False
+    
+    # Strict mode logic for retranslate:
+    # - all: Force strict line count
+    # - subs: Force for subtitles and epub (epub usually isn't retranslated this way but for completeness)
+    # - off: Disable
+    strict_policy = getattr(args, 'strict_mode', 'subs')
+    enforce_strict_alignment = False
+    if strict_policy == "all":
+        enforce_strict_alignment = True
+    elif strict_policy == "subs":
+        # Check by file extension
+        ext = os.path.splitext(args.file)[1].lower() if args.file else ""
+        enforce_strict_alignment = ext in ['.srt', '.ass', '.ssa', '.epub']
+        
+    if is_sub:
+        # Rule melting for retranslate
+        melt_patterns = ['ensure_single_newline', 'ensure_double_newline', 'clean_empty_lines', 'merge_short_lines']
+        pre_processor.rules = [r for r in pre_rules if r.get('pattern') not in melt_patterns]
+        post_processor.rules = [r for r in post_rules if r.get('pattern') not in melt_patterns]
+        logger.info(f"[Retranslate] Subtitle detected. Rule melting applied (Strict Policy: {strict_policy}).")
+
     try:
         engine.start_server()
         
@@ -281,7 +305,7 @@ def translate_single_block(args):
             raise ValueError("Input text is empty")
             
         # 2. Pre-processing & Protection
-        processed_src = pre_processor.process(src_text)
+        processed_src = pre_processor.process(src_text, strict_line_count=enforce_strict_alignment)
         processed_src = Normalizer.normalize(processed_src)
             
         if protector:
@@ -310,7 +334,7 @@ def translate_single_block(args):
             
             # Unified Rule Processor Application (Integrated Restoration)
             # This replaces the hardcoded NumberFixer, PunctuationFixer, KanaFixer calls
-            final_dst = post_processor.process(base_text, src_text=src_text, protector=protector)
+            final_dst = post_processor.process(base_text, src_text=src_text, protector=protector, strict_line_count=enforce_strict_alignment)
             
             result = {
                 'success': True,
@@ -375,6 +399,7 @@ def main():
     parser.add_argument("--save-cot", action="store_true", help="Save CoT debug file")
     parser.add_argument("--save-summary", action="store_true", help="Append summary to output")
     parser.add_argument("--traditional", action="store_true", help="Convert output to Traditional Chinese")
+    parser.add_argument("--strict-mode", default="subs", choices=["off", "subs", "all"], help="Strict line alignment mode (default: subs)")
     
     # Experimental Features (可在 GUI 高级设置中开关)
     parser.add_argument("--fix-ruby", action="store_true", help="[Experimental] Clean Ruby annotations from source")
@@ -606,30 +631,43 @@ def main():
 
     # [Audit Fix] Auto-detect protection requirement from rules
     protection_rules = [r for r in post_rules if r.get('pattern') == 'restore_protection']
-    if protection_rules:
+    
+    # 针对 SRT/ASS 的特殊工程化处理
+    is_sub = input_path.lower().endswith(('.srt', '.ass', '.ssa'))
+    if is_sub:
+        # 1. 强制开启标签保护 (即使前端没勾选，为了保护字幕结构和合法标签)
         if not args.text_protect:
-            print("[Auto-Config] Detected 'restore_protection' rule. Enabling TextProtector.")
+            print(f"[Auto-Config] {os.path.splitext(input_path)[1].upper()} detected. Enabling TextProtector for structural safety.")
             args.text_protect = True
         
-        # Override protector patterns if customPattern is defined in rule options
-        # We now support COLLECTING multiple patterns from multiple rules
-        custom_patterns = [r.get('options', {}).get('customPattern') for r in protection_rules if r.get('options', {}).get('customPattern')]
-        if custom_patterns:
-            custom_protector_patterns = custom_patterns
-            print(f"[Auto-Config] Using {len(custom_patterns)} custom protection pattern(s) from rules.")
-        else:
-            custom_protector_patterns = None # Fallback to default in TextProtector
-    else:
-        custom_protector_patterns = None
+        # 2. 规则熔断：剔除所有可能破坏字幕换行或合并行数的规则
+        melt_patterns = ['ensure_single_newline', 'ensure_double_newline', 'clean_empty_lines', 'merge_short_lines']
+        original_count = len(post_rules)
+        post_rules = [r for r in post_rules if r.get('pattern') not in melt_patterns]
+        if len(post_rules) < original_count:
+            print(f"[Auto-Config] Subtitle detected. Disabled {original_count - len(post_rules)} formatting rules to preserve structure.")
 
-    # Inject Line Format Rule
-    has_format_rule = any(r.get('pattern', '').startswith('ensure_') for r in post_rules)
-    if not has_format_rule:
-        if args.line_format == "single":
-            add_unique_rule(post_rules, "ensure_single_newline")
-        elif args.line_format == "double":
-            add_unique_rule(post_rules, "ensure_double_newline")
-    
+    # [Critical Fix] 强制将样式还原逻辑置于所有后处理规则的最末端，确保还原后不会再次被误伤
+    # 先移除已有的（如果有），再追加到最后
+    post_rules = [r for r in post_rules if r.get('pattern') != 'restore_protection']
+    if args.text_protect:
+        add_unique_rule(post_rules, "restore_protection")
+        print("[Auto-Config] Ensured 'restore_protection' is the final post-processing rule.")
+
+    custom_protector_patterns = None
+    if is_sub:
+        # [Specialized Rule] 针对字幕，优先使用合法的标签捕获规则，避免拦截 【】 （） [ ] 等
+        custom_protector_patterns = TextProtector.SUBTITLE_PATTERNS
+        print("[Auto-Config] Using restrictive SUBTITLE_PATTERNS for legal tags only.")
+
+    protection_rules = [r for r in post_rules if r.get('pattern') == 'restore_protection']
+    if protection_rules:
+        # Override protector patterns if customPattern is defined in rule options
+        rule_custom_patterns = [r.get('options', {}).get('customPattern') for r in protection_rules if r.get('options', {}).get('customPattern')]
+        if rule_custom_patterns:
+            custom_protector_patterns = rule_custom_patterns
+            print(f"[Auto-Config] Using {len(rule_custom_patterns)} custom protection pattern(s) from rules.")
+
     pre_processor = RuleProcessor(pre_rules)
     post_processor = RuleProcessor(post_rules)
 
@@ -870,7 +908,17 @@ def main():
                     # Use custom_protector_patterns captured from outer scope
                     local_protector = None
                     if args.text_protect:
-                         local_protector = TextProtector(patterns=custom_protector_patterns)
+                         # Determine aggressive cleaning based on file type for thread-safe instance
+                         # ASS/SSA requires aggressive cleaning to prevent layout shifted by spaces
+                         # SRT/TXT requires non-aggressive cleaning to preserve structural newlines
+                         _, ext = os.path.splitext(input_path)
+                         is_ass_format = ext.lower() in ['.ass', '.ssa']
+                         
+                         local_protector = TextProtector(
+                             patterns=custom_protector_patterns, 
+                             block_id=block_idx + 1,
+                             aggressive_cleaning=is_ass_format
+                         )
                          logger.debug(f"[Block {block_idx+1}] [Experimental] Protection start")
                          processed_src_text = local_protector.protect(processed_src_text)
                          logger.debug(f"[Block {block_idx+1}] [Experimental] After Protection: {len(processed_src_text)} chars")
@@ -995,20 +1043,38 @@ def main():
                                     # Use best result if current one is worse and we are out of glossary retries
                                     parsed_lines, cot_content, raw_output, _ = best_result
                         
-                        # Line Count Check
-                        if not should_retry and args.line_check:
+                        # Line Count Check (Validation Pipeline)
+                        if not should_retry:
                             src_line_count = len([l for l in block.prompt_text.splitlines() if l.strip()])
                             dst_line_count = len([l for l in parsed_lines if l.strip()])
                             diff = abs(dst_line_count - src_line_count)
                             pct_diff = diff / max(1, src_line_count)
                             
-                            if diff > args.line_tolerance_abs or pct_diff > args.line_tolerance_pct:
+                            is_invalid = False
+                            error_type = 'line_check'
+                            
+                            if strict_mode: # Parameter passed to task
+                                logger.info(f"[Block {block_idx+1}] [Strict Mode] Validating line count: Source={src_line_count}, Output={dst_line_count}")
+                                if diff > 0:
+                                    is_invalid = True
+                                    error_type = 'strict_line_check'
+                                    logger.warning(f"[Block {block_idx+1}] [Strict Mode] Line count mismatch! (Diff: {diff})")
+                            elif args.line_check: # Tolerance fallback
+                                logger.debug(f"[Block {block_idx+1}] [Tolerance Mode] Validating line count: Source={src_line_count}, Output={dst_line_count}")
+                                if diff > args.line_tolerance_abs or pct_diff > args.line_tolerance_pct:
+                                    is_invalid = True
+                                    error_type = 'line_check'
+                                    logger.warning(f"[Block {block_idx+1}] [Tolerance Mode] Line count exceeds threshold! (Diff: {diff}, Pct: {pct_diff:.1%})")
+                                    
+                            if is_invalid:
                                 if attempt < max_retries:
-                                    retry_reason = 'line_check'
+                                    retry_reason = error_type
                                     retry_data = {
                                         'block': block_idx + 1, 
                                         'attempt': attempt + 1, 
-                                        'type': 'line_check'
+                                        'type': error_type,
+                                        'src_lines': src_line_count,
+                                        'dst_lines': dst_line_count
                                     }
                                     safe_print_json("JSON_RETRY", retry_data)
                                     should_retry = True
@@ -1077,7 +1143,8 @@ def main():
                         "lines_count": len([l for l in processed_text.splitlines() if l.strip()]),
                         "chars_count": len(block.prompt_text),
                         "cot_chars": len(final_cot),
-                        "usage": block_usage
+                        "usage": block_usage,
+                        "protector_stats": local_protector.get_stats() if local_protector else None
                     }
 
 
@@ -1119,9 +1186,25 @@ def main():
             # --- Ordered Buffer for Writing & Reconstruction ---
             all_results = [None] * len(blocks) # Pre-fill for structural reconstruction
             
-            # Determine if we should use strict line count (structured docs)
+            # Determine if we should use strict line count (Retry if line count mismatch)
             _, file_ext = os.path.splitext(input_path)
-            is_structured_doc = file_ext.lower() in ['.epub', '.srt']
+            is_structured_doc = file_ext.lower() in ['.epub', '.srt', '.ass', '.ssa']
+            
+            # Strict mode logic:
+            # - all: Force strict line count for EVERY file
+            # - subs: Force for subtitles (.srt, .ass, .ssa) and .epub
+            # - off: Disable strict 1:1 matching (use tolerance-based line check if enabled)
+            if args.strict_mode == "all":
+                enforce_strict_alignment = True
+            elif args.strict_mode == "off":
+                enforce_strict_alignment = False
+            else: # "subs"
+                enforce_strict_alignment = is_structured_doc
+
+            if enforce_strict_alignment:
+                print(f"[Init] Strict Line Count Mode ACTIVE (Policy: {args.strict_mode}). Output MUST match source line count.")
+            else:
+                print(f"[Init] Strict Line Count Mode INACTIVE (Policy: {args.strict_mode}).")
 
             # [Audit Fix] Fill skipped blocks from output file to support EPUB/SRT reconstruction
             # Only for structured docs as TXT streaming is sufficient and reconstruction causes drift
@@ -1168,9 +1251,8 @@ def main():
                     future = executor.submit(restore_block_task, i, precalculated_temp[i])
                     print(f"  - Restoring Block {i+1} from temp file...")
                 else:
-                    # Pass is_structured_doc to task if needed, but RuleProcessor is globally initialized
-                    # Actually we should initialize the processors WITH this flag or pass it to process()
-                    future = executor.submit(process_block_task, i, block, is_structured_doc)
+                    # Pass enforce_strict_alignment to task
+                    future = executor.submit(process_block_task, i, block, enforce_strict_alignment)
                 
                 future_to_index[future] = i
             
@@ -1303,32 +1385,31 @@ def main():
                     next_write_idx += 1
 
             executor.shutdown(wait=False)
-            
-            # Final Save using Document Handler (for structure reconstruction)
-            # Only for structured docs. TXT is already saved via streaming f_out.
-            if is_structured_doc:
-                try:
-                    # We need TextBlock objects with prompt_text = translated_text
-                    # to satisfy the doc.save(output_path, blocks) signature
-                    from murasaki_translator.core.chunker import TextBlock
-                    translated_blocks = []
-                    for i, res in enumerate(all_results):
-                        if res and res.get('out_text') is not None:
-                            translated_blocks.append(TextBlock(
-                                id=i,
-                                prompt_text=res['out_text'],
-                                metadata=blocks[i].metadata
-                            ))
-                        else:
-                            # Placeholder for failed or missing blocks
-                            translated_blocks.append(blocks[i])
-                    
-                    doc.save(output_path, translated_blocks)
-                    print(f"[Success] Structured document rebuilt: {output_path}")
-                except Exception as e:
-                    print(f"[Warning] Final document reconstruction failed: {e}")
-            else:
-                print(f"[Success] Translation completed. Output saved to: {output_path}")
+        
+        # [Critical Fix] Final save outside 'with open as f_out' to avoid file lock/0-byte issue on Windows
+        if is_structured_doc:
+            try:
+                # We need TextBlock objects with prompt_text = translated_text
+                # to satisfy the doc.save(output_path, blocks) signature
+                from murasaki_translator.core.chunker import TextBlock
+                translated_blocks = []
+                for i, res in enumerate(all_results):
+                    if res and res.get('out_text') is not None:
+                        translated_blocks.append(TextBlock(
+                            id=i,
+                            prompt_text=res['out_text'],
+                            metadata=blocks[i].metadata
+                        ))
+                    else:
+                        # Placeholder for failed or missing blocks
+                        translated_blocks.append(blocks[i])
+                
+                doc.save(output_path, translated_blocks)
+                print(f"[Success] Structured document rebuilt: {output_path}")
+            except Exception as e:
+                print(f"[Warning] Final document reconstruction failed: {e}")
+        else:
+            print(f"[Success] Translation completed. Output saved to: {output_path}")
 
         # 任务结束后的总结
         total_time = time.time() - start_time

@@ -10,44 +10,24 @@ class SrtDocument(BaseDocument):
         with open(self.path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Regex to match SRT blocks: Index, Time, Text
+        # 使用双换行分割字幕块
+        # 但要注意保留块内部的换行（序号、时间、文本）
         blocks = re.split(r'\n\s*\n', content.strip())
         items = []
         
         for block in blocks:
-            lines = block.splitlines()
-            if len(lines) >= 3:
-                idx = lines[0]
-                time = lines[1]
-                text = "\n".join(lines[2:])
-                # Metadata is the index and timecode
-                items.append({'text': text + "\n", 'meta': {'idx': idx, 'time': time}})
-            else:
-                # Fallback for weird blocks
-                items.append({'text': block + "\n", 'meta': None})
+            if block.strip():
+                # 针对 SRT 的特殊工程化优化：直接透传整个块内容
+                # 让模型看到序号和时间，但后端保护文本中的标签
+                items.append({'text': block.strip() + "\n\n", 'meta': 'srt_structural'})
                 
         return items
 
     def save(self, output_path: str, blocks: List[TextBlock]):
         with open(output_path, 'w', encoding='utf-8') as f:
             for block in blocks:
-                # Reconstruct SRT from translated text and metadata
-                # Assuming 1:1 mapping if using line mode or carefully tracked metadata
-                texts = block.prompt_text.splitlines()
-                metas = block.metadata
-                
-                # If rubber band merges blocks, we might have multiple metas in one block.
-                # The Chunker refactor I did stores metadata as a list in TextBlock.
-                
-                # For SRT, we usually want line mode to keep 1:1, but rubber band works if 
-                # we assume each 'item' (node/subtitle) is a 'line' in the prompt.
-                
-                # Simple reconstruction: zip metas and texts
-                # This works if LineAligner or the model preserves line count exactly.
-                for m, t in zip(metas, texts):
-                    if m:
-                        f.write(f"{m['idx']}\n")
-                        f.write(f"{m['time']}\n")
-                        f.write(f"{t}\n\n")
-                    else:
-                        f.write(f"{t}\n\n")
+                # 在结构化透传模式下，prompt_text 已经包含了 序号、时间轴 和 文本
+                # 我们只需要确保块之间有正确的空行
+                out_text = block.prompt_text.strip()
+                if out_text:
+                    f.write(out_text + "\n\n")

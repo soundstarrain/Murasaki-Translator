@@ -379,6 +379,7 @@ export default function ProofreadView({ }: ProofreadViewProps) {
                 deviceMode: localStorage.getItem("config_device_mode") || "auto",
                 rulesPre: JSON.parse(localStorage.getItem("config_rules_pre") || "[]"),
                 rulesPost: JSON.parse(localStorage.getItem("config_rules_post") || "[]"),
+                strictMode: localStorage.getItem("config_strict_mode") || "subs",
             }
 
             const result = await window.api?.retranslateBlock({
