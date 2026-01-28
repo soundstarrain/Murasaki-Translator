@@ -139,7 +139,7 @@ Murasaki 模型针对术语表进行了特化训练，支持 **Prompt 级术语�
 - **软件代码**: [Apache-2.0 License](./LICENSE)
 - **模型权重**: [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 - **致谢**: 特别感谢 [**SakuraLLM**](https://github.com/SakuraLLM/) 提供的 Base 模型。
-- **致谢**: 特别感谢 [**LinguaGacha**](https://github.com/neavo/LinguaGacha) 本项目的处理规则（注音清理器、数字修复器等）参考了该项目
+- **致谢**: 特别感谢 [**LinguaGacha**](https://github.com/neavo/LinguaGacha) 本项目的部分处理规则（注音清理器、数字修复器等）参考了该项目
 
 ---
 
