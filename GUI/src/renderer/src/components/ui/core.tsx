@@ -163,3 +163,27 @@ const Label = React.forwardRef<HTMLLabelElement, React.LabelHTMLAttributes<HTMLL
 Label.displayName = "Label"
 
 export { Label }
+
+// --- Tooltip Component ---
+interface TooltipProps {
+    children: React.ReactNode
+    content: React.ReactNode
+    className?: string
+}
+
+const Tooltip = ({ children, content, className }: TooltipProps) => {
+    return (
+        <div className="group relative flex items-center">
+            {children}
+            <div className={cn(
+                "absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-popover border border-border text-popover-foreground text-[11px] rounded-lg shadow-xl opacity-0 translate-y-1 pointer-events-none transition-all duration-200 group-hover:opacity-100 group-hover:translate-y-0 z-[100] w-max max-w-[240px] leading-relaxed backdrop-blur-md whitespace-pre-line",
+                className
+            )}>
+                {content}
+                <div className="absolute top-full left-1/2 -translate-x-1/2 border-x-[5px] border-x-transparent border-t-[5px] border-t-popover" />
+            </div>
+        </div>
+    )
+}
+
+export { Tooltip }

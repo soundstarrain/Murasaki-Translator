@@ -2,6 +2,7 @@
 
 from typing import List, Any, Dict, Union
 from dataclasses import dataclass, field
+import re
 
 @dataclass
 class TextBlock:
@@ -82,8 +83,29 @@ class Chunker:
             # 1. 超过目标长度 (或接近目标长度前30字) 且 遇到标点
             # 2. 超过最大强制长度
             text_stripped = text.strip()
+            
+            # [Optimization] Numeric Protection (Veto)
+            # Prevent splitting immediately after a line containing generic numbers (risk of hallucination/header break)
+            is_numeric_risky = False
+            
+            # For Alignment Mode, we must strip the @id=x@ tags to check actual content
+            if meta == 'alignment_structural':
+                 # Remove tags: @id=1@ content @id=1@
+                 inner_content = re.sub(r'(@id=\d+@)', '', text).strip()
+                 if re.search(r'\d', inner_content):
+                     is_numeric_risky = True
+            elif re.search(r'\d', text):
+                 # For normal doc mode, checking raw text is enough
+                 is_numeric_risky = True
+
             if current_char_count >= (self.target_chars - 30):
-                if any(text_stripped.endswith(p) for p in SAFE_PUNCTUATION) or current_char_count >= self.max_chars:
+                is_safe_punct = any(text_stripped.endswith(p) for p in SAFE_PUNCTUATION)
+                
+                # VETO rule: If line has numbers, force extend (unless we hit hard max)
+                if is_numeric_risky and current_char_count < self.max_chars:
+                    is_safe_punct = False 
+
+                if is_safe_punct or current_char_count >= self.max_chars:
                    self._create_block(blocks, current_chunk_text, current_chunk_meta)
                    current_chunk_text = []
                    current_chunk_meta = []

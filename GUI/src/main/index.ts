@@ -1217,11 +1217,13 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
             args.push('--strict-mode', config.strictMode)
         }
 
-        // Debug/Save Options
 
         // Debug/Save Options
         if (config.saveCot) {
             args.push('--save-cot')
+        }
+        if (config.alignmentMode) {
+            args.push('--alignment-mode')
         }
         if (config.saveSummary) {
             args.push('--save-summary')

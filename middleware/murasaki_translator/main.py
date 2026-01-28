@@ -39,7 +39,7 @@ def safe_print(msg):
         print(msg)
 
 
-from murasaki_translator.core.chunker import Chunker
+from murasaki_translator.core.chunker import Chunker, TextBlock
 from murasaki_translator.core.prompt import PromptBuilder
 from murasaki_translator.core.engine import InferenceEngine
 from murasaki_translator.core.parser import ResponseParser
@@ -51,6 +51,7 @@ from murasaki_translator.utils.monitor import HardwareMonitor
 from murasaki_translator.utils.line_aligner import LineAligner
 from murasaki_translator.fixer import NumberFixer, Normalizer, PunctuationFixer, KanaFixer, RubyCleaner
 from murasaki_translator.documents import DocumentFactory
+from murasaki_translator.utils.alignment_handler import AlignmentHandler
 
 def load_glossary(path: Optional[str]) -> Dict[str, str]:
     """
@@ -598,6 +599,7 @@ def main():
     parser.add_argument("--rules-pre", help="Path to pre-processing rules JSON")
     parser.add_argument("--rules-post", help="Path to post-processing rules JSON")
     parser.add_argument("--save-cot", action="store_true", help="Save CoT debug file")
+    parser.add_argument("--alignment-mode", action="store_true", help="Enable Auxiliary Alignment mode (Comic)")
     parser.add_argument("--save-summary", action="store_true", help="Append summary to output")
     parser.add_argument("--traditional", action="store_true", help="Convert output to Traditional Chinese")
     parser.add_argument("--strict-mode", default="subs", choices=["off", "subs", "all"], help="Strict line alignment mode (default: subs)")
@@ -766,7 +768,14 @@ def main():
 
     # Determine Output Paths
     _, file_ext = os.path.splitext(input_path)
-    is_structured_doc = file_ext.lower() in ['.epub', '.srt', '.ass', '.ssa']
+    # Determine Architecture (Novel vs Structured vs Alignment)
+    # is_structured: True for subtitle formats and alignment mode (which uses pseudo-SRT tags)
+    is_structured = file_ext.lower() in ['.epub', '.srt', '.ass', '.ssa'] or args.alignment_mode
+    if is_structured:
+        is_structured_doc = True
+    else:
+        # Default Novel mode (doc) or Line mode
+        is_structured_doc = args.mode == 'doc'
 
     if args.output:
         output_path = args.output
@@ -779,9 +788,8 @@ def main():
         output_path = f"{base}{suffix}{ext}"
         cot_path = f"{base}{suffix}_cot{ext}"
 
-    # Structured docs (EPUB/SRT) need binary post-processing.
-    # We write to a .txt sidecar during translation to avoid corrupting the binary target.
-    # actual_output_path is what f_out will use.
+    # Structured docs (EPUB/SRT/Alignment) need binary post-processing or formulaic reconstruction.
+    # We write to a .txt sidecar during translation to avoid corrupting the binary target (or to allow re-ordering in alignment mode).
     actual_output_path = output_path + ".txt" if is_structured_doc else output_path
 
     # Temp Progress Path (Deterministic for Resume)
@@ -902,22 +910,22 @@ def main():
     # [Audit Fix] Auto-detect protection requirement from rules
     protection_rules = [r for r in post_rules if r.get('pattern') == 'restore_protection']
     
-    # 针对 SRT/ASS/EPUB 的特殊工程化处理
-    is_structured = input_path.lower().endswith(('.srt', '.ass', '.ssa', '.epub'))
+    # [Formula Factory] Structured engineering
     if is_structured:
         # 1. 强制开启标签保护 (即使前端没勾选，为了保护锚点 ID、结构和合法标签)
         if not args.text_protect:
-            print(f"[Auto-Config] Structured document ({os.path.splitext(input_path)[1].upper()}) detected. Enabling TextProtector for structural safety.")
+            print(f"[Auto-Config] Structured document detected. Enabling TextProtector for structural safety.")
             args.text_protect = True
         
-        # 2. 规则熔断：针对字幕格式，剔除所有可能破坏换行或合并行数的规则
-        is_sub = input_path.lower().endswith(('.srt', '.ass', '.ssa'))
+        # 2. 规则熔断：针对字幕格式和对齐模式，剔除所有可能破坏换行或合并行数的规则
+        # Alignment Mode 必须享受同等的规则熔断待遇，否则 PostProcess 会破坏 @id@ 结构
+        is_sub = input_path.lower().endswith(('.srt', '.ass', '.ssa')) or args.alignment_mode
         if is_sub:
             melt_patterns = ['ensure_single_newline', 'ensure_double_newline', 'clean_empty_lines', 'merge_short_lines']
             original_count = len(post_rules)
             post_rules = [r for r in post_rules if r.get('pattern') not in melt_patterns]
             if len(post_rules) < original_count:
-                print(f"[Auto-Config] Subtitle detected. Disabled {original_count - len(post_rules)} formatting rules to preserve structure.")
+                print(f"[Auto-Config] Subtitle/Alignment detected. Disabled {original_count - len(post_rules)} formatting rules to preserve structure.")
 
     # [Critical Fix] 强制将样式还原逻辑置于所有后处理规则的最末端，确保还原后不会再次被误伤
     # 先移除已有的（如果有），再追加到最后
@@ -931,8 +939,8 @@ def main():
         # [Specialized Rule] 针对字幕，优先使用合法的标签捕获规则，避免拦截 【】 （） [ ] 等
         custom_protector_patterns = TextProtector.SUBTITLE_PATTERNS
         print("[Auto-Config] Using restrictive SUBTITLE_PATTERNS for legal tags only.")
-    elif input_path.lower().endswith('.epub'):
-        # [Specialized Rule] 针对 EPUB，保护 @id=ID@/@end=ID@ 锚点和可能残留的 HTML 标签
+    elif input_path.lower().endswith('.epub') or args.alignment_mode:
+        # [Specialized Rule] 针对 EPUB/Alignment，保护 @id=ID@/@end=ID@ 锚点和可能残留的 HTML 标签
         custom_protector_patterns = [r'@id=\d+@', r'@end=\d+@', r'<[^>]+>']
         print("[Auto-Config] Using EPUB_ANCHOR_PATTERNS for @id=ID@ anchors.")
 
@@ -953,16 +961,28 @@ def main():
     try:
         engine.start_server()
         
-        # Read Input using DocumentFactory
-        doc = DocumentFactory.get_document(input_path)
-        items = doc.load()
-            
-        # Chunking
-        blocks = chunker.process(items)
-        print(f"[{args.mode.upper()} Mode] Input split into {len(blocks)} blocks.")
         
-        # 源文本统计
-        source_lines = len([i for i in items if i['text'].strip()])
+        if args.alignment_mode and input_path.lower().endswith('.txt'):
+            print(f"[Alignment Mode] ENABLED: Context-aware alignment for {input_path}")
+            items, structure_map, source_lines = AlignmentHandler.load_lines(input_path)
+            # Use normal chunker for context!
+            blocks = chunker.process(items)
+            print(f"[Alignment Mode] Tagged lines merged into {len(blocks)} context blocks.")
+            doc = None # Not used here
+        else:
+            doc = DocumentFactory.get_document(input_path)
+            items = doc.load()
+            
+            # Source Lines Calculation (for Novel/Doc mode)
+            # For Alignment Mode, source_lines is already exact physical count needed for reconstruction
+            source_lines = len([i for i in items if i['text'].strip()])
+            structure_map = {} # Not used
+            
+            # Chunking
+            blocks = chunker.process(items)
+            print(f"[{args.mode.upper()} Mode] Input split into {len(blocks)} blocks.")
+        
+        # Helper for printing stats (Alignment mode has already calculated exact source lines)
         source_chars = sum(len(i['text']) for i in items if i['text'].strip())
         
         # Debug output (only when --debug is enabled)
@@ -1303,7 +1323,10 @@ def main():
             
             # Determine if we should use strict line count (Retry if line count mismatch)
             _, file_ext = os.path.splitext(input_path)
-            is_structured_doc = file_ext.lower() in ['.epub', '.srt', '.ass', '.ssa']
+            # [CRITICAL FIX] Do NOT re-calculate is_structured_doc here! 
+            # It was already determined globally (lines ~770) and includes args.alignment_mode.
+            # Re-calculating purely on extension would disable alignment mode for .txt.
+            # is_structured_doc = file_ext.lower() in ['.epub', '.srt', '.ass', '.ssa']
             
             # Strict mode logic:
             # - all: Force strict line count for EVERY file
@@ -1471,7 +1494,14 @@ def main():
                         curr_disp = next_write_idx + 1
                         
                         if res["success"]:
-                            # Preview for GUI
+                            # [Alignment Mode] Post-Processing
+                            # CRITICAL: Do NOT overwrite res["out_text"] with stripped version!
+                            # We need the tags in "out_text" for save_reconstructed to work at the end.
+                            # Only strip tags for the Preview/GUI.
+                            if args.alignment_mode:
+                                res["preview_text"] = AlignmentHandler.process_result(res["out_text"])  
+                            else:
+                                res["preview_text"] = res["out_text"]
                             safe_print_json("JSON_PREVIEW_BLOCK", {"block": curr_disp, "src": res['src_text'], "output": res['preview_text']})
                             
                             if translation_cache:
@@ -1532,7 +1562,11 @@ def main():
                             tb.metadata = blocks[i].metadata
                         translated_blocks.append(tb)
                 
-                doc.save(output_path, translated_blocks)
+                if args.alignment_mode and input_path.lower().endswith('.txt'):
+                    print(f"[Debug] Invoking save_reconstructed. MapSize={len(structure_map)}, TotalLines={source_lines}, Blocks={len(translated_blocks)}")
+                    AlignmentHandler.save_reconstructed(output_path, translated_blocks, structure_map, total_physical_lines=source_lines)
+                else:
+                    doc.save(output_path, translated_blocks)
                 print(f"[Final] Reconstruction complete: {output_path}")
                 
                 # [Cleanup] Remove intermediate .txt file after successful reconstruction

@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback, forwardRef, useImperativeHandle } from "react"
-import { Play, X, FolderOpen, FileText, BookOpen, Clock, Zap, Layers, Terminal, ChevronDown, Plus, FolderPlus, Trash2, FileCheck, ArrowRight, AlertTriangle, GripVertical, RefreshCw } from "lucide-react"
-import { Button, Card } from "./ui/core"
+import { Play, X, FolderOpen, FileText, BookOpen, Clock, Zap, Layers, Terminal, ChevronDown, Plus, FolderPlus, Trash2, FileCheck, ArrowRight, AlertTriangle, GripVertical, RefreshCw, AlignLeft } from "lucide-react"
+import { Button, Card, Tooltip as UITooltip } from "./ui/core"
 import { translations, Language } from "../lib/i18n"
 import { getVariants } from "../lib/utils"
 import { identifyModel } from "../lib/modelConfig"
@@ -85,6 +85,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active }, ref)
 
     // Save Options
     const [saveCot, setSaveCot] = useState(() => localStorage.getItem("config_save_cot") === "true")
+    const [alignmentMode, setAlignmentMode] = useState(() => localStorage.getItem("config_alignment_mode") === "true")
 
     const [isRunning, setIsRunning] = useState(false)
     const [logs, setLogs] = useState<string[]>([])
@@ -677,7 +678,10 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active }, ref)
             // Chunk Balancing
             balanceEnable: localStorage.getItem("config_balance_enable") !== "false",
             balanceThreshold: parseFloat(localStorage.getItem("config_balance_threshold") || "0.6"),
-            balanceCount: parseInt(localStorage.getItem("config_balance_count") || "3")
+            balanceCount: parseInt(localStorage.getItem("config_balance_count") || "3"),
+
+            // Auxiliary Alignment Mode
+            alignmentMode: alignmentMode
         }
 
         // Create history record
@@ -1400,17 +1404,34 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active }, ref)
                     </div>
 
                     <div className="flex items-center gap-2">
-                        <div
-                            className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-all cursor-pointer text-[10px] ${saveCot
-                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                                : 'bg-transparent border-border/30 text-muted-foreground/50 hover:border-border/50 hover:text-muted-foreground'
-                                }`}
-                            onClick={() => { setSaveCot(!saveCot); localStorage.setItem("config_save_cot", String(!saveCot)) }}
-                            title="额外保存一份带有思维链(CoT)的完整输出文件"
-                        >
-                            <FileText className="w-2.5 h-2.5" />
-                            <span>CoT</span>
-                        </div>
+                        <UITooltip content="TXT文件辅助对齐：适用于漫画和游戏文本，辅助输出按照行进行对齐。小说等连贯性文本不建议开启，会影响翻译效果。">
+                            <div
+                                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${alignmentMode
+                                    ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-500 dark:text-indigo-400'
+                                    : 'bg-secondary/50 border-border/60 text-muted-foreground hover:bg-secondary/80 hover:border-border hover:text-foreground'
+                                    }`}
+                                onClick={() => {
+                                    const nextValue = !alignmentMode;
+                                    setAlignmentMode(nextValue);
+                                    localStorage.setItem("config_alignment_mode", String(nextValue));
+                                }}
+                            >
+                                <AlignLeft className={`w-3 h-3 ${alignmentMode ? 'text-indigo-500' : 'text-muted-foreground/70'}`} />
+                                <span>辅助对齐</span>
+                            </div>
+                        </UITooltip>
+                        <UITooltip content={<>CoT导出：另外保存一份带思考过程的翻译文本</>}>
+                            <div
+                                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${saveCot
+                                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-500 dark:text-amber-400'
+                                    : 'bg-secondary/50 border-border/60 text-muted-foreground hover:bg-secondary/80 hover:border-border hover:text-foreground'
+                                    }`}
+                                onClick={() => { setSaveCot(!saveCot); localStorage.setItem("config_save_cot", String(!saveCot)) }}
+                            >
+                                <FileText className={`w-3 h-3 ${saveCot ? 'text-amber-500' : 'text-muted-foreground/70'}`} />
+                                <span>CoT导出</span>
+                            </div>
+                        </UITooltip>
                         <div className="flex items-center gap-2 cursor-pointer hover:bg-secondary/50 px-3 py-1.5 rounded-lg transition-colors" onClick={() => setLogsCollapsed(!logsCollapsed)}>
                             <Terminal className="w-3.5 h-3.5 text-muted-foreground" />
                             <span className="text-xs text-muted-foreground">{t.dashboard.terminal}</span>
