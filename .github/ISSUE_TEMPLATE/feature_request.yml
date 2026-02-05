@@ -1,0 +1,55 @@
+---
+name: 功能建议
+description: 提出新功能或改进建议
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢您的建议！请描述您希望添加的功能或改进。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 功能描述
+      description: 请描述您希望添加的功能
+      placeholder: |
+        我希望软件能够支持...
+        这个功能可以帮助...
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: 使用场景
+      description: 这个功能会在什么场景下使用？
+      placeholder: |
+        当我在翻译 xxx 类型的文件时...
+    validations:
+      required: false
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 功能分类
+      description: 这个功能属于哪个类别？
+      options:
+        - 翻译引擎
+        - 文件格式支持
+        - 用户界面
+        - 术语表功能
+        - 性能优化
+        - 跨平台兼容
+        - 其他
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，确认没有重复的建议
+          required: true

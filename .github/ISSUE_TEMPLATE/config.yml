@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用文档
+    url: https://github.com/soundstarrain/Murasaki-Translator#readme
+    about: 请先查阅 README 和常见问题
+  - name: 模型下载
+    url: https://huggingface.co/Murasaki-Project
+    about: 前往 Hugging Face 下载 Murasaki 模型

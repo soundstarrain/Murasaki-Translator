@@ -1,0 +1,104 @@
+---
+name: Bug 报告
+description: 报告软件运行中遇到的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢您提交 Bug 报告！请尽可能详细地描述问题，以便我们快速定位和修复。
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 操作系统
+      description: 您使用的操作系统
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (Ubuntu/Debian)
+        - Linux (其他)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: gpu
+    attributes:
+      label: GPU 类型
+      description: 您的显卡类型
+      options:
+        - NVIDIA (CUDA)
+        - AMD (Vulkan)
+        - Intel (Vulkan)
+        - Apple Silicon (Metal)
+        - 仅 CPU
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 软件版本
+      description: "可在软件设置页面查看，格式如 v1.5.0"
+      placeholder: "v1.5.0"
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: 使用的模型
+      description: "模型文件名，如 murasaki-8b-v0.1-IQ4_XS.gguf"
+      placeholder: "murasaki-8b-v0.1-IQ4_XS.gguf"
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请详细描述您遇到的问题
+      placeholder: |
+        1. 我做了什么操作...
+        2. 期望的结果是...
+        3. 实际发生了...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 如何复现这个问题？
+      placeholder: |
+        1. 打开软件
+        2. 点击 xxx
+        3. 出现 xxx 错误
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 错误日志
+      description: |
+        请在设置页面点击"导出诊断日志"，并粘贴相关错误信息。
+        如果有截图也可以附上。
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已阅读 README 和常见问题
+          required: true
+        - label: 我已搜索现有 Issue，确认没有重复
+          required: true
+        - label: 我使用的是最新版本
+          required: true

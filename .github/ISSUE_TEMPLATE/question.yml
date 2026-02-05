@@ -1,0 +1,50 @@
+---
+name: 使用问题
+description: 关于软件使用的疑问
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提问前请先查阅 [README](https://github.com/soundstarrain/Murasaki-Translator#readme) 中的常见问题部分。
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 操作系统
+      description: 您使用的操作系统
+      options:
+        - Windows
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 问题描述
+      description: 请详细描述您的问题
+      placeholder: |
+        我想知道如何...
+        我不理解 xxx 设置的作用...
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 补充信息
+      description: 任何可能有帮助的补充信息
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已阅读 README 的常见问题部分
+          required: true
