@@ -1,6 +1,6 @@
 {
   "name": "murasaki-translator",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "main": "./out/main/index.js",
   "author": "soundstarrain",
   "description": "Murasaki Local AI Translator",
@@ -23,6 +23,24 @@
       "target": "nsis",
       "icon": "resources/icon.png"
     },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "resources/icon.icns",
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "icon": "resources/icon.png",
+      "category": "Office"
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
@@ -37,6 +55,16 @@
       "zh-CN",
       "en-US",
       "ja"
+    ],
+    "extraFiles": [
+      {
+        "from": "../release/LICENSE.Murasaki Translator.txt",
+        "to": "LICENSE.txt"
+      },
+      {
+        "from": "../release/readme.md",
+        "to": "README.md"
+      }
     ],
     "extraResources": [
       {
@@ -58,7 +86,10 @@
           "!**/.venv/**",
           "!**/temp_progress.jsonl",
           "!**/*.diff",
-          "!**/*.bat"
+          "!**/*.bat",
+          "!**/llama-b*-bin-*/**",
+          "!**/server.log",
+          "!**/test_*.py"
         ]
       },
       {
@@ -72,7 +103,8 @@
           "!get-pip.py"
         ]
       }
-    ]
+    ],
+    "afterPack": "./scripts/afterPack.js"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.0",

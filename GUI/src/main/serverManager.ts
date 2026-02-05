@@ -1,15 +1,7 @@
 import { spawn, ChildProcess } from 'child_process'
 import { join } from 'path'
 import fs from 'fs'
-import { is } from '@electron-toolkit/utils'
-
-// Helper to find middleware path (Duplicated from index.ts to avoid circular deps)
-const getMiddlewarePath = () => {
-    if (is.dev) {
-        return join(__dirname, '../../../middleware')
-    }
-    return join(process.resourcesPath, 'middleware')
-}
+import { detectPlatform, getLlamaServerPath, getMiddlewarePath } from './platform'
 
 // Helper for User Mutable Data
 const getUserDataPath = () => {
@@ -80,20 +72,15 @@ export class ServerManager {
         const middlewareDir = getMiddlewarePath()
         const userDataPath = getUserDataPath()
 
-        // Find llama-server.exe
-        let serverExePath = ''
-        if (fs.existsSync(middlewareDir)) {
-            for (const subdir of fs.readdirSync(middlewareDir)) {
-                const candidate = join(middlewareDir, subdir, 'llama-server.exe')
-                if (fs.existsSync(candidate)) {
-                    serverExePath = candidate
-                    break
-                }
-            }
-        }
-
-        if (!serverExePath) {
-            const msg = `llama-server.exe not found in ${middlewareDir}`
+        // 使用跨平台检测获取正确的二进制路径
+        let serverExePath: string
+        try {
+            const platformInfo = detectPlatform()
+            console.log(`[ServerManager] Platform: ${platformInfo.os}/${platformInfo.arch}, Backend: ${platformInfo.backend}`)
+            this.logs.push(`Platform: ${platformInfo.os}/${platformInfo.arch}, Backend: ${platformInfo.backend}`)
+            serverExePath = getLlamaServerPath()
+        } catch (e: any) {
+            const msg = e.message || 'Failed to detect platform or find llama-server'
             this.logs.push(msg)
             return { success: false, error: msg }
         }

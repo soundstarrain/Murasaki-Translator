@@ -203,6 +203,7 @@ const Tooltip = ({ children, content, className }: TooltipProps) => {
             window.addEventListener('scroll', handleScroll, { capture: true })
             return () => window.removeEventListener('scroll', handleScroll, { capture: true })
         }
+        return undefined
     }, [isVisible])
 
     return (

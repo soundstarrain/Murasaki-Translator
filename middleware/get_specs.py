@@ -23,20 +23,41 @@ def get_nvidia_vram():
     return 0
 
 def get_system_ram():
-    """Get System RAM in GB (Windows)"""
+    """Get System RAM in GB (Cross-platform)"""
+    import sys
     try:
-        # Use wmic for memory info on Windows
-        result = subprocess.run(
-            ['wmic', 'computersystem', 'get', 'totalphysicalmemory'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            lines = result.stdout.strip().split('\n')
-            if len(lines) > 1 and lines[1].strip().isdigit():
-                bytes = int(lines[1].strip())
-                return bytes / (1024**3)
+        if sys.platform == 'win32':
+            # Windows: Use wmic
+            result = subprocess.run(
+                ['wmic', 'computersystem', 'get', 'totalphysicalmemory'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                if len(lines) > 1 and lines[1].strip().isdigit():
+                    bytes_val = int(lines[1].strip())
+                    return bytes_val / (1024**3)
+        elif sys.platform == 'darwin':
+            # macOS: Use sysctl
+            result = subprocess.run(
+                ['sysctl', '-n', 'hw.memsize'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip().isdigit():
+                return int(result.stdout.strip()) / (1024**3)
+        else:
+            # Linux: Read /proc/meminfo
+            with open('/proc/meminfo', 'r') as f:
+                for line in f:
+                    if line.startswith('MemTotal:'):
+                        # Format: "MemTotal:       16384000 kB"
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            return int(parts[1]) / (1024**2)  # kB to GB
     except Exception:
         pass
     return 8.0  # Fallback to 8GB

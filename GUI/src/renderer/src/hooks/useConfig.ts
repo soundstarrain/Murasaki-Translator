@@ -3,7 +3,7 @@
  * 集中管理 localStorage 中的应用配置
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 
 // 配置键定义
 export const CONFIG_KEYS = {

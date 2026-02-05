@@ -5,6 +5,7 @@ import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import fs from 'fs'
 import { ServerManager } from './serverManager'
+import { getLlamaServerPath, detectPlatform } from './platform'
 
 let pythonProcess: ChildProcess | null = null
 let mainWindow: BrowserWindow | null = null
@@ -170,18 +171,31 @@ const getMiddlewarePath = () => {
     return join(process.resourcesPath, 'middleware')
 }
 
-// Helper to find python executable
-const getPythonPath = () => {
+// Helper to find python executable or bundled engine
+const getPythonPath = (): { type: 'python' | 'bundle'; path: string } => {
     if (is.dev) {
-        return process.env.ELECTRON_PYTHON_PATH || 'python'
+        return { type: 'python', path: process.env.ELECTRON_PYTHON_PATH || 'python' }
     }
-    // In prod: resources/python_env/python.exe (Embeddable)
-    return join(process.resourcesPath, 'python_env', 'python.exe')
+
+    // In prod: platform-specific Python path
+    if (process.platform === 'win32') {
+        // Windows: resources/python_env/python.exe (Embeddable)
+        return { type: 'python', path: join(process.resourcesPath, 'python_env', 'python.exe') }
+    } else {
+        // macOS/Linux: Check for PyInstaller bundle first
+        const bundlePath = join(process.resourcesPath, 'middleware', 'bin', 'python-bundle', 'murasaki-engine')
+        if (fs.existsSync(bundlePath)) {
+            return { type: 'bundle', path: bundlePath }
+        }
+        // Fallback to system Python
+        return { type: 'python', path: 'python3' }
+    }
 }
 
 // Helper to spawn Python process with sanitized environment
+// Supports both Python mode (python script.py) and Bundle mode (./murasaki-engine --script=main)
 const spawnPythonProcess = (
-    cmd: string,
+    pythonInfo: { type: 'python' | 'bundle'; path: string },
     args: string[],
     options: { cwd: string, env?: NodeJS.ProcessEnv, stdio?: any }
 ) => {
@@ -196,9 +210,25 @@ const spawnPythonProcess = (
     delete env['PYTHONHOME']
     delete env['PYTHONPATH']
 
-    console.log(`[Spawn] ${cmd} ${args[0]}... (Env Sanitized)`)
+    let cmd: string
+    let finalArgs: string[]
 
-    return spawn(cmd, args, {
+    if (pythonInfo.type === 'bundle') {
+        // Bundle mode: directly execute the bundle with args
+        // PyInstaller bundle 已内置入口点，需移除脚本路径
+        // args = ['path/to/main.py', '--file', ...] -> ['--file', ...]
+        cmd = pythonInfo.path
+        // 移除第一个元素（脚本路径），只保留实际参数
+        finalArgs = args.slice(1)
+        console.log(`[Spawn Bundle] ${cmd} ${finalArgs.join(' ')}`)
+    } else {
+        // Python mode: python script.py args
+        cmd = pythonInfo.path
+        finalArgs = args
+        console.log(`[Spawn Python] ${cmd} ${args[0]}... (Env Sanitized)`)
+    }
+
+    return spawn(cmd, finalArgs, {
         ...options,
         env
     })
@@ -330,6 +360,121 @@ ipcMain.handle('server-logs', () => {
 
 ipcMain.handle('server-warmup', async () => {
     return await ServerManager.getInstance().warmup()
+})
+// --------------------------
+
+// --- Remote Server IPC ---
+import { RemoteClient, getRemoteClient, clearRemoteClient } from './remoteClient'
+
+let remoteClient: RemoteClient | null = null
+
+ipcMain.handle('remote-connect', async (_event, config: { url: string; apiKey?: string }) => {
+    try {
+        remoteClient = new RemoteClient(config)
+        const result = await remoteClient.testConnection()
+        if (!result.ok) {
+            remoteClient = null
+        }
+        return result
+    } catch (e) {
+        remoteClient = null
+        return { ok: false, message: String(e) }
+    }
+})
+
+ipcMain.handle('remote-disconnect', async () => {
+    remoteClient = null
+    clearRemoteClient()
+    return { ok: true }
+})
+
+ipcMain.handle('remote-status', async () => {
+    if (!remoteClient) {
+        return { connected: false }
+    }
+    try {
+        const status = await remoteClient.getStatus()
+        return { connected: true, ...status }
+    } catch (e) {
+        return { connected: false, error: String(e) }
+    }
+})
+
+ipcMain.handle('remote-models', async () => {
+    if (!remoteClient) return []
+    try {
+        return await remoteClient.listModels()
+    } catch (e) {
+        console.error('[Remote] listModels error:', e)
+        return []
+    }
+})
+
+ipcMain.handle('remote-glossaries', async () => {
+    if (!remoteClient) return []
+    try {
+        return await remoteClient.listGlossaries()
+    } catch (e) {
+        console.error('[Remote] listGlossaries error:', e)
+        return []
+    }
+})
+
+ipcMain.handle('remote-translate', async (_event, options: any) => {
+    if (!remoteClient) {
+        return { error: 'Not connected to remote server' }
+    }
+    try {
+        const { taskId, status } = await remoteClient.createTranslation(options)
+        return { taskId, status }
+    } catch (e) {
+        return { error: String(e) }
+    }
+})
+
+ipcMain.handle('remote-task-status', async (_event, taskId: string) => {
+    if (!remoteClient) {
+        return { error: 'Not connected to remote server' }
+    }
+    try {
+        return await remoteClient.getTaskStatus(taskId)
+    } catch (e) {
+        return { error: String(e) }
+    }
+})
+
+ipcMain.handle('remote-cancel', async (_event, taskId: string) => {
+    if (!remoteClient) {
+        return { error: 'Not connected to remote server' }
+    }
+    try {
+        return await remoteClient.cancelTask(taskId)
+    } catch (e) {
+        return { error: String(e) }
+    }
+})
+
+ipcMain.handle('remote-upload', async (_event, filePath: string) => {
+    if (!remoteClient) {
+        return { error: 'Not connected to remote server' }
+    }
+    try {
+        return await remoteClient.uploadFile(filePath)
+    } catch (e) {
+        return { error: String(e) }
+    }
+})
+
+ipcMain.handle('remote-download', async (_event, taskId: string, savePath: string) => {
+    if (!remoteClient) {
+        return { error: 'Not connected to remote server' }
+    }
+    try {
+        await remoteClient.downloadResult(taskId, savePath)
+        return { success: true }
+    } catch (e) {
+        return { error: String(e) }
+    }
 })
 // --------------------------
 
@@ -475,6 +620,62 @@ ipcMain.on('show-notification', (_event, { title, body }) => {
 // Theme Sync - Update Windows title bar color
 ipcMain.on('set-theme', (_event, theme: 'dark' | 'light') => {
     nativeTheme.themeSource = theme
+})
+
+// Read server.log for debug export - 使用流式读取避免大文件OOM
+ipcMain.handle('read-server-log', async () => {
+    try {
+        const middlewareDir = getMiddlewarePath()
+        const logPath = join(middlewareDir, 'server.log')
+        if (!fs.existsSync(logPath)) {
+            return { exists: false, path: logPath }
+        }
+
+        const stats = fs.statSync(logPath)
+        const maxBytes = 512 * 1024 // 最多读取 512KB (约 10000 行)
+        const lineCount = 500
+
+        // 如果文件较小，直接读取
+        if (stats.size <= maxBytes) {
+            const content = fs.readFileSync(logPath, 'utf-8')
+            const lines = content.split('\n')
+            return {
+                exists: true,
+                path: logPath,
+                lineCount: lines.length,
+                content: lines.slice(-lineCount).join('\n')
+            }
+        }
+
+        // 大文件：只读取末尾部分
+        return new Promise((resolve) => {
+            const chunks: string[] = []
+            const startPos = Math.max(0, stats.size - maxBytes)
+            const stream = fs.createReadStream(logPath, {
+                encoding: 'utf-8',
+                start: startPos
+            })
+
+            stream.on('data', (chunk: string) => chunks.push(chunk))
+            stream.on('end', () => {
+                const content = chunks.join('')
+                // 跳过第一行（可能不完整）
+                const lines = content.split('\n').slice(1)
+                resolve({
+                    exists: true,
+                    path: logPath,
+                    lineCount: lines.length,
+                    content: lines.slice(-lineCount).join('\n'),
+                    truncated: true
+                })
+            })
+            stream.on('error', (err) => {
+                resolve({ exists: false, path: logPath, error: String(err) })
+            })
+        })
+    } catch (e) {
+        return { exists: false, error: String(e) }
+    }
 })
 
 ipcMain.handle('get-models', async () => {
@@ -1161,14 +1362,15 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
     const pythonCmd = getPythonPath()
     console.log("Using Python:", pythonCmd)
 
-    // Find llama-server.exe
-    let serverExePath = ''
-    for (const subdir of fs.readdirSync(middlewareDir)) {
-        const candidate = join(middlewareDir, subdir, 'llama-server.exe')
-        if (fs.existsSync(candidate)) {
-            serverExePath = candidate
-            break
-        }
+    // 使用跨平台检测获取正确的二进制路径
+    let serverExePath: string
+    try {
+        const platformInfo = detectPlatform()
+        event.reply('log-update', `System: Platform ${platformInfo.os}/${platformInfo.arch}, Backend: ${platformInfo.backend}`)
+        serverExePath = getLlamaServerPath()
+    } catch (e: any) {
+        event.reply('log-update', `ERR: ${e.message}`)
+        return
     }
 
     // Model selection
@@ -1195,10 +1397,7 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
         return
     }
 
-    if (!serverExePath) {
-        event.reply('log-update', `ERR: llama-server.exe not found in ${middlewareDir}`)
-        return
-    }
+    // serverExePath 已在上面的 try-catch 中验证
 
     // Build args for murasaki_translator/main.py
     const args = [

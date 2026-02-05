@@ -585,7 +585,74 @@ def main():
     # Argument Parsing
     # Default server path relative to middleware directory
     middleware_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    default_server = os.path.join(middleware_dir, "llama-b7770-bin-win-cuda-12.4-x64", "llama-server.exe")
+    
+    # 跨平台 llama-server 路径检测
+    def get_llama_server_path(mdir: str) -> str:
+        """根据平台自动选择正确的 llama-server 二进制"""
+        import platform as plt
+        import subprocess
+        system = sys.platform
+        machine = plt.machine().lower()
+        
+        # 跨平台检测 NVIDIA GPU（不硬编码路径）
+        def has_nvidia_gpu() -> bool:
+            try:
+                result = subprocess.run(
+                    ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
+                    capture_output=True, text=True, timeout=5
+                )
+                return result.returncode == 0 and bool(result.stdout.strip())
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                return False
+        
+        # 平台映射表
+        if system == 'win32':
+            # Windows: 检测 NVIDIA GPU
+            if has_nvidia_gpu():
+                subdir, binary = 'win-cuda', 'llama-server.exe'
+            else:
+                subdir, binary = 'win-vulkan', 'llama-server.exe'
+        elif system == 'darwin':
+            # macOS: ARM64 用 Metal，x64 用 CPU
+            if 'arm' in machine or 'aarch64' in machine:
+                subdir, binary = 'darwin-metal', 'llama-server'
+            else:
+                subdir, binary = 'darwin-x64', 'llama-server'
+        elif system == 'linux':
+            # Linux: 有 NVIDIA GPU 则用 CUDA，否则 Vulkan
+            if has_nvidia_gpu():
+                subdir, binary = 'linux-cuda', 'llama-server'
+                # 如果 CUDA 版本不存在，回退 Vulkan
+                cuda_path = os.path.join(mdir, 'bin', subdir, binary)
+                if not os.path.exists(cuda_path):
+                    subdir = 'linux-vulkan'
+            else:
+                subdir, binary = 'linux-vulkan', 'llama-server'
+        else:
+            raise RuntimeError(f"Unsupported platform: {system}")
+        
+        # 优先检查新的 bin/ 目录结构
+        new_path = os.path.join(mdir, 'bin', subdir, binary)
+        if os.path.exists(new_path):
+            logger.info(f"Using llama-server: {new_path}")
+            return new_path
+        
+        # 回退：扫描旧的目录结构 (llama-*)
+        for entry in os.listdir(mdir):
+            entry_path = os.path.join(mdir, entry)
+            if os.path.isdir(entry_path):
+                candidate = os.path.join(entry_path, binary)
+                if os.path.exists(candidate):
+                    logger.info(f"Using legacy llama-server: {candidate}")
+                    return candidate
+        
+        raise FileNotFoundError(f"llama-server not found in {mdir}")
+    
+    try:
+        default_server = get_llama_server_path(middleware_dir)
+    except FileNotFoundError as e:
+        logger.warning(f"No llama-server found: {e}. Will require --server argument.")
+        default_server = None
     default_model = os.path.join(middleware_dir, "models", "ACGN-8B-Step150-Q4_K_M.gguf")
     
     parser = argparse.ArgumentParser(description="Murasaki Translator - High Fidelity System 2 Translation")
@@ -647,6 +714,8 @@ def main():
     parser.add_argument("--json-output", action="store_true", help="Output result as JSON (for single-block mode)")
     parser.add_argument("--rebuild-from-cache", help="Rebuild document from specified cache JSON file")
     parser.add_argument("--no-server-spawn", action="store_true", help="Client mode: connect to existing server")
+    parser.add_argument("--server-host", default="127.0.0.1", help="External server host (default: 127.0.0.1)")
+    parser.add_argument("--server-port", type=int, default=8080, help="External server port (default: 8080)")
     
     parser.add_argument("--concurrency", type=int, default=1, help="Parallel slots count (default 1)")
     # High-Fidelity Granular Settings
@@ -864,7 +933,9 @@ def main():
     print(f"Initializing Engine (Server: {args.server}, Parallel: {args.concurrency}, HighFidelity: {args.high_fidelity})...")
     engine = InferenceEngine(
         server_path=args.server, 
-        model_path=args.model, 
+        model_path=args.model,
+        host=args.server_host,
+        port=args.server_port,
         n_gpu_layers=args.gpu_layers,
         n_ctx=total_ctx, 
         n_parallel=args.concurrency,

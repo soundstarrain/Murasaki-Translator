@@ -134,7 +134,7 @@ export function SettingsView({ lang }: { lang: Language }) {
     /**
      * Export all config and history for debugging/bug reports
      */
-    const handleExportDebug = () => {
+    const handleExportDebug = async () => {
         // Collect all config keys with values
         // Collect all config keys dynamically
         const configData: Record<string, string | null> = {}
@@ -159,10 +159,19 @@ export function SettingsView({ lang }: { lang: Language }) {
             historyData = 'parse_error'
         }
 
+        // Read server.log (llama-server logs)
+        let serverLogData: unknown = null
+        try {
+            // @ts-ignore
+            serverLogData = await window.api.readServerLog()
+        } catch (e) {
+            serverLogData = { error: String(e) }
+        }
+
         const debugData = {
             // Export metadata
             exportTime: new Date().toISOString(),
-            exportVersion: '1.1',
+            exportVersion: '1.2',
 
             // App info
             app: {
@@ -213,7 +222,10 @@ export function SettingsView({ lang }: { lang: Language }) {
             },
 
             // Full history (for detailed debug)
-            history: historyData
+            history: historyData,
+
+            // Server logs (llama-server.log)
+            serverLog: serverLogData
         }
 
         const content = JSON.stringify(debugData, null, 2)

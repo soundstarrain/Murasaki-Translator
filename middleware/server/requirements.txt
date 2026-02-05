@@ -1,0 +1,17 @@
+# Murasaki Translation API Server Dependencies
+
+# FastAPI + ASGI Server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# HTTP Client
+httpx>=0.25.0
+
+# Validation
+pydantic>=2.0.0
+
+# File handling
+python-multipart>=0.0.6
+
+# WebSocket support (included in uvicorn[standard])
+# websockets>=12.0

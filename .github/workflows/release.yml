@@ -1,0 +1,486 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., v1.4.1)'
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  LLAMA_CPP_VERSION: "b7770"
+  PYTHON_VERSION: "3.11.9"
+  NODE_VERSION: "20"
+
+jobs:
+  # ============================================
+  # Windows CUDA Build
+  # ============================================
+  build-win-cuda:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: GUI/package-lock.json
+
+      - name: Download llama.cpp CUDA binaries
+        shell: pwsh
+        run: |
+          $url = "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-win-cuda-12.4-x64.zip"
+          Write-Host "Downloading: $url"
+          Invoke-WebRequest -Uri $url -OutFile llama-cuda.zip
+          New-Item -ItemType Directory -Force -Path middleware/bin/win-cuda
+          Expand-Archive -Path llama-cuda.zip -DestinationPath middleware/bin/win-cuda -Force
+          # 处理可能的嵌套目录
+          $nested = Get-ChildItem middleware/bin/win-cuda -Directory | Where-Object { $_.Name -like "llama-*" }
+          if ($nested) {
+            Get-ChildItem $nested.FullName | Move-Item -Destination middleware/bin/win-cuda -Force
+            Remove-Item $nested.FullName -Recurse
+          }
+          Get-ChildItem middleware/bin/win-cuda
+
+      - name: Setup Embedded Python
+        shell: pwsh
+        run: |
+          $url = "https://www.python.org/ftp/python/${{ env.PYTHON_VERSION }}/python-${{ env.PYTHON_VERSION }}-embed-amd64.zip"
+          Write-Host "Downloading Python: $url"
+          Invoke-WebRequest -Uri $url -OutFile python-embed.zip
+          Expand-Archive -Path python-embed.zip -DestinationPath python_env -Force
+          
+          # Enable site-packages
+          $pthFile = Get-ChildItem -Path python_env -Filter "python*._pth"
+          (Get-Content $pthFile.FullName) -replace '#import site', 'import site' | Set-Content $pthFile.FullName
+          
+          # Install pip
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile get-pip.py
+          python_env/python.exe get-pip.py --no-warn-script-location
+          
+          # Install dependencies (包含 server 模块)
+          python_env/python.exe -m pip install -r middleware/requirements.txt --target python_env/Lib/site-packages --no-warn-script-location
+          python_env/python.exe -m pip install -r middleware/server/requirements.txt --target python_env/Lib/site-packages --no-warn-script-location
+
+      - name: Install Node dependencies
+        working-directory: GUI
+        run: npm ci
+
+      - name: Build
+        working-directory: GUI
+        run: npm run build:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rename artifact
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          Get-ChildItem GUI/dist/*.exe | ForEach-Object {
+            $newName = $_.Name -replace '\.exe$', "-cuda-x64.exe"
+            Rename-Item $_.FullName -NewName $newName
+          }
+
+      - name: Copy docs and license
+        shell: pwsh
+        run: |
+          Copy-Item ".github/release-docs/README-windows-cuda.md" -Destination "GUI/dist/README.md"
+          Copy-Item "LICENSE" -Destination "GUI/dist/murasaki-translator.LICENSE.txt"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Murasaki-win-cuda-x64
+          path: |
+            GUI/dist/*-cuda-x64.exe
+            GUI/dist/README.md
+            GUI/dist/murasaki-translator.LICENSE.txt
+          retention-days: 7
+
+  # ============================================
+  # Windows Vulkan Build
+  # ============================================
+  build-win-vulkan:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: GUI/package-lock.json
+
+      - name: Download llama.cpp Vulkan binaries
+        shell: pwsh
+        run: |
+          $url = "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-win-vulkan-x64.zip"
+          Write-Host "Downloading: $url"
+          Invoke-WebRequest -Uri $url -OutFile llama-vulkan.zip
+          New-Item -ItemType Directory -Force -Path middleware/bin/win-vulkan
+          Expand-Archive -Path llama-vulkan.zip -DestinationPath middleware/bin/win-vulkan -Force
+          # 处理可能的嵌套目录
+          $nested = Get-ChildItem middleware/bin/win-vulkan -Directory | Where-Object { $_.Name -like "llama-*" }
+          if ($nested) {
+            Get-ChildItem $nested.FullName | Move-Item -Destination middleware/bin/win-vulkan -Force
+            Remove-Item $nested.FullName -Recurse
+          }
+
+      - name: Setup Embedded Python
+        shell: pwsh
+        run: |
+          $url = "https://www.python.org/ftp/python/${{ env.PYTHON_VERSION }}/python-${{ env.PYTHON_VERSION }}-embed-amd64.zip"
+          Invoke-WebRequest -Uri $url -OutFile python-embed.zip
+          Expand-Archive -Path python-embed.zip -DestinationPath python_env -Force
+          $pthFile = Get-ChildItem -Path python_env -Filter "python*._pth"
+          (Get-Content $pthFile.FullName) -replace '#import site', 'import site' | Set-Content $pthFile.FullName
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile get-pip.py
+          python_env/python.exe get-pip.py --no-warn-script-location
+          python_env/python.exe -m pip install -r middleware/requirements.txt --target python_env/Lib/site-packages --no-warn-script-location
+          python_env/python.exe -m pip install -r middleware/server/requirements.txt --target python_env/Lib/site-packages --no-warn-script-location
+
+      - name: Install & Build
+        working-directory: GUI
+        run: |
+          npm ci
+          npm run build:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rename artifact
+        shell: pwsh
+        run: |
+          Get-ChildItem GUI/dist/*.exe | ForEach-Object {
+            $newName = $_.Name -replace '\.exe$', "-vulkan-x64.exe"
+            Rename-Item $_.FullName -NewName $newName
+          }
+
+      - name: Copy docs and license
+        shell: pwsh
+        run: |
+          Copy-Item ".github/release-docs/README-windows-vulkan.md" -Destination "GUI/dist/README.md"
+          Copy-Item "LICENSE" -Destination "GUI/dist/murasaki-translator.LICENSE.txt"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Murasaki-win-vulkan-x64
+          path: |
+            GUI/dist/*-vulkan-x64.exe
+            GUI/dist/README.md
+            GUI/dist/murasaki-translator.LICENSE.txt
+
+  # ============================================
+  # macOS Build (Universal)
+  # ============================================
+  build-mac:
+    runs-on: macos-14  # Apple Silicon runner
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: GUI/package-lock.json
+
+      - name: Download llama.cpp macOS binaries
+        run: |
+          # Metal (ARM64) - 使用 tar.gz
+          curl -L -o llama-metal.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-macos-arm64.tar.gz"
+          mkdir -p middleware/bin/darwin-metal
+          tar -xzf llama-metal.tar.gz -C middleware/bin/darwin-metal --strip-components=1 || tar -xzf llama-metal.tar.gz -C middleware/bin/darwin-metal
+          chmod +x middleware/bin/darwin-metal/llama-server 2>/dev/null || chmod +x middleware/bin/darwin-metal/*/llama-server 2>/dev/null || true
+          # 处理可能的嵌套目录
+          if [ -d "middleware/bin/darwin-metal/build" ]; then
+            mv middleware/bin/darwin-metal/build/bin/* middleware/bin/darwin-metal/ 2>/dev/null || true
+          fi
+          find middleware/bin/darwin-metal -name "llama-server" -exec chmod +x {} \;
+          
+          # x64 (Intel) - 使用 tar.gz
+          curl -L -o llama-x64.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-macos-x64.tar.gz"
+          mkdir -p middleware/bin/darwin-x64
+          tar -xzf llama-x64.tar.gz -C middleware/bin/darwin-x64 --strip-components=1 || tar -xzf llama-x64.tar.gz -C middleware/bin/darwin-x64
+          find middleware/bin/darwin-x64 -name "llama-server" -exec chmod +x {} \;
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv pip install --system -r middleware/requirements.txt
+
+      - name: Build Python Engine (PyInstaller)
+        run: |
+          uv pip install --system pyinstaller
+          cd middleware
+          
+          # 创建 PyInstaller spec 用于打包
+          pyinstaller --onefile --name murasaki-engine \
+            --hidden-import opencc \
+            --hidden-import chardet \
+            --hidden-import regex \
+            --hidden-import pynvml \
+            --hidden-import lxml \
+            --hidden-import lxml.etree \
+            --hidden-import ebooklib \
+            --hidden-import ebooklib.epub \
+            --collect-all opencc \
+            --add-data "murasaki_translator:murasaki_translator" \
+            --add-data "rule_processor.py:." \
+            murasaki_translator/main.py
+          
+          # 移动到 bin 目录供 Electron 使用
+          mkdir -p bin/python-bundle
+          mv dist/murasaki-engine bin/python-bundle/
+          chmod +x bin/python-bundle/murasaki-engine
+          
+          echo "Built Python bundle:"
+          ls -la bin/python-bundle/
+
+      - name: Install Node dependencies
+        working-directory: GUI
+        run: npm ci
+
+      - name: Build for ARM64
+        working-directory: GUI
+        run: npm run build -- --mac --arm64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build for x64
+        working-directory: GUI
+        run: npm run build -- --mac --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy docs and license
+        run: |
+          cp .github/release-docs/README-macos.md GUI/dist/README.md
+          cp LICENSE GUI/dist/murasaki-translator.LICENSE.txt
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Murasaki-mac
+          path: |
+            GUI/dist/*.dmg
+            GUI/dist/*-mac*.zip
+            GUI/dist/README.md
+            GUI/dist/murasaki-translator.LICENSE.txt
+
+  # ============================================
+  # Linux Build (GUI + CLI)
+  # ============================================
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: GUI/package-lock.json
+
+      - name: Download llama.cpp Linux binaries
+        run: |
+          # 使用 tar.gz 格式
+          curl -L -o llama-vulkan.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-ubuntu-vulkan-x64.tar.gz"
+          mkdir -p middleware/bin/linux-vulkan
+          tar -xzf llama-vulkan.tar.gz -C middleware/bin/linux-vulkan --strip-components=1 || tar -xzf llama-vulkan.tar.gz -C middleware/bin/linux-vulkan
+          # 处理可能的嵌套目录
+          if [ -d "middleware/bin/linux-vulkan/build" ]; then
+            mv middleware/bin/linux-vulkan/build/bin/* middleware/bin/linux-vulkan/ 2>/dev/null || true
+          fi
+          find middleware/bin/linux-vulkan -name "llama-server" -exec chmod +x {} \;
+          ls -la middleware/bin/linux-vulkan/
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv pip install --system -r middleware/requirements.txt
+
+      - name: Install Node dependencies
+        working-directory: GUI
+        run: npm ci
+
+      - name: Build GUI
+        working-directory: GUI
+        run: npm run build -- --linux --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package CLI Server
+        run: |
+          mkdir -p dist-cli/murasaki-server
+          cp -r middleware/bin dist-cli/murasaki-server/
+          cp -r middleware/murasaki_translator dist-cli/murasaki-server/
+          cp -r middleware/openai_proxy dist-cli/murasaki-server/
+          cp -r middleware/server dist-cli/murasaki-server/
+          cp middleware/cli/murasaki_server.py dist-cli/murasaki-server/
+          cp middleware/requirements.txt dist-cli/murasaki-server/
+          # 添加缺失的依赖文件
+          cp middleware/rule_processor.py dist-cli/murasaki-server/
+          # 合并 requirements（确保换行符）
+          echo "" >> dist-cli/murasaki-server/requirements.txt
+          cat middleware/openai_proxy/requirements.txt >> dist-cli/murasaki-server/requirements.txt
+          echo "" >> dist-cli/murasaki-server/requirements.txt
+          cat middleware/server/requirements.txt >> dist-cli/murasaki-server/requirements.txt
+          
+          # 创建启动脚本
+          cat > dist-cli/murasaki-server/start.sh << 'EOF'
+          #!/bin/bash
+          cd "$(dirname "$0")"
+          
+          # 检查 Python 依赖
+          if ! python3 -c "import fastapi" 2>/dev/null; then
+            echo "Installing dependencies..."
+            pip3 install -r requirements.txt
+            pip3 install fastapi uvicorn httpx
+          fi
+          
+          python3 murasaki_server.py "$@"
+          EOF
+          chmod +x dist-cli/murasaki-server/start.sh
+          chmod +x dist-cli/murasaki-server/bin/linux-vulkan/llama-server
+          
+          # 创建 README
+          cat > dist-cli/murasaki-server/README.md << 'EOF'
+          # Murasaki Translator CLI Server
+          
+          OpenAI 兼容的翻译 API 服务器。
+          
+          ## 快速开始
+          
+          ```bash
+          # 1. 安装依赖
+          pip3 install -r requirements.txt
+          pip3 install fastapi uvicorn httpx
+          
+          # 2. 运行服务器
+          ./start.sh --model /path/to/model.gguf --port 8000
+          
+          # 或者直接运行
+          python3 murasaki_server.py --model /path/to/model.gguf
+          ```
+          
+          ## API 端点
+          
+          - `POST /v1/chat/completions` - Chat Completions (OpenAI 兼容)
+          - `GET /v1/models` - 模型列表
+          - `GET /health` - 健康检查
+          
+          ## 测试
+          
+          ```bash
+          curl http://localhost:8000/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d '{"model":"local","messages":[{"role":"user","content":"翻译：こんにちは"}]}'
+          ```
+          EOF
+          
+          # 添加 README 和 LICENSE
+          cp .github/release-docs/README-linux-cli.md dist-cli/murasaki-server/README.md
+          cp LICENSE dist-cli/murasaki-server/murasaki-translator.LICENSE.txt
+          
+          # 打包
+          cd dist-cli
+          tar -czvf murasaki-server-linux-x64.tar.gz murasaki-server
+
+      - name: Copy docs and license for GUI
+        run: |
+          cp .github/release-docs/README-linux-gui.md GUI/dist/README.md
+          cp LICENSE GUI/dist/murasaki-translator.LICENSE.txt
+
+      - name: Upload GUI Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Murasaki-linux-x64
+          path: |
+            GUI/dist/*.AppImage
+            GUI/dist/*.tar.gz
+            GUI/dist/README.md
+            GUI/dist/murasaki-translator.LICENSE.txt
+
+      - name: Upload CLI Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Murasaki-server-linux-x64
+          path: dist-cli/*.tar.gz
+
+  # ============================================
+  # Create GitHub Release
+  # ============================================
+  release:
+    needs: [build-win-cuda, build-win-vulkan, build-mac, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.tar.gz" \) -exec cp {} release-assets/ \;
+          
+          # 复制主 LICENSE (每个 artifact 已包含版本特定的 README)
+          cp LICENSE release-assets/murasaki-translator.LICENSE.txt
+          
+          echo "Release assets:"
+          ls -la release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          generate_release_notes: true
+          body: |
+            ## Downloads
+            
+            | Platform | GPU | File |
+            |----------|-----|------|
+            | Windows | NVIDIA (CUDA) | `*-cuda-x64.exe` |
+            | Windows | AMD/Intel (Vulkan) | `*-vulkan-x64.exe` |
+            | macOS | Apple Silicon (Metal) | `*-arm64.dmg` |
+            | macOS | Intel | `*-x64.dmg` |
+            | Linux | GUI (Vulkan) | `*.AppImage` |
+            | Linux | CLI Server | `murasaki-server-*.tar.gz` |
+            
+            ## Linux CLI Server
+            
+            For headless server deployment with OpenAI-compatible API:
+            ```bash
+            tar -xzf murasaki-server-linux-x64.tar.gz
+            cd murasaki-server
+            ./start.sh --model /path/to/model.gguf --port 8000
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

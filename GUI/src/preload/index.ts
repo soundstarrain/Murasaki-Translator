@@ -52,6 +52,9 @@ const api = {
     // Update System
     checkUpdate: () => ipcRenderer.invoke('check-update'),
 
+    // Debug Export
+    readServerLog: () => ipcRenderer.invoke('read-server-log'),
+
     // Theme Sync (for Windows title bar)
     setTheme: (theme: 'dark' | 'light') => ipcRenderer.send('set-theme', theme),
 
@@ -72,6 +75,18 @@ const api = {
     onTermExtractProgress: (callback: (progress: number) => void) =>
         ipcRenderer.on('term-extract-progress', (_event, value) => callback(value)),
     removeTermExtractProgressListener: () => ipcRenderer.removeAllListeners('term-extract-progress'),
+
+    // Remote Server
+    remoteConnect: (config: { url: string; apiKey?: string }) => ipcRenderer.invoke('remote-connect', config),
+    remoteDisconnect: () => ipcRenderer.invoke('remote-disconnect'),
+    remoteStatus: () => ipcRenderer.invoke('remote-status'),
+    remoteModels: () => ipcRenderer.invoke('remote-models'),
+    remoteGlossaries: () => ipcRenderer.invoke('remote-glossaries'),
+    remoteTranslate: (options: any) => ipcRenderer.invoke('remote-translate', options),
+    remoteTaskStatus: (taskId: string) => ipcRenderer.invoke('remote-task-status', taskId),
+    remoteCancel: (taskId: string) => ipcRenderer.invoke('remote-cancel', taskId),
+    remoteUpload: (filePath: string) => ipcRenderer.invoke('remote-upload', filePath),
+    remoteDownload: (taskId: string, savePath: string) => ipcRenderer.invoke('remote-download', taskId, savePath),
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
