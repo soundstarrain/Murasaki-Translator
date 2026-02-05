@@ -24,37 +24,23 @@
       "output": "dist"
     },
     "win": {
-      "target": "nsis",
+      "target": "zip",
       "icon": "resources/icon.png"
     },
     "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
+      "target": "dmg",
       "icon": "resources/icon.icns",
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
       "gatekeeperAssess": false
     },
     "linux": {
-      "target": [
-        "AppImage",
-        "tar.gz"
-      ],
+      "target": "AppImage",
       "icon": "resources/icon.png",
       "category": "Office"
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "installerLanguages": [
-        "zh_CN",
-        "en_US",
-        "ja_JP"
-      ],
-      "language": "2052"
-    },
+    "generateUpdatesFilesForAllChannels": false,
+    "publish": null,
     "electronLanguages": [
       "zh-CN",
       "en-US",

@@ -84,26 +84,20 @@ jobs:
       - name: Rename artifact
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
-          Get-ChildItem GUI/dist/*.exe | ForEach-Object {
-            $newName = $_.Name -replace '\.exe$', "-cuda-x64.exe"
+          # 将 LICENSE 和 README 复制到 dist 目录（electron-builder 会打包进 zip）
+          Copy-Item "LICENSE" -Destination "GUI/dist/LICENSE.txt"
+          Copy-Item ".github/release-docs/README-windows-cuda.md" -Destination "GUI/dist/README.md"
+          # 重命名 zip 文件
+          Get-ChildItem GUI/dist/*.zip | ForEach-Object {
+            $newName = "Murasaki-Translator-${{ github.ref_name }}-win-cuda-x64.zip"
             Rename-Item $_.FullName -NewName $newName
           }
-
-      - name: Copy docs and license
-        shell: pwsh
-        run: |
-          Copy-Item ".github/release-docs/README-windows-cuda.md" -Destination "GUI/dist/README.md"
-          Copy-Item "LICENSE" -Destination "GUI/dist/murasaki-translator.LICENSE.txt"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Murasaki-win-cuda-x64
-          path: |
-            GUI/dist/*-cuda-x64.exe
-            GUI/dist/README.md
-            GUI/dist/murasaki-translator.LICENSE.txt
+          path: GUI/dist/*-cuda-x64.zip
           retention-days: 7
 
   # ============================================
@@ -161,25 +155,21 @@ jobs:
       - name: Rename artifact
         shell: pwsh
         run: |
-          Get-ChildItem GUI/dist/*.exe | ForEach-Object {
-            $newName = $_.Name -replace '\.exe$', "-vulkan-x64.exe"
+          # 将 LICENSE 和 README 复制到 dist 目录
+          Copy-Item "LICENSE" -Destination "GUI/dist/LICENSE.txt"
+          Copy-Item ".github/release-docs/README-windows-vulkan.md" -Destination "GUI/dist/README.md"
+          # 重命名 zip 文件
+          Get-ChildItem GUI/dist/*.zip | ForEach-Object {
+            $newName = "Murasaki-Translator-${{ github.ref_name }}-win-vulkan-x64.zip"
             Rename-Item $_.FullName -NewName $newName
           }
-
-      - name: Copy docs and license
-        shell: pwsh
-        run: |
-          Copy-Item ".github/release-docs/README-windows-vulkan.md" -Destination "GUI/dist/README.md"
-          Copy-Item "LICENSE" -Destination "GUI/dist/murasaki-translator.LICENSE.txt"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Murasaki-win-vulkan-x64
-          path: |
-            GUI/dist/*-vulkan-x64.exe
-            GUI/dist/README.md
-            GUI/dist/murasaki-translator.LICENSE.txt
+          path: GUI/dist/*-vulkan-x64.zip
+          retention-days: 7
 
   # ============================================
   # macOS Build (Universal)
@@ -275,20 +265,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Copy docs and license
-        run: |
-          cp .github/release-docs/README-macos.md GUI/dist/README.md
-          cp LICENSE GUI/dist/murasaki-translator.LICENSE.txt
-
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Murasaki-mac
-          path: |
-            GUI/dist/*.dmg
-            GUI/dist/*-mac*.zip
-            GUI/dist/README.md
-            GUI/dist/murasaki-translator.LICENSE.txt
+          path: GUI/dist/*.dmg
+          retention-days: 7
 
   # ============================================
   # Linux Build (GUI + CLI)
@@ -420,20 +402,12 @@ jobs:
           cd dist-cli
           tar -czvf murasaki-server-linux-x64.tar.gz murasaki-server
 
-      - name: Copy docs and license for GUI
-        run: |
-          cp .github/release-docs/README-linux-gui.md GUI/dist/README.md
-          cp LICENSE GUI/dist/murasaki-translator.LICENSE.txt
-
       - name: Upload GUI Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Murasaki-linux-x64
-          path: |
-            GUI/dist/*.AppImage
-            GUI/dist/*.tar.gz
-            GUI/dist/README.md
-            GUI/dist/murasaki-translator.LICENSE.txt
+          path: GUI/dist/*.AppImage
+          retention-days: 7
 
       - name: Upload CLI Artifact
         uses: actions/upload-artifact@v4
@@ -460,10 +434,8 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
-          find artifacts -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.tar.gz" \) -exec cp {} release-assets/ \;
-          
-          # 复制主 LICENSE (每个 artifact 已包含版本特定的 README)
-          cp LICENSE release-assets/murasaki-translator.LICENSE.txt
+          # 只复制需要的文件格式
+          find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.tar.gz" \) -exec cp {} release-assets/ \;
           
           echo "Release assets:"
           ls -la release-assets/
@@ -476,20 +448,20 @@ jobs:
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
           generate_release_notes: true
           body: |
-            ## Downloads
+            ## 📦 下载说明
             
-            | Platform | GPU | File |
-            |----------|-----|------|
-            | Windows | NVIDIA (CUDA) | `*-cuda-x64.exe` |
-            | Windows | AMD/Intel (Vulkan) | `*-vulkan-x64.exe` |
-            | macOS | Apple Silicon (Metal) | `*-arm64.dmg` |
-            | macOS | Intel | `*-x64.dmg` |
+            | 平台 | GPU | 文件 |
+            |------|-----|------|
+            | Windows | NVIDIA (CUDA) | `*-win-cuda-x64.zip` |
+            | Windows | AMD/Intel (Vulkan) | `*-win-vulkan-x64.zip` |
+            | macOS | Apple Silicon | `*-arm64.dmg` |
+            | macOS | Intel | `*.dmg` (无 arm64 后缀) |
             | Linux | GUI (Vulkan) | `*.AppImage` |
-            | Linux | CLI Server | `murasaki-server-*.tar.gz` |
+            | Linux | CLI 服务器 | `murasaki-server-*.tar.gz` |
             
-            ## Linux CLI Server
+            ## 🖥️ Linux CLI 服务器
             
-            For headless server deployment with OpenAI-compatible API:
+            用于无界面服务器部署，提供 OpenAI 兼容 API：
             ```bash
             tar -xzf murasaki-server-linux-x64.tar.gz
             cd murasaki-server

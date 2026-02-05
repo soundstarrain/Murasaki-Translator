@@ -386,28 +386,99 @@ def calculate_skip_blocks(blocks, existing_lines: int, is_doc_mode: bool = False
 
 
 def get_gpu_name():
+    """跨平台获取 GPU 名称"""
+    import sys as _sys
+    
     try:
-        # Try finding nvidia-smi
-        try:
-            # shell=True sometimes helps on Windows if PATH is weird, but usually not needed.
-            # Using 'gb18030' to handle Chinese Windows output correctly
-            result = subprocess.check_output("nvidia-smi -L", shell=True, stderr=subprocess.STDOUT).decode('gb18030', errors='ignore')
-        except:
-             return "Unknown / CPU (nvidia-smi failed)"
-
-        names = []
-        for line in result.strip().split('\n'):
-            if ":" in line and "GPU" in line:
-                # Format: GPU 0: NVIDIA GeForce RTX 3090 (UUID: ...)
-                # Split by ':' -> ["GPU 0", " NVIDIA GeForce RTX 3090 (UUID", " ...)"]
-                parts = line.split(":")
-                if len(parts) >= 2:
-                    name_part = parts[1].strip()
-                    # Remove UUID part if exists
-                    if "(" in name_part:
-                        name_part = name_part.split("(")[0].strip()
-                    names.append(name_part)
-        return " & ".join(names) if names else "Unknown GPU"
+        if _sys.platform == 'darwin':
+            # macOS: 使用 system_profiler
+            try:
+                import json as _json
+                result = subprocess.run(
+                    ['system_profiler', 'SPDisplaysDataType', '-json'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    data = _json.loads(result.stdout)
+                    displays = data.get('SPDisplaysDataType', [])
+                    for display in displays:
+                        name = display.get('sppci_model', '')
+                        if name:
+                            return name
+            except Exception:
+                pass
+            return "Apple GPU (Metal)"
+        
+        elif _sys.platform == 'win32':
+            # Windows: 优先 nvidia-smi，回退 wmic
+            try:
+                result = subprocess.check_output(
+                    "nvidia-smi -L", 
+                    shell=True, 
+                    stderr=subprocess.STDOUT
+                ).decode('gb18030', errors='ignore')
+                
+                names = []
+                for line in result.strip().split('\n'):
+                    if ":" in line and "GPU" in line:
+                        parts = line.split(":")
+                        if len(parts) >= 2:
+                            name_part = parts[1].strip()
+                            if "(" in name_part:
+                                name_part = name_part.split("(")[0].strip()
+                            names.append(name_part)
+                if names:
+                    return " & ".join(names)
+            except Exception:
+                pass
+            
+            # 回退到 wmic
+            try:
+                result = subprocess.run(
+                    ['wmic', 'path', 'win32_VideoController', 'get', 'Name', '/format:csv'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    lines = [l.strip() for l in result.stdout.strip().split('\n') if l.strip() and 'Node' not in l]
+                    for line in lines:
+                        parts = line.split(',')
+                        if len(parts) >= 2:
+                            name = parts[-1].strip()
+                            if name and 'Microsoft' not in name and 'Basic' not in name:
+                                return name
+            except Exception:
+                pass
+            return "Unknown GPU (Windows)"
+        
+        else:
+            # Linux: 优先 nvidia-smi，回退 lspci
+            try:
+                result = subprocess.run(
+                    ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    return result.stdout.strip().split('\n')[0]
+            except Exception:
+                pass
+            
+            # 回退到 lspci
+            try:
+                result = subprocess.run(['lspci'], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if 'VGA' in line or '3D' in line:
+                            return line.split(':')[-1].strip()
+            except Exception:
+                pass
+            return "Unknown GPU (Linux)"
+    
     except Exception as e:
         return f"Unknown / CPU (Error: {str(e)})"
 
