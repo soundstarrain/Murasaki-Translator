@@ -158,34 +158,53 @@ def _get_linux_gpu_info():
 
 
 def _get_nvidia_gpu_info():
-    """获取 NVIDIA GPU 信息 (跨平台)"""
-    try:
-        # 获取 GPU 名称
-        name_result = subprocess.run(
-            ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        # 获取显存
-        vram_result = subprocess.run(
-            ['nvidia-smi', '--query-gpu=memory.total', '--format=csv,noheader,nounits'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        if name_result.returncode == 0 and vram_result.returncode == 0:
-            name = name_result.stdout.strip().split('\n')[0]
-            vram_mb = int(vram_result.stdout.strip().split('\n')[0])
-            return {
-                "name": name,
-                "vram_gb": round(vram_mb / 1024, 1),
-                "backend": "cuda",
-                "is_unified_memory": False
-            }
-    except Exception:
-        pass
+    """获取 NVIDIA GPU 信息 (跨平台 + Windows 多路径)"""
+    import shutil
+    import sys
+    
+    # Windows 上 nvidia-smi 可能不在 PATH 中
+    nvidia_smi_paths = ['nvidia-smi']
+    if sys.platform == 'win32':
+        nvidia_smi_paths.extend([
+            r'C:\Windows\System32\nvidia-smi.exe',
+            r'C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe'
+        ])
+    
+    for nvidia_smi in nvidia_smi_paths:
+        try:
+            # 检查命令是否存在
+            import os
+            if not os.path.isabs(nvidia_smi) and not shutil.which(nvidia_smi):
+                continue
+            if os.path.isabs(nvidia_smi) and not os.path.exists(nvidia_smi):
+                continue
+            
+            # 获取 GPU 名称
+            name_result = subprocess.run(
+                [nvidia_smi, '--query-gpu=name', '--format=csv,noheader'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            # 获取显存
+            vram_result = subprocess.run(
+                [nvidia_smi, '--query-gpu=memory.total', '--format=csv,noheader,nounits'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if name_result.returncode == 0 and vram_result.returncode == 0:
+                name = name_result.stdout.strip().split('\n')[0]
+                vram_mb = int(vram_result.stdout.strip().split('\n')[0])
+                return {
+                    "name": name,
+                    "vram_gb": round(vram_mb / 1024, 1),
+                    "backend": "cuda",
+                    "is_unified_memory": False
+                }
+        except Exception:
+            continue
     
     return {"name": "", "vram_gb": 0, "backend": "cpu", "is_unified_memory": False}
 

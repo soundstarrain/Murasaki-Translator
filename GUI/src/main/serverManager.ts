@@ -120,10 +120,11 @@ export class ServerManager {
 
         if (this.deviceMode === 'cpu') {
             args.push('-ngl', '0') // n-gpu-layers
-        } else if (config.gpuLayers) {
-            args.push('-ngl', config.gpuLayers)
+            console.log('[ServerManager] Mode: CPU Only')
         } else {
-            args.push('-ngl', '999') // Default max offload
+            const gpuLayers = config.gpuLayers !== undefined ? config.gpuLayers : -1
+            args.push('-ngl', gpuLayers.toString())
+            console.log(`[ServerManager] Mode: GPU with ${gpuLayers} layers`)
         }
 
         const parallelCount = (config.concurrency || 1).toString()

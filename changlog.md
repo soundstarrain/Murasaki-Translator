@@ -1,5 +1,52 @@
 # Murasaki Translator - Changelog
 
+## [1.5.0] - 2026-02-08
+
+### 跨平台支持 (Cross-Platform Support)
+
+*   **macOS 原生支持**：新增 Apple Silicon (M1/M2/M3/M4) 和 Intel Mac 支持，使用 Metal 加速。统一内存架构下，16GB+ 内存即可流畅运行。
+*   **Linux 桌面支持**：提供 AppImage 格式，开箱即用。支持 NVIDIA (CUDA) 和 AMD/Intel (Vulkan) 显卡。
+*   **Windows Vulkan 版本**：新增 AMD/Intel 显卡支持版本，不再强制依赖 NVIDIA。
+
+### Linux CLI 服务端 (Linux Server)
+
+*   **无界面服务器部署**：新增 `murasaki-server` 命令行版本，专为 Linux 服务器设计。
+*   **OpenAI 兼容 API**：提供标准 API 接口，可与任意前端集成，适用于远程推理场景。
+*   **使用方法**：
+    ```bash
+    tar -xzf murasaki-server-linux-x64.tar.gz
+    cd murasaki-server
+    ./start.sh --model /path/to/model.gguf --port 8000
+    ```
+
+### Prompt 预设系统重构 - 兼容 Murasaki v0.2 (Preset System Refactor)
+
+*   **为 Murasaki v0.2 模型优化**：本次重构专为适配 Murasaki 模型系列 v0.2 版本设计，确保新版模型开箱即用。
+*   **策略模式重构**：将 `prompt.py` 的 if-elif 链式判断改为字典策略模式 (`PRESET_PROMPTS`)，新增预设只需添加字典项，无需修改核心逻辑。
+*   **预设命名统一**：前后端 Preset 参数完全对齐 `[novel, script, short]`，替换旧版 `[minimal, training, short]`。
+*   **UI 说明更新**：轻小说模式适合所有小说和连贯性长文本；剧本模式适合 Galgame、动画字幕、漫画；单句模式（不推荐）。
+
+### 模型识别增强 (Model Detection Enhancement)
+
+*   **IQ 系列量化支持**：修复 IQ1_S/M、IQ2_XXS/XS/S/M、IQ3_XXS/XS/S/M、IQ4_XXS/XS/NL 等量化格式无法识别的问题。
+*   **动态输出命名**：输出文件名从硬编码 `_Murasaki-8B-v0.1_novel_doc` 改为动态 `_<模型文件名>`，自动适配不同版本模型。
+*   **跨平台路径处理**：增强 Windows/POSIX 路径分隔符兼容，防止模型路径含 `\` 或 `/` 时解析失败。
+
+### 底层优化 (Core Improvements)
+
+*   **跨平台 GPU 检测**：重构硬件检测模块，自动识别并适配 NVIDIA/AMD/Intel/Apple Silicon 显卡。
+*   **硬件监控扩展**：仪表盘现支持所有平台的 GPU 状态显示（Apple Silicon 显示统一内存使用情况）。
+*   **打包体积优化**：精简 Release 产物，移除冗余文件。
+*   **循环检测阈值**：默认阈值从 20 提高到 40，减少对正常重复内容的误判。
+
+### 代码质量 (Code Quality)
+
+*   **TypeScript Lint 修复**：修复了大量 TypeScript 格式和类型检查错误，提升代码规范性。
+*   **同步维护标注**：为前后端重复的 `QUANT_PATTERNS` 正则添加 `KEEP IN SYNC WITH` 注释，防止修改时遗漏同步。
+
+---
+
+
 ## [1.4.0] - 2026-01-31
 
 ### 术语表自动提取 (Term Extraction)

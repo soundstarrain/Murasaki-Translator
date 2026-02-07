@@ -4,6 +4,38 @@ import json
 import re
 from typing import List, Dict, Optional
 
+# ============================================================
+# Prompt 预设配置 (策略模式)
+# 新增预设时只需在此字典中添加，无需修改 build_messages 逻辑
+# ============================================================
+PRESET_PROMPTS: Dict[str, str] = {
+    "novel": (
+        "你是一位精通二次元文化的资深轻小说翻译家。\n"
+        "请将日文文本翻译成流畅、优美的中文。\n\n"
+        "**核心要求：**\n"
+        "1. **深度思考：** 在翻译前，先在 <think> 标签中分析文风、补全主语并梳理逻辑。\n"
+        "2. **信达雅：** 译文需符合中文轻小说阅读习惯，还原原作的沉浸感与文学性。"
+    ),
+    "script": (
+        "你是一位专注于 Galgame 与动漫台词的本地化专家。\n"
+        "请将剧本/台词翻译为地道的中文口语。\n\n"
+        "**核心要求：**\n"
+        "1. **角色还原：** 结合语境分析说话人的性格（如傲娇、腹黑），精准还原语气与口癖。\n"
+        "2. **拒绝翻译腔：** 译文必须自然生动，符合「能被读出来的台词」标准。"
+    ),
+    "short": (
+        "你是一个严谨的 ACGN 短句翻译引擎。\n"
+        "请对输入的日文短句进行精准直译。\n\n"
+        "**核心要求：**\n"
+        "1. **零上下文：** 严禁脑补不存在的背景或主语。指代不明时保持模糊。\n"
+        "2. **精准还原：** 忠实保留原文的结构与信息量，不进行过度润色。"
+    ),
+}
+
+# 默认预设（当指定的 preset 不存在时回退）
+DEFAULT_PRESET = "novel"
+
+
 class PromptBuilder:
     def __init__(self, glossary: Dict[str, str] = None):
         self.glossary = glossary or {}
@@ -23,59 +55,29 @@ class PromptBuilder:
         # 限制数量，防止 Prompt 过长 (Top 20)
         return dict(list(extracted.items())[:20])
 
-    def build_messages(self, block_text: str, preset: str = "training", enable_cot: bool = False) -> List[Dict]:
+    def build_messages(self, block_text: str, preset: str = "novel", enable_cot: bool = False) -> List[Dict]:
         """
         构造 Prompt 消息
-        :param preset: "minimal" (极简) 或 "training" (训练格式)
+        :param preset: "novel" (轻小说) / "script" (剧本) / "short" (单句)
         :param enable_cot: 是否开启 CoT (Debug 用)
         """
         # 1. 动态提取术语
         relevant_glossary = self._extract_glossary(block_text)
         
-        # Optimize Injection Format: Remove outer braces to match training format
-        # Format: "Key": "Value", "Key2": "Value2"
+        # 2. 构建术语表字符串
         glossary_str = ""
         if relevant_glossary:
-            # Manually construct string to ensure control over formatting
             items = [f'"{k}": "{v}"' for k, v in relevant_glossary.items()]
             glossary_str = ", ".join(items)
-        else:
-            glossary_str = "(无)"
 
-        system_content = ""
+        # 3. 使用策略模式获取 System Prompt
+        system_content = PRESET_PROMPTS.get(preset, PRESET_PROMPTS[DEFAULT_PRESET])
 
-        if preset == "minimal":
-            # Preset 1: 极简模式
-            system_content = (
-                "你是一位精通二次元文化的资深轻小说翻译家。请将以下日文文本翻译成中文。"
-                "要求：保持原文的段落结构和换行，不要随意合并段落。"
-            )
-            if relevant_glossary:
-                 system_content += f"\n\n【强制术语表】\n{glossary_str}"
+        # 4. 统一术语表追加逻辑：存在术语时才添加
+        if relevant_glossary:
+            system_content += f"\n\n【术语表】\n{glossary_str}"
 
-        elif preset == "training":
-            # Preset 2: 训练格式
-            system_content = (
-                "你是一位精通二次元文化的资深轻小说翻译家。\n\n"
-                f"【强制术语表】\n{glossary_str}\n\n"
-                "**任务要求：**\n"
-                "1. **文风自适应：** 根据原文判断作品风格（异世界/校园/严肃等）并定调。\n"
-                "2. **隐形参考：** 译文需参考人类译文，但在思维链中严禁提及“参考译文”。\n"
-                "3. **逻辑推导：** 必须分析省略主语、指代关系和倒装句。"
-            )
-
-        elif preset == "short":
-            # Preset 3: 短文本模式
-            system_content = (
-                "你是一个严谨的二次元短句翻译引擎。\n\n"
-                "**任务要求：**\n"
-                "1. **零上下文：** 严禁脑补前文背景，指代不明时保持模糊。\n"
-                "2. **精准直译：** 捕捉句尾语气词（ね/よ/ぞ），拒绝过度意译。"
-            )
-            if relevant_glossary:
-                 system_content += f"\n\n【强制术语表】\n{glossary_str}"
-            
-        # 3. 组装
+        # 5. 组装消息
         messages = [
             {"role": "system", "content": system_content},
             {"role": "user", "content": f"请翻译：\n{block_text}"}

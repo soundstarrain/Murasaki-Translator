@@ -49,7 +49,6 @@ export interface ModelInfo {
 
 export class RemoteClient {
     private config: RemoteServerConfig
-    private connected: boolean = false
 
     constructor(config: RemoteServerConfig) {
         this.config = {
@@ -65,7 +64,6 @@ export class RemoteClient {
         try {
             const response = await this.fetch('/health')
             if (response.status === 'ok') {
-                this.connected = true
                 return { ok: true, message: 'Connected', version: response.version }
             }
             return { ok: false, message: 'Invalid response' }
@@ -109,7 +107,7 @@ export class RemoteClient {
             file_path: options.filePath,
             model: options.model,
             glossary: options.glossary,
-            preset: options.preset || 'default',
+            preset: options.preset || 'novel',
             mode: options.mode || 'doc',
             chunk_size: options.chunkSize || 1000,
             ctx: options.ctx || 8192,
@@ -171,7 +169,7 @@ export class RemoteClient {
         const form = new FormData()
         form.append('file', fs.createReadStream(filePath), path.basename(filePath))
 
-        const response = await this.fetchFormData('/api/v1/upload/file', form)
+        const response = await this.fetchFormData('/api/v1/upload/file', form) as { file_id: string; file_path: string }
         return {
             fileId: response.file_id,
             serverPath: response.file_path
@@ -298,8 +296,8 @@ export class RemoteClient {
             }
 
             return response.json()
-        } catch (error: any) {
-            if (error.name === 'AbortError') {
+        } catch (error: unknown) {
+            if (error instanceof Error && error.name === 'AbortError') {
                 throw new Error(`Request timeout after ${(this.config.timeout || 300000) / 1000}s`)
             }
             throw error
@@ -308,7 +306,7 @@ export class RemoteClient {
         }
     }
 
-    private async fetchFormData(path: string, form: any): Promise<any> {
+    private async fetchFormData(path: string, form: FormData): Promise<unknown> {
         const url = this.config.url + path
         const headers: Record<string, string> = {}
 

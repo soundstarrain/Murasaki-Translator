@@ -111,6 +111,8 @@ class InferenceEngine:
         if features:
             logger.info(f"High-Fidelity Features Enabled: {', '.join(features)}")
         
+        logger.info(f"[GPU Config] n_gpu_layers={self.n_gpu_layers} (0=CPU only, -1=All layers to GPU)")
+        
         # 将输出重定向到 server.log，保持 GUI 日志清洁
         self.server_log = open("server.log", "w", encoding='utf-8')
         self.process = subprocess.Popen(cmd, stdout=self.server_log, stderr=self.server_log) 
@@ -153,7 +155,8 @@ class InferenceEngine:
                             error_hint = "CUDA Error: Likely Out of Memory (VRAM)."
                         elif "unsupported" in log_tail:
                             error_hint = f"Unsupported parameter or architecture found in logs."
-        except: pass
+        except Exception as e:
+            logger.warning(f"Failed to read server log for error hints: {e}")
         
         raise TimeoutError(f"{error_hint} (Check server.log for details)")
 
@@ -343,7 +346,7 @@ class InferenceEngine:
                                     SAFE_LOOP_CHARS = {'…', '—', '─', '~', '～', '！', '!', '？', '?', '.', '。', ' ', '\n', '　', '啊', 'ー', '”', '’'}
                                     
                                     # Dynamic threshold
-                                    loop_threshold = 20
+                                    loop_threshold = 40
                                     if last_char in SAFE_LOOP_CHARS:
                                         loop_threshold = 80  # Allow much longer stylistic loops
                                     
@@ -374,7 +377,8 @@ class InferenceEngine:
                                         response.close()
                                         break
                                         
-                        except: pass
+                        except Exception as e:
+                            logger.debug(f"Failed to parse usage data from streaming response: {e}")
                     
                     # Fallback Usage Construction
                     if local_last_usage is None:

@@ -665,16 +665,37 @@ def main():
         system = sys.platform
         machine = plt.machine().lower()
         
-        # 跨平台检测 NVIDIA GPU（不硬编码路径）
+        # 跨平台检测 NVIDIA GPU（支持 Windows 多路径）
         def has_nvidia_gpu() -> bool:
-            try:
-                result = subprocess.run(
-                    ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
-                    capture_output=True, text=True, timeout=5
-                )
-                return result.returncode == 0 and bool(result.stdout.strip())
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                return False
+            import shutil
+            # Windows 上 nvidia-smi 可能不在 PATH 中
+            nvidia_smi_paths = ['nvidia-smi']
+            if system == 'win32':
+                nvidia_smi_paths.extend([
+                    r'C:\Windows\System32\nvidia-smi.exe',
+                    r'C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe'
+                ])
+            
+            for nvidia_smi in nvidia_smi_paths:
+                try:
+                    # 检查命令是否存在
+                    if not os.path.isabs(nvidia_smi) and not shutil.which(nvidia_smi):
+                        continue
+                    if os.path.isabs(nvidia_smi) and not os.path.exists(nvidia_smi):
+                        continue
+                    
+                    result = subprocess.run(
+                        [nvidia_smi, '--query-gpu=name', '--format=csv,noheader'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        logger.info(f"NVIDIA GPU detected: {result.stdout.strip()}")
+                        return True
+                except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                    continue
+            
+            logger.info("No NVIDIA GPU detected, using Vulkan/Metal fallback")
+            return False
         
         # 平台映射表
         if system == 'win32':
@@ -733,7 +754,7 @@ def main():
     parser.add_argument("--glossary", help="Glossary JSON path")
     parser.add_argument("--gpu-layers", type=int, default=-1)
     parser.add_argument("--ctx", type=int, default=8192)
-    parser.add_argument("--preset", default="training", choices=["minimal", "training", "short"], help="Prompt preset")
+    parser.add_argument("--preset", default="novel", choices=["novel", "script", "short"], help="Prompt preset: novel (轻小说), script (剧本), short (单句)")
     parser.add_argument("--mode", default="doc", choices=["doc", "line"], help="Translation mode: doc (novel) or line (game/contrast)")
     parser.add_argument("--chunk-size", type=int, default=1000, help="Target char count for doc mode")
     parser.add_argument("--debug", action="store_true", help="Enable CoT stats and timing")
@@ -929,8 +950,10 @@ def main():
         cot_path = f"{base}_cot{ext}"
     else:
         base, ext = os.path.splitext(input_path)
-        # Unified naming format v0.1
-        suffix = f"_Murasaki-8B-v0.1_{args.preset}_{args.mode}"
+        # 动态获取模型名称（从文件名提取，去掉扩展名）
+        model_name = os.path.splitext(os.path.basename(args.model))[0] if args.model else "unknown"
+        # 统一命名格式: 原文件名_模型名称
+        suffix = f"_{model_name}"
         output_path = f"{base}{suffix}{ext}"
         cot_path = f"{base}{suffix}_cot{ext}"
 

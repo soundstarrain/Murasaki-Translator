@@ -501,9 +501,9 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
             setBlockLogs(prev => ({ ...prev, [index]: [] }))
 
             const config = {
-                gpuLayers: localStorage.getItem("config_gpu"),
+                gpuLayers: parseInt(localStorage.getItem("config_gpu") || "-1", 10) || -1,
                 ctxSize: localStorage.getItem("config_ctx") || "4096",
-                preset: localStorage.getItem("config_preset") || "training",
+                preset: localStorage.getItem("config_preset") || "novel",
                 temperature: parseFloat(localStorage.getItem("config_temperature") || "0.7"),
                 repPenaltyBase: parseFloat(localStorage.getItem("config_rep_penalty_base") || "1.0"),
                 repPenaltyMax: parseFloat(localStorage.getItem("config_rep_penalty_max") || "1.5"),

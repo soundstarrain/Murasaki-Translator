@@ -28,18 +28,36 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 def find_llama_server():
     """查找 llama-server 二进制"""
     import subprocess
-    middleware_dir = Path(__file__).parent.parent
+    middleware_dir = Path(__file__).parent.parent  # middleware/ 目录（bin/ 在此下）
     
-    # 跨平台检测 NVIDIA GPU（不硬编码路径）
+    # 跨平台检测 NVIDIA GPU（支持 Windows 多路径）
     def has_nvidia_gpu() -> bool:
-        try:
-            result = subprocess.run(
-                ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
-                capture_output=True, text=True, timeout=5
-            )
-            return result.returncode == 0 and bool(result.stdout.strip())
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
+        import shutil
+        # Windows 上 nvidia-smi 可能不在 PATH 中
+        nvidia_smi_paths = ['nvidia-smi']
+        if sys.platform == 'win32':
+            nvidia_smi_paths.extend([
+                r'C:\Windows\System32\nvidia-smi.exe',
+                r'C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe'
+            ])
+        
+        for nvidia_smi in nvidia_smi_paths:
+            try:
+                if not os.path.isabs(nvidia_smi) and not shutil.which(nvidia_smi):
+                    continue
+                if os.path.isabs(nvidia_smi) and not os.path.exists(nvidia_smi):
+                    continue
+                
+                result = subprocess.run(
+                    [nvidia_smi, '--query-gpu=name', '--format=csv,noheader'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    print(f"[INFO] NVIDIA GPU detected: {result.stdout.strip()}")
+                    return True
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                continue
+        return False
     
     if sys.platform == 'linux':
         # Linux: 有 NVIDIA GPU 则用 CUDA，否则 Vulkan
@@ -125,7 +143,7 @@ class MurasakiServer:
     
     def start_openai_proxy(self):
         """启动 OpenAI 代理"""
-        proxy_dir = Path(__file__).parent.parent / 'openai_proxy'
+        proxy_dir = Path(__file__).parent / 'openai_proxy'
         
         env = os.environ.copy()
         env['LLAMA_SERVER_URL'] = f"http://127.0.0.1:{self.args.llama_port}"
@@ -239,7 +257,7 @@ Linux 部署:
     parser.add_argument('--host', default='0.0.0.0', help='监听地址 (默认 0.0.0.0)')
     parser.add_argument('--llama-port', type=int, default=8080, help='llama-server 内部端口 (默认 8080)')
     parser.add_argument('--ctx', type=int, default=8192, help='上下文长度 (默认 8192)')
-    parser.add_argument('--gpu-layers', type=int, default=999, help='GPU 层数 (默认 999, 全部)')
+    parser.add_argument('--gpu-layers', type=int, default=-1, help='GPU 层数 (默认 -1, 全部)')
     parser.add_argument('--parallel', type=int, default=1, help='并行槽位数 (默认 1)')
     
     args = parser.parse_args()

@@ -1,9 +1,9 @@
 """
 模型配置字典 - Murasaki 翻译器官方模型配置
-功能：通过 MD5 或文件名自动识别模型并返回推荐配置
+功能：通过文件名自动识别模型参数和量化类型
 """
-import hashlib
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional, Dict
 
@@ -17,64 +17,82 @@ class ModelConfig:
     quant: str          # 量化类型
     ctx_recommended: int    # 推荐上下文长度
     ctx_max: int            # 最大上下文长度
-    preset: str             # 推荐 Prompt 预设
     gpu_layers: int         # 推荐 GPU 层数 (-1 = 全部)
     description: str        # 描述
 
 
-# 官方模型配置字典
-# Key: 文件名关键词 (小写)
-MODEL_CONFIGS: Dict[str, ModelConfig] = {
-    # Murasaki v0.1 系列 - Q4_K_M 量化
-    "murasaki-8b-q4_k_m": ModelConfig(
-        name="murasaki-8b-v0.1-q4km",
-        display_name="Murasaki 8B v0.1 (Q4_K_M)",
-        params="8B",
-        quant="Q4_K_M",
-        ctx_recommended=8192,
-        ctx_max=16384,
-        preset="training",
-        gpu_layers=-1,
-        description="Murasaki 翻译器 4-bit 量化版，适合 8GB+ VRAM"
-    ),
-    # Murasaki v0.1 系列 - F16 全精度
-    "murasaki-8b-f16": ModelConfig(
-        name="murasaki-8b-v0.1-f16",
-        display_name="Murasaki 8B v0.1 (F16)",
-        params="8B",
-        quant="F16",
-        ctx_recommended=8192,
-        ctx_max=16384,
-        preset="training",
-        gpu_layers=-1,
-        description="Murasaki 翻译器 16-bit 全精度版，需要 16GB+ VRAM"
-    ),
-}
+# 量化类型识别模式 (按优先级排序，IQ 系列优先)
+# ⚠️ KEEP IN SYNC WITH: GUI/src/renderer/src/lib/modelConfig.ts QUANT_PATTERNS
+QUANT_PATTERNS = [
+    # IQ 系列 (重要性量化)
+    (r'[_-]IQ1[_-]?S', 'IQ1_S'),
+    (r'[_-]IQ1[_-]?M', 'IQ1_M'),
+    (r'[_-]IQ2[_-]?XXS', 'IQ2_XXS'),
+    (r'[_-]IQ2[_-]?XS', 'IQ2_XS'),
+    (r'[_-]IQ2[_-]?S', 'IQ2_S'),
+    (r'[_-]IQ2[_-]?M', 'IQ2_M'),
+    (r'[_-]IQ3[_-]?XXS', 'IQ3_XXS'),
+    (r'[_-]IQ3[_-]?XS', 'IQ3_XS'),
+    (r'[_-]IQ3[_-]?S', 'IQ3_S'),
+    (r'[_-]IQ3[_-]?M', 'IQ3_M'),
+    (r'[_-]IQ4[_-]?XXS', 'IQ4_XXS'),
+    (r'[_-]IQ4[_-]?XS', 'IQ4_XS'),
+    (r'[_-]IQ4[_-]?NL', 'IQ4_NL'),
+    # K 系列量化
+    (r'[_-]Q2[_-]?K[_-]?S', 'Q2_K_S'),
+    (r'[_-]Q2[_-]?K[_-]?M', 'Q2_K_M'),
+    (r'[_-]Q2[_-]?K', 'Q2_K'),
+    (r'[_-]Q3[_-]?K[_-]?S', 'Q3_K_S'),
+    (r'[_-]Q3[_-]?K[_-]?M', 'Q3_K_M'),
+    (r'[_-]Q3[_-]?K[_-]?L', 'Q3_K_L'),
+    (r'[_-]Q4[_-]?K[_-]?S', 'Q4_K_S'),
+    (r'[_-]Q4[_-]?K[_-]?M', 'Q4_K_M'),
+    (r'[_-]Q4[_-]?0', 'Q4_0'),
+    (r'[_-]Q4[_-]?1', 'Q4_1'),
+    (r'[_-]Q5[_-]?K[_-]?S', 'Q5_K_S'),
+    (r'[_-]Q5[_-]?K[_-]?M', 'Q5_K_M'),
+    (r'[_-]Q5[_-]?0', 'Q5_0'),
+    (r'[_-]Q5[_-]?1', 'Q5_1'),
+    (r'[_-]Q6[_-]?K', 'Q6_K'),
+    (r'[_-]Q8[_-]?0', 'Q8_0'),
+    # 全精度
+    (r'[_-]F16', 'F16'),
+    (r'[_-]F32', 'F32'),
+    (r'[_-]BF16', 'BF16'),
+]
 
-# MD5 到模型配置的映射（用于精确识别）
-MODEL_MD5_MAP: Dict[str, str] = {
-    # 示例: "abc123...": "murasaki-8b-v0.1"
-    # 实际 MD5 需要计算后填入
-}
+# 参数量识别模式
+PARAMS_PATTERNS = [
+    (r'[_-](\d+\.?\d*)[Bb]', lambda m: f"{m.group(1)}B"),  # 8B, 7B, 1.5B 等
+]
+
+# 版本识别模式  
+VERSION_PATTERN = r'[_-]v(\d+\.?\d*)'
 
 
-def get_file_md5(file_path: str, chunk_size: int = 8192) -> str:
-    """计算文件 MD5（只读取前 1MB 以提高速度）"""
-    md5 = hashlib.md5()
-    bytes_read = 0
-    max_bytes = 1024 * 1024  # 1MB
-    
-    try:
-        with open(file_path, 'rb') as f:
-            while bytes_read < max_bytes:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                md5.update(chunk)
-                bytes_read += len(chunk)
-        return md5.hexdigest()
-    except Exception:
-        return ""
+def detect_quant_type(filename: str) -> str:
+    """从文件名检测量化类型"""
+    for pattern, quant_type in QUANT_PATTERNS:
+        if re.search(pattern, filename, re.IGNORECASE):
+            return quant_type
+    return "Unknown"
+
+
+def detect_params(filename: str) -> str:
+    """从文件名检测参数量"""
+    for pattern, formatter in PARAMS_PATTERNS:
+        match = re.search(pattern, filename, re.IGNORECASE)
+        if match:
+            return formatter(match)
+    return "Unknown"
+
+
+def detect_version(filename: str) -> str:
+    """从文件名检测版本号"""
+    match = re.search(VERSION_PATTERN, filename, re.IGNORECASE)
+    if match:
+        return f"v{match.group(1)}"
+    return ""
 
 
 def identify_model(model_path: str) -> Optional[ModelConfig]:
@@ -86,21 +104,36 @@ def identify_model(model_path: str) -> Optional[ModelConfig]:
     if not model_path or not os.path.exists(model_path):
         return None
     
-    filename = os.path.basename(model_path).lower()
+    filename = os.path.basename(model_path)
     
-    # 1. 尝试通过文件名关键词匹配
-    for key, config in MODEL_CONFIGS.items():
-        if key in filename:
-            return config
+    # 检测各项属性
+    quant = detect_quant_type(filename)
+    params = detect_params(filename)
+    version = detect_version(filename)
     
-    # 2. 尝试通过 MD5 匹配（更精确）
-    file_md5 = get_file_md5(model_path)
-    if file_md5 in MODEL_MD5_MAP:
-        config_key = MODEL_MD5_MAP[file_md5]
-        if config_key in MODEL_CONFIGS:
-            return MODEL_CONFIGS[config_key]
+    # 判断是否为 Murasaki 官方模型
+    is_murasaki = "murasaki" in filename.lower()
     
-    return None
+    # 构建显示名称
+    if is_murasaki:
+        display_name = f"Murasaki {params} {version} ({quant})".strip()
+        description = f"Murasaki 翻译器 {quant} 量化版"
+    else:
+        # 非官方模型，使用文件名
+        base_name = os.path.splitext(filename)[0]
+        display_name = base_name
+        description = f"第三方模型 ({quant})"
+    
+    return ModelConfig(
+        name=os.path.splitext(filename)[0].lower(),
+        display_name=display_name,
+        params=params,
+        quant=quant,
+        ctx_recommended=8192,
+        ctx_max=32768,
+        gpu_layers=-1,
+        description=description
+    )
 
 
 def get_model_display_name(model_path: str) -> str:
@@ -114,18 +147,19 @@ def get_model_display_name(model_path: str) -> str:
 
 
 def get_recommended_config(model_path: str) -> Dict:
-    """获取推荐配置"""
+    """
+    获取推荐配置
+    注意：不设置 preset，由全局配置决定
+    """
     config = identify_model(model_path)
     if config:
         return {
             "ctx_size": config.ctx_recommended,
-            "preset": config.preset,
             "gpu_layers": config.gpu_layers,
         }
     
     # 默认配置
     return {
         "ctx_size": 8192,
-        "preset": "training",
         "gpu_layers": -1,
     }

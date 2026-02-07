@@ -837,13 +837,13 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         }
 
         const config = {
-            gpuLayers: customConfig.gpuLayers !== undefined ? String(customConfig.gpuLayers) : (localStorage.getItem("config_gpu") || "-1"),
+            gpuLayers: customConfig.gpuLayers !== undefined ? customConfig.gpuLayers : (parseInt(localStorage.getItem("config_gpu") || "-1", 10) || -1),
             ctxSize: ctxValue.toString(),
             chunkSize: calculatedChunkSize.toString(),
             serverUrl: localStorage.getItem("config_server"),
             outputDir: customConfig.outputDir || localStorage.getItem("config_output_dir"),
             glossaryPath: glossaryOverride !== undefined ? glossaryOverride : (customConfig.glossaryPath || glossaryPath),
-            preset: customConfig.preset || localStorage.getItem("config_preset") || "training",
+            preset: customConfig.preset || localStorage.getItem("config_preset") || "novel",
             rulesPre: JSON.parse(localStorage.getItem("config_rules_pre") || "[]"),
             rulesPost: JSON.parse(localStorage.getItem("config_rules_post") || "[]"),
 
@@ -891,7 +891,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
             // Concurrency
             concurrency: customConfig.concurrency ?? parseInt(localStorage.getItem("config_concurrency") || "1"),
             flashAttn: customConfig.flashAttn !== undefined ? customConfig.flashAttn : (localStorage.getItem("config_flash_attn") === "true"),
-            kvCacheType: customConfig.kvCacheType || localStorage.getItem("config_kv_cache_type") || "f16",
+            kvCacheType: customConfig.kvCacheType || localStorage.getItem("config_kv_cache_type") || "q8_0",
             useLargeBatch: localStorage.getItem("config_use_large_batch") === "true",
             physicalBatchSize: parseInt(localStorage.getItem("config_physical_batch_size") || "1024"),
             seed: customConfig.seed !== undefined ? customConfig.seed : (localStorage.getItem("config_seed") ? parseInt(localStorage.getItem("config_seed")!) : undefined),
@@ -977,8 +977,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         const config = {
             // Minimal config needed for checkOutputFileExists
             outputDir: localStorage.getItem("config_output_dir"),
-            preset: localStorage.getItem("config_preset") || "training",
-            // Other fields not needed for path resolution
+            modelPath: modelPath, // 传递模型路径用于生成输出文件名
         }
 
 

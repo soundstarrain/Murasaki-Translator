@@ -159,18 +159,38 @@ class TranslationWorker:
         return str(candidate)
     
     def _check_nvidia_gpu(self) -> bool:
-        """跨平台检测 NVIDIA GPU（修复硬编码路径问题）"""
-        try:
-            # 使用 subprocess 执行 nvidia-smi，不依赖硬编码路径
-            result = subprocess.run(
-                ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            return result.returncode == 0 and bool(result.stdout.strip())
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
+        """跨平台检测 NVIDIA GPU（支持 Windows 多路径）"""
+        import shutil
+        # Windows 上 nvidia-smi 可能不在 PATH 中
+        nvidia_smi_paths = ['nvidia-smi']
+        if sys.platform == 'win32':
+            nvidia_smi_paths.extend([
+                r'C:\Windows\System32\nvidia-smi.exe',
+                r'C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe'
+            ])
+        
+        for nvidia_smi in nvidia_smi_paths:
+            try:
+                # 检查命令是否存在
+                if not os.path.isabs(nvidia_smi) and not shutil.which(nvidia_smi):
+                    continue
+                if os.path.isabs(nvidia_smi) and not os.path.exists(nvidia_smi):
+                    continue
+                
+                result = subprocess.run(
+                    [nvidia_smi, '--query-gpu=name', '--format=csv,noheader'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    logging.info(f"NVIDIA GPU detected: {result.stdout.strip()}")
+                    return True
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                continue
+        
+        logging.info("No NVIDIA GPU detected, using Vulkan/Metal fallback")
+        return False
     
     async def start_server(self, gpu_layers: int = -1, ctx: int = 8192, 
                           flash_attn: bool = False, kv_cache_type: str = "q8_0"):

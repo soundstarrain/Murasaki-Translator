@@ -189,22 +189,57 @@ jobs:
 
       - name: Download llama.cpp macOS binaries
         run: |
-          # Metal (ARM64) - 使用 tar.gz
+          # Metal (ARM64)
           curl -L -o llama-metal.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-macos-arm64.tar.gz"
           mkdir -p middleware/bin/darwin-metal
           tar -xzf llama-metal.tar.gz -C middleware/bin/darwin-metal --strip-components=1 || tar -xzf llama-metal.tar.gz -C middleware/bin/darwin-metal
-          chmod +x middleware/bin/darwin-metal/llama-server 2>/dev/null || chmod +x middleware/bin/darwin-metal/*/llama-server 2>/dev/null || true
-          # 处理可能的嵌套目录
-          if [ -d "middleware/bin/darwin-metal/build" ]; then
-            mv middleware/bin/darwin-metal/build/bin/* middleware/bin/darwin-metal/ 2>/dev/null || true
-          fi
-          find middleware/bin/darwin-metal -name "llama-server" -exec chmod +x {} \;
           
-          # x64 (Intel) - 使用 tar.gz
+          # 处理多层嵌套目录
+          if [ -d "middleware/bin/darwin-metal/build/bin" ]; then
+            mv middleware/bin/darwin-metal/build/bin/* middleware/bin/darwin-metal/ 2>/dev/null || true
+            rm -rf middleware/bin/darwin-metal/build
+          elif [ -d "middleware/bin/darwin-metal/bin" ]; then
+            mv middleware/bin/darwin-metal/bin/* middleware/bin/darwin-metal/ 2>/dev/null || true
+            rm -rf middleware/bin/darwin-metal/bin
+          fi
+          
+          # 递归查找并移动 llama-server 到顶层
+          SERVER_PATH=$(find middleware/bin/darwin-metal -name "llama-server" -type f | head -1)
+          if [ -n "$SERVER_PATH" ] && [ "$SERVER_PATH" != "middleware/bin/darwin-metal/llama-server" ]; then
+            echo "Moving llama-server from $SERVER_PATH to top level"
+            mv "$SERVER_PATH" middleware/bin/darwin-metal/
+          fi
+          chmod +x middleware/bin/darwin-metal/llama-server 2>/dev/null || true
+          
+          # x64 (Intel)
           curl -L -o llama-x64.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-macos-x64.tar.gz"
           mkdir -p middleware/bin/darwin-x64
           tar -xzf llama-x64.tar.gz -C middleware/bin/darwin-x64 --strip-components=1 || tar -xzf llama-x64.tar.gz -C middleware/bin/darwin-x64
-          find middleware/bin/darwin-x64 -name "llama-server" -exec chmod +x {} \;
+          
+          # 处理多层嵌套目录
+          if [ -d "middleware/bin/darwin-x64/build/bin" ]; then
+            mv middleware/bin/darwin-x64/build/bin/* middleware/bin/darwin-x64/ 2>/dev/null || true
+            rm -rf middleware/bin/darwin-x64/build
+          elif [ -d "middleware/bin/darwin-x64/bin" ]; then
+            mv middleware/bin/darwin-x64/bin/* middleware/bin/darwin-x64/ 2>/dev/null || true
+            rm -rf middleware/bin/darwin-x64/bin
+          fi
+          
+          # 递归查找并移动 llama-server 到顶层
+          SERVER_PATH=$(find middleware/bin/darwin-x64 -name "llama-server" -type f | head -1)
+          if [ -n "$SERVER_PATH" ] && [ "$SERVER_PATH" != "middleware/bin/darwin-x64/llama-server" ]; then
+            echo "Moving llama-server from $SERVER_PATH to top level"
+            mv "$SERVER_PATH" middleware/bin/darwin-x64/
+          fi
+          chmod +x middleware/bin/darwin-x64/llama-server 2>/dev/null || true
+          
+          # 验证二进制存在
+          echo "=== Metal (ARM64) binaries ==="
+          ls -la middleware/bin/darwin-metal/
+          test -f middleware/bin/darwin-metal/llama-server && echo "✅ Metal llama-server found" || echo "❌ Metal llama-server NOT found"
+          echo "=== x64 (Intel) binaries ==="
+          ls -la middleware/bin/darwin-x64/
+          test -f middleware/bin/darwin-x64/llama-server && echo "✅ x64 llama-server found" || echo "❌ x64 llama-server NOT found"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -290,16 +325,57 @@ jobs:
 
       - name: Download llama.cpp Linux binaries
         run: |
-          # 使用 tar.gz 格式
+          # Vulkan 版本
           curl -L -o llama-vulkan.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-ubuntu-vulkan-x64.tar.gz"
           mkdir -p middleware/bin/linux-vulkan
           tar -xzf llama-vulkan.tar.gz -C middleware/bin/linux-vulkan --strip-components=1 || tar -xzf llama-vulkan.tar.gz -C middleware/bin/linux-vulkan
-          # 处理可能的嵌套目录
-          if [ -d "middleware/bin/linux-vulkan/build" ]; then
+          
+          # 处理多层嵌套目录 (build/bin/ 或直接 bin/)
+          if [ -d "middleware/bin/linux-vulkan/build/bin" ]; then
             mv middleware/bin/linux-vulkan/build/bin/* middleware/bin/linux-vulkan/ 2>/dev/null || true
+            rm -rf middleware/bin/linux-vulkan/build
+          elif [ -d "middleware/bin/linux-vulkan/bin" ]; then
+            mv middleware/bin/linux-vulkan/bin/* middleware/bin/linux-vulkan/ 2>/dev/null || true
+            rm -rf middleware/bin/linux-vulkan/bin
           fi
-          find middleware/bin/linux-vulkan -name "llama-server" -exec chmod +x {} \;
+          
+          # 递归查找并移动 llama-server 到顶层
+          SERVER_PATH=$(find middleware/bin/linux-vulkan -name "llama-server" -type f | head -1)
+          if [ -n "$SERVER_PATH" ] && [ "$SERVER_PATH" != "middleware/bin/linux-vulkan/llama-server" ]; then
+            echo "Moving llama-server from $SERVER_PATH to top level"
+            mv "$SERVER_PATH" middleware/bin/linux-vulkan/
+          fi
+          chmod +x middleware/bin/linux-vulkan/llama-server 2>/dev/null || true
+          
+          # CUDA 版本（用于 NVIDIA GPU）
+          curl -L -o llama-cuda.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-ubuntu-cuda12.0-x64.tar.gz"
+          mkdir -p middleware/bin/linux-cuda
+          tar -xzf llama-cuda.tar.gz -C middleware/bin/linux-cuda --strip-components=1 || tar -xzf llama-cuda.tar.gz -C middleware/bin/linux-cuda
+          
+          # 处理多层嵌套目录
+          if [ -d "middleware/bin/linux-cuda/build/bin" ]; then
+            mv middleware/bin/linux-cuda/build/bin/* middleware/bin/linux-cuda/ 2>/dev/null || true
+            rm -rf middleware/bin/linux-cuda/build
+          elif [ -d "middleware/bin/linux-cuda/bin" ]; then
+            mv middleware/bin/linux-cuda/bin/* middleware/bin/linux-cuda/ 2>/dev/null || true
+            rm -rf middleware/bin/linux-cuda/bin
+          fi
+          
+          # 递归查找并移动 llama-server 到顶层
+          SERVER_PATH=$(find middleware/bin/linux-cuda -name "llama-server" -type f | head -1)
+          if [ -n "$SERVER_PATH" ] && [ "$SERVER_PATH" != "middleware/bin/linux-cuda/llama-server" ]; then
+            echo "Moving llama-server from $SERVER_PATH to top level"
+            mv "$SERVER_PATH" middleware/bin/linux-cuda/
+          fi
+          chmod +x middleware/bin/linux-cuda/llama-server 2>/dev/null || true
+          
+          # 验证二进制存在
+          echo "=== Vulkan binaries ==="
           ls -la middleware/bin/linux-vulkan/
+          test -f middleware/bin/linux-vulkan/llama-server && echo "✅ Vulkan llama-server found" || echo "❌ Vulkan llama-server NOT found"
+          echo "=== CUDA binaries ==="
+          ls -la middleware/bin/linux-cuda/
+          test -f middleware/bin/linux-cuda/llama-server && echo "✅ CUDA llama-server found" || echo "❌ CUDA llama-server NOT found"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -312,6 +388,35 @@ jobs:
           source .venv/bin/activate
           pip install -r middleware/requirements.txt
           pip install -r middleware/server/requirements.txt
+
+      - name: Build Python Engine (PyInstaller)
+        run: |
+          source .venv/bin/activate
+          pip install pyinstaller
+          cd middleware
+          
+          # 创建 PyInstaller spec 用于打包（与 macOS 相同）
+          pyinstaller --onefile --name murasaki-engine \
+            --hidden-import opencc \
+            --hidden-import chardet \
+            --hidden-import regex \
+            --hidden-import pynvml \
+            --hidden-import lxml \
+            --hidden-import lxml.etree \
+            --hidden-import ebooklib \
+            --hidden-import ebooklib.epub \
+            --collect-all opencc \
+            --add-data "murasaki_translator:murasaki_translator" \
+            --add-data "rule_processor.py:." \
+            murasaki_translator/main.py
+          
+          # 移动到 bin 目录供 Electron 使用
+          mkdir -p bin/python-bundle
+          mv dist/murasaki-engine bin/python-bundle/
+          chmod +x bin/python-bundle/murasaki-engine
+          
+          echo "Built Python bundle:"
+          ls -la bin/python-bundle/
 
       - name: Install Node dependencies
         working-directory: GUI
@@ -358,6 +463,7 @@ jobs:
           EOF
           chmod +x dist-cli/murasaki-server/start.sh
           chmod +x dist-cli/murasaki-server/bin/linux-vulkan/llama-server
+          chmod +x dist-cli/murasaki-server/bin/linux-cuda/llama-server
           
           # 创建 README
           cat > dist-cli/murasaki-server/README.md << 'EOF'

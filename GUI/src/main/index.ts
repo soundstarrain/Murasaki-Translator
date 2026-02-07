@@ -5,7 +5,8 @@ import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import fs from 'fs'
 import { ServerManager } from './serverManager'
-import { getLlamaServerPath, detectPlatform } from './platform'
+import { getLlamaServerPath, detectPlatform, clearGpuCache } from './platform'
+import { TranslateOptions } from './remoteClient'
 
 let pythonProcess: ChildProcess | null = null
 let mainWindow: BrowserWindow | null = null
@@ -197,7 +198,7 @@ const getPythonPath = (): { type: 'python' | 'bundle'; path: string } => {
 const spawnPythonProcess = (
     pythonInfo: { type: 'python' | 'bundle'; path: string },
     args: string[],
-    options: { cwd: string, env?: NodeJS.ProcessEnv, stdio?: any }
+    options: { cwd: string; env?: NodeJS.ProcessEnv; stdio?: 'pipe' | 'inherit' | 'ignore' | Array<'pipe' | 'inherit' | 'ignore' | 'ipc' | null> }
 ) => {
     // 1. Base Environment
     const env: NodeJS.ProcessEnv = {
@@ -364,7 +365,7 @@ ipcMain.handle('server-warmup', async () => {
 // --------------------------
 
 // --- Remote Server IPC ---
-import { RemoteClient, getRemoteClient, clearRemoteClient } from './remoteClient'
+import { RemoteClient, clearRemoteClient } from './remoteClient'
 
 let remoteClient: RemoteClient | null = null
 
@@ -420,7 +421,7 @@ ipcMain.handle('remote-glossaries', async () => {
     }
 })
 
-ipcMain.handle('remote-translate', async (_event, options: any) => {
+ipcMain.handle('remote-translate', async (_event, options: TranslateOptions) => {
     if (!remoteClient) {
         return { error: 'Not connected to remote server' }
     }
@@ -573,13 +574,13 @@ ipcMain.handle('check-update', async () => {
             const options = {
                 headers: { 'User-Agent': 'Murasaki-Translator' }
             }
-            https.get(url, options, (res: any) => {
+            https.get(url, options, (res: import('http').IncomingMessage) => {
                 if (res.statusCode !== 200) {
                     reject(new Error(`GitHub API returned status ${res.statusCode}`))
                     return
                 }
                 let data = ''
-                res.on('data', (chunk: any) => data += chunk)
+                res.on('data', (chunk: Buffer) => data += chunk)
                 res.on('end', () => resolve(data))
             }).on('error', reject)
         })
@@ -727,9 +728,12 @@ ipcMain.handle('get-model-info', async (_event, modelName: string) => {
     const paramsMatch = nameLower.match(/(\d+\.?\d*)b/)
     const paramsB = paramsMatch ? parseFloat(paramsMatch[1]) : null
 
-    // Extract quant (e.g., Q4_K_M, Q5_K, Q8_0, F16)
-    const quantMatch = modelName.match(/[Qq]\d+_?[Kk]?_?[MmSsLl]?|\.[Qq]\d+|[Ff]16|[Ff][Pp]16/)
-    const quant = quantMatch ? quantMatch[0].toUpperCase().replace('.', '') : 'Unknown'
+    // Extract quant (e.g., IQ4_XS, IQ3_M, Q4_K_M, Q5_K, Q8_0, F16)
+    // IQ 系列优先匹配，然后是 Q 系列
+    const quantMatch = modelName.match(
+        /IQ[1-4]_?(XXS|XS|S|M|NL)|Q[2-8]_?[Kk]?_?[MmSsLl]?|[Ff]16|BF16/i
+    )
+    const quant = quantMatch ? quantMatch[0].toUpperCase() : 'Unknown'
 
     // Estimate VRAM: model size + ~20% for KV cache overhead at 8k context
     const estimatedVramGB = sizeGB * 1.2
@@ -779,8 +783,12 @@ ipcMain.handle('get-hardware-specs', async () => {
             resolve({ error: errMsg })
         }, 10000)
 
-        proc.stdout.on('data', (d) => output += d.toString())
-        proc.stderr.on('data', (d) => errorOutput += d.toString())
+        if (proc.stdout) {
+            proc.stdout.on('data', (d) => output += d.toString())
+        }
+        if (proc.stderr) {
+            proc.stderr.on('data', (d) => errorOutput += d.toString())
+        }
 
         proc.on('error', (err) => {
             if (resolved) return
@@ -832,6 +840,19 @@ ipcMain.handle('get-hardware-specs', async () => {
     })
 })
 
+// 刷新 GPU 检测（清除缓存并重新检测）
+ipcMain.handle('refresh-gpu-detection', async () => {
+    clearGpuCache()
+    const platformInfo = detectPlatform()
+    console.log('[Platform] GPU detection refreshed:', platformInfo)
+    return {
+        os: platformInfo.os,
+        arch: platformInfo.arch,
+        backend: platformInfo.backend,
+        binaryDir: platformInfo.binaryDir
+    }
+})
+
 ipcMain.handle('test-rules', async (_event, { text, rules }) => {
     const middlewareDir = getMiddlewarePath()
     const scriptPath = join(middlewareDir, 'test_rules.py')
@@ -851,12 +872,14 @@ ipcMain.handle('test-rules', async (_event, { text, rules }) => {
         let output = ''
         let errorOutput = ''
 
-        proc.stdout.on('data', (d) => output += d.toString())
-        proc.stderr.on('data', (d) => errorOutput += d.toString())
+        proc.stdout?.on('data', (d) => output += d.toString())
+        proc.stderr?.on('data', (d) => errorOutput += d.toString())
 
         // Send data to stdin
-        proc.stdin.write(JSON.stringify({ text, rules }))
-        proc.stdin.end()
+        if (proc.stdin) {
+            proc.stdin.write(JSON.stringify({ text, rules }))
+            proc.stdin.end()
+        }
 
         proc.on('close', (code) => {
             if (code !== 0) {
@@ -1011,7 +1034,7 @@ ipcMain.handle('load-cache', async (_event, cachePath: string) => {
 })
 
 // 保存翻译缓存（用于校对界面）
-ipcMain.handle('save-cache', async (_event, cachePath: string, data: any) => {
+ipcMain.handle('save-cache', async (_event, cachePath: string, data: Record<string, unknown>) => {
     try {
         fs.writeFileSync(cachePath, JSON.stringify(data, null, 2), 'utf-8')
         return true
@@ -1045,9 +1068,11 @@ ipcMain.handle('rebuild-doc', async (_event, { cachePath, outputPath }) => {
             const proc = spawnPythonProcess(pythonCmd, args, { cwd: middlewareDir })
 
             let errorOutput = ''
-            proc.stderr.on('data', (data: Buffer) => {
-                errorOutput += data.toString()
-            })
+            if (proc.stderr) {
+                proc.stderr.on('data', (data: Buffer) => {
+                    errorOutput += data.toString()
+                })
+            }
 
             proc.on('close', (code: number) => {
                 if (code === 0) {
@@ -1057,8 +1082,9 @@ ipcMain.handle('rebuild-doc', async (_event, { cachePath, outputPath }) => {
                 }
             })
         })
-    } catch (e: any) {
-        return { success: false, error: e.message }
+    } catch (e: unknown) {
+        const errorMsg = e instanceof Error ? e.message : String(e)
+        return { success: false, error: errorMsg }
     }
 })
 
@@ -1102,8 +1128,13 @@ ipcMain.handle('retranslate-block', async (event, { src, index, modelPath, confi
 
     // Apply Config (Reusing logic from start-translation simplified)
     if (config) {
-        if (config.deviceMode === 'cpu') args.push('--gpu-layers', '0')
-        else if (config.gpuLayers) args.push('--gpu-layers', config.gpuLayers)
+        if (config.deviceMode === 'cpu') {
+            args.push('--gpu-layers', '0')
+        } else {
+            // 默认使用 -1 (全部加载到 GPU)，如果用户指定了值则使用用户值
+            const gpuLayers = config.gpuLayers !== undefined ? config.gpuLayers : -1
+            args.push('--gpu-layers', gpuLayers.toString())
+        }
 
         if (config.ctxSize) args.push('--ctx', config.ctxSize)
         if (config.temperature) args.push('--temperature', config.temperature.toString())
@@ -1223,15 +1254,16 @@ ipcMain.handle('retranslate-block', async (event, { src, index, modelPath, confi
                     // But we used --json-output so it should be there.
                     resolve({ success: false, error: "No JSON result found in output" })
                 }
-            } catch (e: any) {
-                resolve({ success: false, error: e.message })
+            } catch (e: unknown) {
+                const errorMsg = e instanceof Error ? e.message : String(e)
+                resolve({ success: false, error: errorMsg })
             }
         })
     })
 })
 
 // 保存文件对话框
-ipcMain.handle('save-file', async (_event, options: any) => {
+ipcMain.handle('save-file', async (_event, options: { title?: string; defaultPath?: string; filters?: Electron.FileFilter[] }) => {
     const result = await dialog.showSaveDialog({
         title: options?.title || 'Save File',
         defaultPath: options?.defaultPath,
@@ -1315,24 +1347,22 @@ ipcMain.handle('check-output-file-exists', async (_event, { inputFile, config })
             const outFilename = `${baseName}_translated.${ext}`
             outPath = join(config.outputDir, outFilename)
         } else {
-            // Default logic from main.py
-            // output_path = f"{base}{suffix}{ext}"
-            // suffix = f"_Murasaki-8B-v0.1_{args.preset}_{args.mode}"
-            // This is hardcoded in main.py v1.0
-
+            // Default logic from main.py - 动态获取模型名称
+            // output_path = f"{base}_{model_name}{ext}"
             const ext = extname(inputFile)
             const base = inputFile.substring(0, inputFile.length - ext.length)
 
-            const preset = config.preset || "training"
-            // mode is not part of config object passed from frontend? 
-            // Dashboard.tsx line 470 passes "deviceMode" but main.py args line 276 has "mode" (doc/line).
-            // Dashboard.tsx config object DOES NOT seem to have 'mode' (doc/line).
-            // Let's check Dashboard.tsx config construction (line 456).
-            // It has 'deviceMode'. But does it set main.py 'mode'?
-            // main.py default mode is "doc".
-            const mode = "doc" // Frontend currently doesn't seem to set this, main.py defaults to doc.
+            // 从模型路径提取模型名称（去掉扩展名）
+            // ⚠️ 健壮性处理：兼容 Windows/POSIX 路径分隔符
+            let modelName = 'unknown'
+            if (config.modelPath && typeof config.modelPath === 'string' && config.modelPath.trim()) {
+                // 统一处理 Windows (\) 和 POSIX (/) 分隔符
+                const normalizedPath = config.modelPath.replace(/\\/g, '/')
+                const fileName = normalizedPath.split('/').pop() || ''
+                modelName = fileName.replace(/\.gguf$/i, '') || 'unknown'
+            }
 
-            const suffix = `_Murasaki-8B-v0.1_${preset}_${mode}`
+            const suffix = `_${modelName}`
             outPath = `${base}${suffix}${ext}`
         }
 
@@ -1368,8 +1398,9 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
         const platformInfo = detectPlatform()
         event.reply('log-update', `System: Platform ${platformInfo.os}/${platformInfo.arch}, Backend: ${platformInfo.backend}`)
         serverExePath = getLlamaServerPath()
-    } catch (e: any) {
-        event.reply('log-update', `ERR: ${e.message}`)
+    } catch (e: unknown) {
+        const errorMsg = e instanceof Error ? e.message : String(e)
+        event.reply('log-update', `ERR: ${errorMsg}`)
         return
     }
 
@@ -1440,7 +1471,10 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
             args.push('--gpu-layers', '0')
             console.log("Mode: CPU Only (Forced gpu-layers 0)")
         } else {
-            if (config.gpuLayers) args.push('--gpu-layers', config.gpuLayers)
+            // 默认使用 -1 (全部加载到 GPU)，如果用户指定了值则使用用户值
+            const gpuLayers = config.gpuLayers !== undefined ? config.gpuLayers : -1
+            args.push('--gpu-layers', gpuLayers.toString())
+            console.log(`Mode: GPU with ${gpuLayers} layers`)
         }
 
         if (config.ctxSize) args.push('--ctx', config.ctxSize)
@@ -1589,7 +1623,7 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
     console.log('Spawning:', pythonCmd, args.join(' '), 'in', middlewareDir)
     event.reply('log-update', `System: CMD: ${pythonCmd} ${args.join(' ')}`)
     event.reply('log-update', `System: CWD: ${middlewareDir}`)
-    event.reply('log-update', `System: Config - CTX: ${config?.ctxSize || '8192'}, Concurrency: ${config?.concurrency || '1'}, KV: ${config?.kvCacheType || 'f16'}`)
+    event.reply('log-update', `System: Config - CTX: ${config?.ctxSize || '4096'}, Concurrency: ${config?.concurrency || '1'}, KV: ${config?.kvCacheType || 'q8_0'}`)
 
 
     // Set GPU ID if specified and not in CPU mode
@@ -1651,8 +1685,9 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
             event.reply('process-exit', code)
             pythonProcess = null
         })
-    } catch (e: any) {
-        event.reply('log-update', `Exception: ${e.message}`)
+    } catch (e: unknown) {
+        const errorMsg = e instanceof Error ? e.message : String(e)
+        event.reply('log-update', `Exception: ${errorMsg}`)
         console.error(e)
     }
 })
@@ -1668,8 +1703,9 @@ ipcMain.on('stop-translation', () => {
                 console.log(`[Stop] Executing: taskkill /pid ${pid} /f /t`)
                 const output = execSync(`taskkill /pid ${pid} /f /t`)
                 console.log('[Stop] taskkill output:', output.toString())
-            } catch (e: any) {
-                console.error('[Stop] taskkill execution failed:', e.message)
+            } catch (e: unknown) {
+                const errorMsg = e instanceof Error ? e.message : String(e)
+                console.error('[Stop] taskkill execution failed:', errorMsg)
                 // Fallback
                 try { pythonProcess.kill() } catch (_) { }
             }
@@ -1757,8 +1793,9 @@ ipcMain.handle('extract-terms', async (_event, options: { filePath?: string, tex
                     try {
                         const terms = JSON.parse(stdout)
                         resolve({ success: true, terms })
-                    } catch (e: any) {
-                        resolve({ success: false, error: `JSON parse error: ${e.message}`, raw: stdout })
+                    } catch (e: unknown) {
+                        const errorMsg = e instanceof Error ? e.message : String(e)
+                        resolve({ success: false, error: `JSON parse error: ${errorMsg}`, raw: stdout })
                     }
                 } else {
                     resolve({ success: false, error: stderr || `Process exited with code ${code}` })
@@ -1769,7 +1806,8 @@ ipcMain.handle('extract-terms', async (_event, options: { filePath?: string, tex
                 resolve({ success: false, error: err.message })
             })
         })
-    } catch (e: any) {
-        return { success: false, error: e.message }
+    } catch (e: unknown) {
+        const errorMsg = e instanceof Error ? e.message : String(e)
+        return { success: false, error: errorMsg }
     }
 })

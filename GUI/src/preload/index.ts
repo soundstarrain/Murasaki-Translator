@@ -13,6 +13,7 @@ const api = {
     getModelInfo: (modelName: string) => ipcRenderer.invoke('get-model-info', modelName),
     startTranslation: (inputFile: string, modelPath: string, config: any) => ipcRenderer.send('start-translation', { inputFile, modelPath, config }),
     getHardwareSpecs: () => ipcRenderer.invoke('get-hardware-specs'),
+    refreshGpuDetection: () => ipcRenderer.invoke('refresh-gpu-detection'),
     stopTranslation: () => ipcRenderer.send('stop-translation'),
     getGlossaries: () => ipcRenderer.invoke('get-glossaries'),
     createGlossaryFile: (arg: string | { filename: string; content?: string }) => ipcRenderer.invoke('create-glossary-file', arg),
