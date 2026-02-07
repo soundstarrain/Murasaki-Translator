@@ -79,8 +79,13 @@ Murasaki 模型针对术语表进行了特化训练，支持 **Prompt 级术语�
 | **Linux Server** | 所有 GPU | CLI `.tar.gz` | ⚠️ 需装依赖 |
 
 > [!NOTE]
-> 推荐使用独立显卡（6GB+ 显存）以获得最佳体验。Apple Silicon 系列使用统一内存，16GB+ 内存即可流畅运行。
-> - Linux NVIDIA 用户如需 CUDA 加速，需[自行编译](./PLATFORM_COMPATIBILITY.md#-nvidia-cuda-加速可选高级用户)
+> **显存需求**
+> | 模型 | 最低显存 | 推荐显存 |
+> |------|----------|----------|
+> | Murasaki-8B | 6 GB | 8 GB+ |
+> | Murasaki-14B | 10 GB | 12 GB+ |
+> 
+> Apple Silicon 使用统一内存，16GB+ 即可流畅运行。Linux NVIDIA 用户如需 CUDA 加速，需[自行编译](./PLATFORM_COMPATIBILITY.md#-nvidia-cuda-加速可选高级用户)。
 
 ### 快速开始
 
