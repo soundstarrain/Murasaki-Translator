@@ -71,16 +71,16 @@ Murasaki 模型针对术语表进行了特化训练，支持 **Prompt 级术语�
 
 ### 环境要求
 
-| 平台 | GPU | 说明 |
-|------|-----|------|
-| **Windows** | NVIDIA (CUDA) | 推荐，6GB+ 显存 |
-| **Windows** | AMD/Intel (Vulkan) | 支持 |
-| **macOS** | Apple Silicon (Metal) | M1/M2/M3/M4 统一内存 |
-| **macOS** | Intel | 支持 |
-| **Linux** | NVIDIA/AMD (Vulkan) | AppImage 格式 |
+| 平台 | GPU | 下载格式 | 一键运行 |
+|------|-----|----------|----------|
+| **Windows** | NVIDIA / AMD / Intel | `.exe` 安装包 | ✅ |
+| **macOS** | Apple Silicon / Intel | `.dmg` | ✅ |
+| **Linux Desktop** | 所有 GPU (Vulkan) | `.AppImage` | ✅ |
+| **Linux Server** | 所有 GPU | CLI `.tar.gz` | ⚠️ 需装依赖 |
 
 > [!NOTE]
 > 推荐使用独立显卡（6GB+ 显存）以获得最佳体验。Apple Silicon 系列使用统一内存，16GB+ 内存即可流畅运行。
+> - Linux NVIDIA 用户如需 CUDA 加速，需[自行编译](./PLATFORM_COMPATIBILITY.md#-nvidia-cuda-加速可选高级用户)
 
 ### 快速开始
 
@@ -90,14 +90,9 @@ Murasaki 模型针对术语表进行了特化训练，支持 **Prompt 级术语�
    - **macOS**: 下载 `*.dmg`，拖入 Applications 文件夹
    - **Linux**: 下载 `*.AppImage`，添加执行权限后双击运行
    
-   *(如需通过源码编译，请参考 [开发指南](./DEVELOPMENT.md)。)*
+   **[详细平台安装指南](./PLATFORM_COMPATIBILITY.md)** — 包含 Linux 服务器 CLI 部署、NVIDIA CUDA 编译说明等进阶内容。
    
-> [!IMPORTANT]
-> **⚠️ 关于 NVIDIA 显卡驱动版本的关键说明**
-> 若使用 NVIDIA 显卡加速，驱动必须支持 **CUDA 12.4** 或更高版本。
-> - **无需安装 CUDA Toolkit**：普通用户**不需要**下载安装庞大的 CUDA 开发包。
-> - **必须更新驱动**：请确保驱动版本 **≥ 551.61**（即 2024 年初及之后的版本）。
-> - **典型故障**：若驱动版本过旧，系统将自动回退至 CPU 模式或无法加载引擎。
+   *(如需通过源码编译，请参考 [开发指南](./DEVELOPMENT.md)。)*
    
 2. **获取模型**: 
    前往 [Hugging Face](https://huggingface.co/Murasaki-Project) 下载 `Murasaki-GGUF` 模型文件。

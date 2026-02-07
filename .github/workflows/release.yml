@@ -325,7 +325,7 @@ jobs:
 
       - name: Download llama.cpp Linux binaries
         run: |
-          # Vulkan 版本
+          # Vulkan 版本 (AMD/Intel GPU)
           curl -L -o llama-vulkan.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-ubuntu-vulkan-x64.tar.gz"
           mkdir -p middleware/bin/linux-vulkan
           tar -xzf llama-vulkan.tar.gz -C middleware/bin/linux-vulkan --strip-components=1 || tar -xzf llama-vulkan.tar.gz -C middleware/bin/linux-vulkan
@@ -347,35 +347,36 @@ jobs:
           fi
           chmod +x middleware/bin/linux-vulkan/llama-server 2>/dev/null || true
           
-          # CUDA 版本（用于 NVIDIA GPU）
-          curl -L -o llama-cuda.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-ubuntu-cuda12.0-x64.tar.gz"
-          mkdir -p middleware/bin/linux-cuda
-          tar -xzf llama-cuda.tar.gz -C middleware/bin/linux-cuda --strip-components=1 || tar -xzf llama-cuda.tar.gz -C middleware/bin/linux-cuda
+          # CPU 版本 (Fallback / NVIDIA CUDA 用户需自行编译)
+          # 注意：llama.cpp 官方不提供 Linux CUDA 预编译包
+          curl -L -o llama-cpu.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-ubuntu-x64.tar.gz"
+          mkdir -p middleware/bin/linux-cpu
+          tar -xzf llama-cpu.tar.gz -C middleware/bin/linux-cpu --strip-components=1 || tar -xzf llama-cpu.tar.gz -C middleware/bin/linux-cpu
           
           # 处理多层嵌套目录
-          if [ -d "middleware/bin/linux-cuda/build/bin" ]; then
-            mv middleware/bin/linux-cuda/build/bin/* middleware/bin/linux-cuda/ 2>/dev/null || true
-            rm -rf middleware/bin/linux-cuda/build
-          elif [ -d "middleware/bin/linux-cuda/bin" ]; then
-            mv middleware/bin/linux-cuda/bin/* middleware/bin/linux-cuda/ 2>/dev/null || true
-            rm -rf middleware/bin/linux-cuda/bin
+          if [ -d "middleware/bin/linux-cpu/build/bin" ]; then
+            mv middleware/bin/linux-cpu/build/bin/* middleware/bin/linux-cpu/ 2>/dev/null || true
+            rm -rf middleware/bin/linux-cpu/build
+          elif [ -d "middleware/bin/linux-cpu/bin" ]; then
+            mv middleware/bin/linux-cpu/bin/* middleware/bin/linux-cpu/ 2>/dev/null || true
+            rm -rf middleware/bin/linux-cpu/bin
           fi
           
           # 递归查找并移动 llama-server 到顶层
-          SERVER_PATH=$(find middleware/bin/linux-cuda -name "llama-server" -type f | head -1)
-          if [ -n "$SERVER_PATH" ] && [ "$SERVER_PATH" != "middleware/bin/linux-cuda/llama-server" ]; then
+          SERVER_PATH=$(find middleware/bin/linux-cpu -name "llama-server" -type f | head -1)
+          if [ -n "$SERVER_PATH" ] && [ "$SERVER_PATH" != "middleware/bin/linux-cpu/llama-server" ]; then
             echo "Moving llama-server from $SERVER_PATH to top level"
-            mv "$SERVER_PATH" middleware/bin/linux-cuda/
+            mv "$SERVER_PATH" middleware/bin/linux-cpu/
           fi
-          chmod +x middleware/bin/linux-cuda/llama-server 2>/dev/null || true
+          chmod +x middleware/bin/linux-cpu/llama-server 2>/dev/null || true
           
           # 验证二进制存在
           echo "=== Vulkan binaries ==="
           ls -la middleware/bin/linux-vulkan/
           test -f middleware/bin/linux-vulkan/llama-server && echo "✅ Vulkan llama-server found" || echo "❌ Vulkan llama-server NOT found"
-          echo "=== CUDA binaries ==="
-          ls -la middleware/bin/linux-cuda/
-          test -f middleware/bin/linux-cuda/llama-server && echo "✅ CUDA llama-server found" || echo "❌ CUDA llama-server NOT found"
+          echo "=== CPU binaries ==="
+          ls -la middleware/bin/linux-cpu/
+          test -f middleware/bin/linux-cpu/llama-server && echo "✅ CPU llama-server found" || echo "❌ CPU llama-server NOT found"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -463,7 +464,7 @@ jobs:
           EOF
           chmod +x dist-cli/murasaki-server/start.sh
           chmod +x dist-cli/murasaki-server/bin/linux-vulkan/llama-server
-          chmod +x dist-cli/murasaki-server/bin/linux-cuda/llama-server
+          chmod +x dist-cli/murasaki-server/bin/linux-cpu/llama-server
           
           # 创建 README
           cat > dist-cli/murasaki-server/README.md << 'EOF'
