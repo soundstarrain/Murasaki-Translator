@@ -270,7 +270,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                 sourceChars: progressDataRef.current.sourceChars,
                 outputPath: progressDataRef.current.outputPath,
                 avgSpeed: avgSpeed,
-                logs: logsBufferRef.current.slice(-100), // Keep last 100 logs
+                logs: logsBufferRef.current.slice(-10000), // Keep last 10000 logs (safe with lazy loading)
                 triggers: triggersBufferRef.current
             })
             currentRecordIdRef.current = null

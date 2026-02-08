@@ -37,8 +37,6 @@ export function Sidebar({ lang, setLang, view, setView }: SidebarProps) {
 
   useEffect(() => {
     const html = document.documentElement;
-    console.log("[Theme] useEffect triggered, isDark:", isDark);
-    console.log("[Theme] html classes before:", html.className);
     if (isDark) {
       html.classList.add("dark");
       localStorage.setItem("theme", "dark");
@@ -48,7 +46,6 @@ export function Sidebar({ lang, setLang, view, setView }: SidebarProps) {
     }
     // Sync with Windows title bar
     (window as any).api?.setTheme?.(isDark ? "dark" : "light");
-    console.log("[Theme] html classes after:", html.className);
   }, [isDark]);
 
   // Navigation order: Main → Config → Processing → Advanced → Utility
@@ -150,9 +147,7 @@ export function Sidebar({ lang, setLang, view, setView }: SidebarProps) {
                 // Update state and localStorage
                 localStorage.setItem("theme", newIsDark ? "dark" : "light");
                 setIsDark(newIsDark);
-
-                console.log("[Theme] Toggled to:", newIsDark ? "dark" : "light");
-                console.log("[Theme] HTML class now:", html.className);
+                console.log("[Theme]", newIsDark ? "dark" : "light");
               }}
               className="p-1.5 rounded-lg bg-secondary hover:bg-primary/20 transition-colors group"
             >
