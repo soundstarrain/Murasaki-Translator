@@ -10,6 +10,7 @@ const api = {
     selectFolder: () => ipcRenderer.invoke('select-directory'),
     scanDirectory: (path: string, recursive: boolean = false) => ipcRenderer.invoke('scan-directory', path, recursive),
     getModels: () => ipcRenderer.invoke('get-models'),
+    getModelsPath: () => ipcRenderer.invoke('get-models-path'),
     getModelInfo: (modelName: string) => ipcRenderer.invoke('get-model-info', modelName),
     startTranslation: (inputFile: string, modelPath: string, config: any) => ipcRenderer.send('start-translation', { inputFile, modelPath, config }),
     getHardwareSpecs: () => ipcRenderer.invoke('get-hardware-specs'),
@@ -55,6 +56,13 @@ const api = {
 
     // System Diagnostics
     getSystemDiagnostics: () => ipcRenderer.invoke('get-system-diagnostics'),
+    checkEnvComponent: (component: 'Python' | 'CUDA' | 'Vulkan' | 'Middleware' | 'Permissions') => ipcRenderer.invoke('check-env-component', component),
+    fixEnvComponent: (component: 'Python' | 'CUDA' | 'Vulkan' | 'Middleware' | 'Permissions') => ipcRenderer.invoke('fix-env-component', component),
+
+    // Env Fix Progress
+    onEnvFixProgress: (callback: (data: { component: string, stage: string, progress: number, message: string, totalBytes?: number, downloadedBytes?: number }) => void) =>
+        ipcRenderer.on('env-fix-progress', (_event, value) => callback(value)),
+    removeEnvFixProgressListener: () => ipcRenderer.removeAllListeners('env-fix-progress'),
 
     // Debug Export
     readServerLog: () => ipcRenderer.invoke('read-server-log'),
@@ -92,6 +100,18 @@ const api = {
     remoteCancel: (taskId: string) => ipcRenderer.invoke('remote-cancel', taskId),
     remoteUpload: (filePath: string) => ipcRenderer.invoke('remote-upload', filePath),
     remoteDownload: (taskId: string, savePath: string) => ipcRenderer.invoke('remote-download', taskId, savePath),
+
+    // HuggingFace Download
+    hfListRepos: (orgName: string) => ipcRenderer.invoke('hf-list-repos', orgName),
+    hfListFiles: (repoId: string) => ipcRenderer.invoke('hf-list-files', repoId),
+    hfDownloadStart: (repoId: string, fileName: string, mirror: string = 'direct') => ipcRenderer.invoke('hf-download-start', repoId, fileName, mirror),
+    hfDownloadCancel: () => ipcRenderer.invoke('hf-download-cancel'),
+    onHfDownloadProgress: (callback: (data: any) => void) => ipcRenderer.on('hf-download-progress', (_event, value) => callback(value)),
+    offHfDownloadProgress: () => ipcRenderer.removeAllListeners('hf-download-progress'),
+    onHfDownloadError: (callback: (data: any) => void) => ipcRenderer.on('hf-download-error', (_event, value) => callback(value)),
+    offHfDownloadError: () => ipcRenderer.removeAllListeners('hf-download-error'),
+    hfVerifyModel: (orgName: string, filePath: string) => ipcRenderer.invoke('hf-verify-model', orgName, filePath),
+    hfCheckNetwork: () => ipcRenderer.invoke('hf-check-network'),
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

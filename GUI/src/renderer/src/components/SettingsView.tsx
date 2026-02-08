@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react"
-import { Save, Settings, Trash2, AlertTriangle, Download, FolderOpen, XCircle, Github, Globe, ExternalLink, RefreshCw, CheckCircle2, XCircle as XCircleIcon, Activity, Layout, Zap, Terminal, Box, Layers, Link, ShieldCheck, TerminalSquare } from "lucide-react"
+import { Save, Settings, Trash2, AlertTriangle, Download, FolderOpen, XCircle, Github, Globe, ExternalLink, RefreshCw, CheckCircle2, XCircle as XCircleIcon, Activity, Layout, Zap, Terminal, Box, Layers, Link, ShieldCheck, TerminalSquare, Wrench, AlertCircle, Info, Server } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, Tooltip } from "./ui/core"
 import { Button } from "./ui/core"
 import { AlertModal } from "./ui/AlertModal"
 import { translations, Language } from "../lib/i18n"
 import { APP_CONFIG, DEFAULT_POST_RULES } from "../lib/config"
 import { cn } from "../lib/utils"
+import { LogViewerModal } from "./LogViewerModal"
+import { EnvFixerModal } from "./EnvFixerModal"
 
 
 export function SettingsView({ lang }: { lang: Language }) {
@@ -32,6 +34,18 @@ export function SettingsView({ lang }: { lang: Language }) {
     } | null>(null)
     const [diagLoading, setDiagLoading] = useState(false)
     const [diagError, setDiagError] = useState<string | null>(null)
+
+    // Environment Fixer State
+    const [envCheckResults, setEnvCheckResults] = useState<{
+        Python: { status: 'ok' | 'warning' | 'error'; issues: string[]; fixes: string[]; canAutoFix: boolean } | null
+        CUDA: { status: 'ok' | 'warning' | 'error'; issues: string[]; fixes: string[]; canAutoFix: boolean } | null
+        Vulkan: { status: 'ok' | 'warning' | 'error'; issues: string[]; fixes: string[]; canAutoFix: boolean } | null
+        LlamaBackend: { status: 'ok' | 'warning' | 'error'; issues: string[]; fixes: string[]; canAutoFix: boolean } | null
+        Middleware: { status: 'ok' | 'warning' | 'error'; issues: string[]; fixes: string[]; canAutoFix: boolean } | null
+        Permissions: { status: 'ok' | 'warning' | 'error'; issues: string[]; fixes: string[]; canAutoFix: boolean } | null
+    } | null>(null)
+    const [envFixing, setEnvFixing] = useState<{ [key: string]: boolean }>({})
+    const [envCheckLoading, setEnvCheckLoading] = useState(false)
 
     // Cache key and expiry (5 minutes)
     const DIAG_CACHE_KEY = 'system_diagnostics_cache'
@@ -87,6 +101,89 @@ export function SettingsView({ lang }: { lang: Language }) {
             }
         }
         setDiagLoading(false)
+    }
+
+    const checkEnvironmentComponent = async (component: 'Python' | 'CUDA' | 'Vulkan' | 'LlamaBackend' | 'Middleware' | 'Permissions') => {
+        try {
+            // @ts-ignore
+            const result = await window.api.checkEnvComponent(component)
+            if (result.success && result.component) {
+                setEnvCheckResults(prev => {
+                    const newResults = prev || { Python: null, CUDA: null, Vulkan: null, LlamaBackend: null, Middleware: null, Permissions: null }
+                    return {
+                        ...newResults,
+                        [component]: {
+                            status: result.component!.status,
+                            issues: result.component!.issues,
+                            fixes: result.component!.fixes,
+                            canAutoFix: result.component!.canAutoFix
+                        }
+                    }
+                })
+            }
+        } catch (e) {
+            console.error(`Failed to check ${component}:`, e)
+        }
+    }
+
+    const checkAllEnvironmentComponents = async () => {
+        setEnvCheckLoading(true)
+        setAlertConfig(prev => ({ ...prev, confirmLoading: true }))
+        const components: Array<'Python' | 'CUDA' | 'Vulkan' | 'LlamaBackend' | 'Middleware' | 'Permissions'> = ['Python', 'CUDA', 'Vulkan', 'LlamaBackend', 'Middleware', 'Permissions']
+
+        const promises = components.map(comp => checkEnvironmentComponent(comp))
+        await Promise.all(promises)
+
+        setEnvCheckLoading(false)
+        setAlertConfig(prev => ({ ...prev, confirmLoading: false }))
+    }
+
+    const fixEnvironmentComponent = async (component: 'Python' | 'CUDA' | 'Vulkan' | 'LlamaBackend' | 'Middleware' | 'Permissions') => {
+        setEnvFixing(prev => ({ ...prev, [component]: true }))
+
+        try {
+            // @ts-ignore
+            const result = await window.api.fixEnvComponent(component)
+
+            setAlertConfig({
+                open: true,
+                title: result.success ? '修复完成' : '修复失败',
+                description: result.message || '未返回详细信息',
+                variant: result.success ? 'success' : 'destructive',
+                showCancel: false,
+                confirmText: '确定',
+                onConfirm: async () => {
+                    await checkEnvironmentComponent(component)
+                    setAlertConfig({
+                        open: true,
+                        title: '运行环境诊断与修复',
+                        description: renderEnvFixerContent(),
+                        variant: 'info',
+                        showCancel: true,
+                        showIcon: false,
+                        cancelText: '关闭',
+                        confirmText: '刷新检测',
+                        closeOnConfirm: false,
+                        onConfirm: async () => {
+                            await checkAllEnvironmentComponents()
+                            setAlertConfig(prev => ({ ...prev, description: renderEnvFixerContent() }))
+                        }
+                    })
+                }
+            })
+        } catch (e) {
+            setAlertConfig({
+                open: true,
+                title: '修复失败',
+                description: String(e),
+                variant: 'destructive',
+                showCancel: false,
+                confirmText: '确定',
+                onConfirm: () => setAlertConfig(prev => ({ ...prev, open: false }))
+            })
+        }
+
+        setEnvFixing(prev => ({ ...prev, [component]: false }))
     }
 
     // Update States
@@ -168,9 +265,19 @@ export function SettingsView({ lang }: { lang: Language }) {
         description: string | React.ReactNode
         variant?: 'default' | 'destructive' | 'info' | 'success' | 'warning'
         showCancel?: boolean
+        showIcon?: boolean
         confirmText?: string
-        onConfirm: () => void
+        cancelText?: string
+        onConfirm: () => void | Promise<void>
+        closeOnConfirm?: boolean
+        confirmLoading?: boolean
     }>({ open: false, title: '', description: '', onConfirm: () => { } })
+
+    // Modal States for new log/env viewers
+    const [showServerLogModal, setShowServerLogModal] = useState(false)
+    const [showTerminalLogModal, setShowTerminalLogModal] = useState(false)
+    const [showEnvFixerModal, setShowEnvFixerModal] = useState(false)
+
 
     const handleResetSystem = () => {
         setAlertConfig({
@@ -338,10 +445,140 @@ export function SettingsView({ lang }: { lang: Language }) {
         URL.revokeObjectURL(url)
     }
 
+    const renderEnvFixerContent = () => {
+        const components: Array<{ name: 'Python' | 'CUDA' | 'Vulkan' | 'LlamaBackend' | 'Middleware' | 'Permissions'; label: string; icon: any; description: string }> = [
+            { name: 'Python', label: 'Python 环境', icon: Terminal, description: '内嵌 Python 解释器（版本 >= 3.10）' },
+            { name: 'CUDA', label: 'CUDA 环境', icon: Zap, description: 'NVIDIA GPU 加速支持（可选）' },
+            { name: 'Vulkan', label: 'Vulkan 环境', icon: Box, description: '跨平台 GPU 加速（可选）' },
+            { name: 'LlamaBackend', label: 'Llama 后端', icon: Server, description: '本地 LLM 推理服务（端口 11434）' },
+            { name: 'Middleware', label: '中间件文件', icon: Layers, description: '翻译引擎核心文件' },
+            { name: 'Permissions', label: '文件权限', icon: ShieldCheck, description: '程序运行所需的目录访问权限' }
+        ]
+
+        const statusColors = {
+            ok: 'text-green-500 bg-green-500/10',
+            warning: 'text-yellow-600 bg-yellow-500/10',
+            error: 'text-red-500 bg-red-500/10'
+        }
+
+        const statusIcons = {
+            ok: CheckCircle2,
+            warning: AlertCircle,
+            error: XCircleIcon
+        }
+
+        return (
+            <div className="space-y-4">
+                {envCheckLoading ? (
+                    <div className="flex flex-col items-center justify-center py-8 gap-3">
+                        <RefreshCw className="w-8 h-8 animate-spin text-primary/40" />
+                        <span className="text-sm text-muted-foreground">正在检测运行环境...</span>
+                    </div>
+                ) : (
+                    <div className="space-y-3">
+                        {components.map(comp => {
+                            const result = envCheckResults?.[comp.name]
+                            const StatusIcon = result ? statusIcons[result.status] : Info
+                            const CompIcon = comp.icon
+                            const isFixing = envFixing[comp.name]
+
+                            return (
+                                <div key={comp.name} className="border rounded-lg p-4 space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${result ? statusColors[result.status] : 'bg-muted'
+                                                }`}>
+                                                <CompIcon className="w-4 h-4" />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-semibold">{comp.label}</p>
+                                                <p className="text-xs text-muted-foreground">{comp.description}</p>
+                                            </div>
+                                        </div>
+                                        {result && (
+                                            <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium ${statusColors[result.status]}`}>
+                                                <StatusIcon className="w-3 h-3" />
+                                                {result.status === 'ok' ? '正常' : result.status === 'warning' ? '警告' : '错误'}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {result && result.issues.length > 0 && (
+                                        <div className="pl-10 space-y-1">
+                                            {result.issues.map((issue, idx) => (
+                                                <div key={idx} className="flex items-start gap-2 text-xs text-muted-foreground">
+                                                    <XCircle className="w-3 h-3 text-destructive mt-0.5 shrink-0" />
+                                                    <span>{issue}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {result && result.fixes.length > 0 && (
+                                        <div className="pl-10 space-y-1">
+                                            <p className="text-xs font-medium text-muted-foreground mb-1">修复建议：</p>
+                                            {result.fixes.map((fix, idx) => (
+                                                <div key={idx} className="flex items-start gap-2 text-xs text-muted-foreground">
+                                                    <Info className="w-3 h-3 text-blue-500 mt-0.5 shrink-0" />
+                                                    <span>{fix}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {result && result.status !== 'ok' && (
+                                        <div className="pl-10 pt-2">
+                                            {result.canAutoFix ? (
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    className="h-7 text-xs gap-1.5"
+                                                    onClick={() => fixEnvironmentComponent(comp.name)}
+                                                    disabled={isFixing}
+                                                >
+                                                    {isFixing ? (
+                                                        <>
+                                                            <RefreshCw className="w-3 h-3 animate-spin" />
+                                                            修复中...
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <Wrench className="w-3 h-3" />
+                                                            自动修复
+                                                        </>
+                                                    )}
+                                                </Button>
+                                            ) : (
+                                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                                    <AlertCircle className="w-3 h-3 text-yellow-600" />
+                                                    需要手动修复（见上方建议）
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )
+                        })}
+                    </div>
+                )}
+
+                <div className="pt-3 border-t">
+                    <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/50 p-3 rounded">
+                        <Info className="w-3 h-3 mt-0.5 shrink-0 text-blue-500" />
+                        <div className="space-y-1">
+                            <p>检测到问题时，请根据修复建议进行操作。大部分环境问题需要手动解决（如安装驱动或重新安装程序）。</p>
+                            <p>点击"刷新检测"可重新检查所有组件的状态。</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
     return (
         <div className="flex-1 h-screen flex flex-col bg-background overflow-hidden">
             {/* Header - Fixed Top */}
-            <div className="px-8 pt-8 pb-6 shrink-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+            <div className="px-8 pt-4 pb-3 shrink-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
                 <h2 className="text-2xl font-bold text-foreground flex items-center gap-3">
                     <Settings className="w-6 h-6 text-primary" />
                     {t.settingsTitle}
@@ -353,8 +590,8 @@ export function SettingsView({ lang }: { lang: Language }) {
 
                 {/* System Diagnostics Card */}
                 {/* System Diagnostics Card */}
-                <Card className="mb-6 overflow-hidden border-primary/10 shadow-sm">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 bg-secondary/10 border-b">
+                <Card className="mb-3 overflow-hidden border-primary/10 shadow-sm">
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 py-2 bg-secondary/10 border-b">
                         <CardTitle className="text-base flex items-center gap-2 font-bold">
                             <ShieldCheck className="w-4 h-4 text-primary" />
                             运行环境诊断
@@ -391,11 +628,11 @@ export function SettingsView({ lang }: { lang: Language }) {
                             <div className="divide-y divide-border">
                                 <div className="grid grid-cols-1 md:grid-cols-3 divide-x divide-border">
                                     {/* OS Section */}
-                                    <div className="p-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
+                                    <div className="py-2 px-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
                                         <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
                                             <Layout className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                                         </div>
-                                        <div className="space-y-0.5 min-w-0">
+                                        <div className="space-y-1 min-w-0">
                                             <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">操作系统</p>
                                             <p className="text-sm font-semibold truncate">
                                                 {diagnostics.os.platform === 'win32' ? `Windows ${diagnostics.os.release}` :
@@ -406,11 +643,11 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     </div>
 
                                     {/* GPU Section */}
-                                    <div className="p-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
+                                    <div className="py-2 px-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
                                         <div className="w-8 h-8 rounded-lg bg-yellow-500/10 flex items-center justify-center shrink-0">
                                             <Zap className="w-4 h-4 text-yellow-600 dark:text-yellow-400" />
                                         </div>
-                                        <div className="space-y-0.5 min-w-0">
+                                        <div className="space-y-1 min-w-0">
                                             <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">图形处理器</p>
                                             {diagnostics.gpu ? (
                                                 <>
@@ -428,11 +665,11 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     </div>
 
                                     {/* Python Section */}
-                                    <div className="p-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
+                                    <div className="py-2 px-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
                                         <div className="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center shrink-0">
                                             <Terminal className="w-4 h-4 text-green-600 dark:text-green-400" />
                                         </div>
-                                        <div className="space-y-0.5 min-w-0">
+                                        <div className="space-y-1 min-w-0">
                                             <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Python 环境</p>
                                             {diagnostics.python ? (
                                                 <>
@@ -456,11 +693,11 @@ export function SettingsView({ lang }: { lang: Language }) {
 
                                 <div className="grid grid-cols-1 md:grid-cols-3 divide-x divide-border">
                                     {/* CUDA Section */}
-                                    <div className="p-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
+                                    <div className="py-2 px-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
                                         <div className="w-8 h-8 rounded-lg bg-purple-500/10 flex items-center justify-center shrink-0">
                                             <Box className="w-4 h-4 text-purple-600 dark:text-purple-400" />
                                         </div>
-                                        <div className="space-y-0.5">
+                                        <div className="space-y-1">
                                             <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">CUDA 加速</p>
                                             {diagnostics.cuda?.available ? (
                                                 <p className="text-sm font-semibold flex items-center gap-1.5">
@@ -474,11 +711,11 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     </div>
 
                                     {/* Vulkan Section */}
-                                    <div className="p-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
+                                    <div className="py-2 px-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
                                         <div className="w-8 h-8 rounded-lg bg-orange-500/10 flex items-center justify-center shrink-0">
                                             <Layers className="w-4 h-4 text-orange-600 dark:text-orange-400" />
                                         </div>
-                                        <div className="space-y-0.5">
+                                        <div className="space-y-1">
                                             <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Vulkan 后端</p>
                                             {diagnostics.vulkan?.available ? (
                                                 <p className="text-sm font-semibold flex items-center gap-1.5">
@@ -492,11 +729,11 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     </div>
 
                                     {/* llama-server Section */}
-                                    <div className="p-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
+                                    <div className="py-2 px-4 flex gap-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors">
                                         <div className="w-8 h-8 rounded-lg bg-zinc-500/10 flex items-center justify-center shrink-0">
                                             <Link className="w-4 h-4 text-zinc-600 dark:text-zinc-400" />
                                         </div>
-                                        <div className="space-y-0.5 min-w-0">
+                                        <div className="space-y-1 min-w-0">
                                             <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">推理后端</p>
                                             {diagnostics.llamaServer.status === 'online' ? (
                                                 <>
@@ -525,7 +762,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                         )}
 
                         {/* Debug Actions Section */}
-                        <div className="p-4 bg-muted/30 border-t flex items-center justify-between">
+                        <div className="py-2 px-4 bg-muted/30 border-t flex items-center justify-between">
                             <div className="flex items-center gap-2">
                                 <TerminalSquare className="w-4 h-4 text-muted-foreground/60" />
                                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">调试工具箱</span>
@@ -548,37 +785,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                         variant="outline"
                                         size="sm"
                                         className="h-7 text-[11px] gap-1.5 bg-background shadow-xs hover:bg-secondary transition-all"
-                                        onClick={async () => {
-                                            // @ts-ignore
-                                            const logs = await window.api.serverLogs()
-                                            const logText = logs?.length ? logs.join('\n') : ''
-
-                                            setAlertConfig({
-                                                open: true,
-                                                title: logs?.length ? `服务器日志 (${logs.length} 条)` : '服务器日志',
-                                                description: (
-                                                    <div className="relative max-w-full">
-                                                        <button
-                                                            onClick={() => navigator.clipboard.writeText(logText)}
-                                                            className="absolute top-2 right-2 text-xs px-2 py-1 rounded bg-white/80 dark:bg-slate-800/80 hover:bg-white dark:hover:bg-slate-800 transition-colors flex items-center gap-1 shadow-sm border border-slate-200 dark:border-slate-700 z-10"
-                                                        >
-                                                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                                                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                                                            </svg>
-                                                            复制
-                                                        </button>
-                                                        <pre className="whitespace-pre-wrap break-all text-xs font-mono bg-slate-100 dark:bg-slate-900/50 text-slate-700 dark:text-slate-300 p-3 pt-10 rounded-lg border border-slate-200 dark:border-slate-800 max-h-[50vh] overflow-y-auto overflow-x-hidden">
-                                                            {logText || '后端服务器尚未产生运行日志'}
-                                                        </pre>
-                                                    </div>
-                                                ),
-                                                variant: 'info',
-                                                showCancel: false,
-                                                confirmText: '关闭',
-                                                onConfirm: () => setAlertConfig(prev => ({ ...prev, open: false }))
-                                            })
-                                        }}
+                                        onClick={() => setShowServerLogModal(true)}
                                     >
                                         <Activity className="w-3 h-3" />
                                         查看运行日志
@@ -589,40 +796,21 @@ export function SettingsView({ lang }: { lang: Language }) {
                                         variant="outline"
                                         size="sm"
                                         className="h-7 text-[11px] gap-1.5 bg-background shadow-xs hover:bg-secondary transition-all"
-                                        onClick={async () => {
-                                            // @ts-ignore
-                                            const logs = await window.api.getMainProcessLogs()
-                                            const logText = logs?.length ? logs.join('\n') : ''
-
-                                            setAlertConfig({
-                                                open: true,
-                                                title: logs?.length ? `主进程日志 (${logs.length} 条)` : '主进程日志',
-                                                description: (
-                                                    <div className="relative max-w-full">
-                                                        <button
-                                                            onClick={() => navigator.clipboard.writeText(logText)}
-                                                            className="absolute top-2 right-2 text-xs px-2 py-1 rounded bg-white/80 dark:bg-slate-800/80 hover:bg-white dark:hover:bg-slate-800 transition-colors flex items-center gap-1 shadow-sm border border-slate-200 dark:border-slate-700 z-10"
-                                                        >
-                                                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                                                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                                                            </svg>
-                                                            复制
-                                                        </button>
-                                                        <pre className="whitespace-pre-wrap break-all text-xs font-mono bg-slate-100 dark:bg-slate-900/50 text-slate-700 dark:text-slate-300 p-3 pt-10 rounded-lg border border-slate-200 dark:border-slate-800 max-h-[50vh] overflow-y-auto overflow-x-hidden">
-                                                            {logText || '暂无主进程日志'}
-                                                        </pre>
-                                                    </div>
-                                                ),
-                                                variant: 'info',
-                                                showCancel: false,
-                                                confirmText: '关闭',
-                                                onConfirm: () => setAlertConfig(prev => ({ ...prev, open: false }))
-                                            })
-                                        }}
+                                        onClick={() => setShowTerminalLogModal(true)}
                                     >
                                         <TerminalSquare className="w-3 h-3" />
                                         查看终端日志
+                                    </Button>
+                                </Tooltip>
+                                <Tooltip content="检查并修复运行环境问题">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 text-[11px] gap-1.5 bg-background shadow-xs hover:bg-secondary transition-all"
+                                        onClick={() => setShowEnvFixerModal(true)}
+                                    >
+                                        <Wrench className="w-3 h-3" />
+                                        环境修复工具
                                     </Button>
                                 </Tooltip>
                             </div>
@@ -902,9 +1090,23 @@ export function SettingsView({ lang }: { lang: Language }) {
                 variant={alertConfig.variant || 'destructive'}
                 onConfirm={alertConfig.onConfirm}
                 showCancel={alertConfig.showCancel ?? true}
+                showIcon={alertConfig.showIcon ?? true}
+                closeOnConfirm={alertConfig.closeOnConfirm ?? true}
+                confirmLoading={alertConfig.confirmLoading ?? false}
                 cancelText={t.glossaryView.cancel}
                 confirmText={alertConfig.confirmText || t.config.storage.reset}
             />
+
+            {/* New Modal Components */}
+            {showServerLogModal && (
+                <LogViewerModal mode="server" onClose={() => setShowServerLogModal(false)} />
+            )}
+            {showTerminalLogModal && (
+                <LogViewerModal mode="terminal" onClose={() => setShowTerminalLogModal(false)} />
+            )}
+            {showEnvFixerModal && (
+                <EnvFixerModal onClose={() => setShowEnvFixerModal(false)} />
+            )}
         </div>
     )
 }

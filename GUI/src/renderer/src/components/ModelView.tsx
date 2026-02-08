@@ -14,10 +14,15 @@ import {
   Layers,
   Layout,
   Github,
+  ShieldCheck,
+  ShieldX,
+  ShieldQuestion,
+  Loader2,
 } from "lucide-react";
 import { Button } from "./ui/core";
 import { translations, Language } from "../lib/i18n";
 import { APP_CONFIG } from "../lib/config";
+import { HFDownloadModal } from "./HFDownloadModal";
 
 interface ModelInfo {
   sizeGB: number;
@@ -36,6 +41,31 @@ export function ModelView({ lang }: { lang: Language }) {
   const [loading, setLoading] = useState(false);
   const [downloadTab, setDownloadTab] = useState<"ms" | "hf" | "bd">("hf");
   const [showGuide, setShowGuide] = useState(false);
+  const [showHFModal, setShowHFModal] = useState(false);
+
+  // Model verification state: 'idle' | 'verifying' | 'valid' | 'invalid' | 'unknown'
+  type VerifyStatus = 'idle' | 'verifying' | 'valid' | 'invalid' | 'unknown';
+  const [verifyStatus, setVerifyStatus] = useState<Record<string, VerifyStatus>>({});
+
+  // Cache key for verification results
+  const VERIFY_CACHE_KEY = 'model_verification_cache';
+
+  // Load cached verification results
+  const loadVerifyCache = (): Record<string, { status: VerifyStatus; size: number }> => {
+    try {
+      const cached = localStorage.getItem(VERIFY_CACHE_KEY);
+      return cached ? JSON.parse(cached) : {};
+    } catch {
+      return {};
+    }
+  };
+
+  // Save verification result to cache
+  const saveVerifyCache = (model: string, status: VerifyStatus, size: number) => {
+    const cache = loadVerifyCache();
+    cache[model] = { status, size };
+    localStorage.setItem(VERIFY_CACHE_KEY, JSON.stringify(cache));
+  };
 
   const fetchModels = async () => {
     setLoading(true);
@@ -54,6 +84,21 @@ export function ModelView({ lang }: { lang: Language }) {
         } catch (e) { }
       }
       setModelInfoMap(infoMap);
+
+      // Auto-verify Murasaki models - 仅从缓存加载，不自动触发校验
+      // 原因：自动校验会并发启动多个 Python 进程，导致资源耗尽和后端启动失败
+      const cache = loadVerifyCache();
+      for (const model of files) {
+        if (isMurasakiModel(model)) {
+          const info = infoMap[model];
+          // Check cache: only use cache if file size matches
+          const cachedResult = cache[model];
+          if (cachedResult && info?.sizeGB && Math.abs(cachedResult.size - info.sizeGB) < 0.01) {
+            setVerifyStatus(prev => ({ ...prev, [model]: cachedResult.status }));
+          }
+          // 不再自动触发校验，用户需手动点击盾牌图标
+        }
+      }
     } catch (e) {
       console.error(e);
     }
@@ -80,6 +125,44 @@ export function ModelView({ lang }: { lang: Language }) {
     name.toLowerCase().includes("murasaki");
   const hasModels = models.length > 0;
   const isGuideVisible = !hasModels || showGuide;
+
+  // Verify model integrity against HuggingFace
+  const verifyModel = async (model: string, sizeGB: number) => {
+    setVerifyStatus(prev => ({ ...prev, [model]: 'verifying' }));
+    try {
+      // @ts-ignore - Get models directory path
+      const modelsDir = await window.api?.getModelsPath?.();
+      if (!modelsDir) {
+        setVerifyStatus(prev => ({ ...prev, [model]: 'unknown' }));
+        return;
+      }
+
+      const filePath = `${modelsDir}/${model}`;
+
+      // @ts-ignore
+      const result = await window.api?.hfVerifyModel?.(
+        APP_CONFIG.modelDownload.huggingfaceOrg,
+        filePath
+      );
+
+      let status: VerifyStatus = 'unknown';
+      if (result?.error) {
+        status = 'unknown';
+      } else if (result?.status === 'valid') {
+        status = 'valid';
+      } else if (result?.status === 'invalid') {
+        status = 'invalid';
+      } else if (result?.status === 'unknown') {
+        status = 'unknown';
+      }
+
+      setVerifyStatus(prev => ({ ...prev, [model]: status }));
+      saveVerifyCache(model, status, sizeGB);
+    } catch (e) {
+      console.error('Verification failed:', e);
+      setVerifyStatus(prev => ({ ...prev, [model]: 'unknown' }));
+    }
+  };
 
   // Helper for visual step guide
   const StepCard = ({
@@ -273,12 +356,12 @@ export function ModelView({ lang }: { lang: Language }) {
                         onClick={() => setDownloadTab("ms")}
                         className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${downloadTab === "ms" ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                       >
-                        GitHub Project
+                        GitHub
                       </button>
                     </div>
 
                     {/* Tab Content */}
-                    <div className="bg-background rounded-xl border border-border/50 p-4 shadow-sm flex-1 flex flex-col items-center justify-center text-center space-y-4">
+                    <div className="bg-background rounded-xl border border-border/50 p-4 shadow-sm flex-1 flex flex-col items-center justify-center text-center space-y-4 hover:shadow-md transition-shadow">
                       {downloadTab === "hf" && (
                         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 w-full flex flex-col items-center">
                           <div className="w-12 h-12 rounded-xl bg-yellow-500/10 flex items-center justify-center text-2xl mb-2 border border-yellow-500/20">
@@ -294,7 +377,16 @@ export function ModelView({ lang }: { lang: Language }) {
                           </div>
                           <Button
                             size="sm"
-                            className="w-full mt-4 bg-yellow-500 hover:bg-yellow-600 text-black font-semibold"
+                            className="w-full mt-4 bg-gradient-to-r from-yellow-500 to-amber-500 hover:from-yellow-600 hover:to-amber-600 text-black font-semibold shadow-sm hover:scale-[1.02] transition-transform"
+                            onClick={() => setShowHFModal(true)}
+                          >
+                            <Download className="w-4 h-4 mr-2" />
+                            一键下载
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="w-full mt-2 text-xs"
                             onClick={() =>
                               window.open(
                                 APP_CONFIG.modelDownload.huggingface,
@@ -302,8 +394,8 @@ export function ModelView({ lang }: { lang: Language }) {
                               )
                             }
                           >
-                            <ExternalLink className="w-4 h-4 mr-2" /> Open
-                            Repository
+                            <ExternalLink className="w-3 h-3 mr-1" />
+                            打开仓库页面
                           </Button>
                         </div>
                       )}
@@ -322,7 +414,7 @@ export function ModelView({ lang }: { lang: Language }) {
                           </div>
                           <Button
                             size="sm"
-                            className="w-full mt-2 bg-gray-800 hover:bg-gray-900 text-white"
+                            className="w-full mt-2 bg-gray-800 hover:bg-gray-900 text-white shadow-sm hover:scale-[1.02] transition-transform"
                             onClick={() =>
                               window.open(APP_CONFIG.projectRepo, "_blank")
                             }
@@ -372,24 +464,36 @@ export function ModelView({ lang }: { lang: Language }) {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4 pb-10">
               {models.length === 0 ? (
-                <div className="col-span-full flex flex-col items-center justify-center py-16 border-2 border-dashed border-border/50 rounded-xl bg-secondary/5">
-                  <FolderOpen className="w-12 h-12 text-muted-foreground/30 mb-4" />
+                <div className="col-span-full flex flex-col items-center justify-center py-16 border-2 border-dashed border-border/50 rounded-xl bg-secondary/5 group/empty transition-colors hover:border-purple-500/30">
+                  <div className="w-12 h-12 rounded-xl bg-secondary/80 flex items-center justify-center mb-4 border border-border/50 group-hover/empty:scale-110 transition-transform">
+                    <FolderOpen className="w-6 h-6 text-muted-foreground/40 group-hover/empty:text-purple-500/60 transition-colors" />
+                  </div>
                   <p className="font-medium text-muted-foreground">
                     {t.modelView.noModels}
                   </p>
                   <p className="text-xs text-muted-foreground/60 mt-1">
                     {t.modelView.noModelsSub || "middleware/models is empty"}
                   </p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-4"
-                    onClick={() =>
-                      window.api?.openFolder?.("middleware/models")
-                    }
-                  >
-                    {t.modelView.openFolder}
-                  </Button>
+                  <div className="flex items-center gap-3 mt-6">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        window.api?.openFolder?.("middleware/models")
+                      }
+                    >
+                      {t.modelView.openFolder}
+                    </Button>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white border-0 shadow-md hover:scale-105 transition-all"
+                      onClick={() => setShowHFModal(true)}
+                    >
+                      <Download className="w-3.5 h-3.5 mr-1.5" />
+                      一键下载官方模型
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 [...models]
@@ -449,6 +553,47 @@ export function ModelView({ lang }: { lang: Language }) {
                                   <Sparkles className="w-2.5 h-2.5" />
                                   {t.modelView.recommended}
                                 </span>
+                                {/* Verify Button */}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (info?.sizeGB && verifyStatus[model] !== 'verifying') {
+                                      verifyModel(model, info.sizeGB);
+                                    }
+                                  }}
+                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors ${verifyStatus[model] === 'verifying'
+                                    ? 'bg-blue-500/10 text-blue-600 border-blue-500/20 animate-pulse'
+                                    : verifyStatus[model] === 'valid'
+                                      ? 'bg-green-500/10 text-green-600 border-green-500/20'
+                                      : verifyStatus[model] === 'invalid'
+                                        ? 'bg-red-500/10 text-red-600 border-red-500/20'
+                                        : verifyStatus[model] === 'unknown'
+                                          ? 'bg-yellow-500/10 text-yellow-600 border-yellow-500/20'
+                                          : 'bg-secondary/50 text-muted-foreground border-border hover:bg-secondary hover:text-foreground'
+                                    }`}
+                                  title={
+                                    verifyStatus[model] === 'verifying' ? '校验中...'
+                                      : verifyStatus[model] === 'valid' ? '文件完整，与官方版本一致'
+                                        : verifyStatus[model] === 'invalid' ? '文件不完整，与官方版本大小不符'
+                                          : verifyStatus[model] === 'unknown' ? '无法匹配官方文件，可能是非官方版本'
+                                            : '点击校验完整性'
+                                  }
+                                >
+                                  {verifyStatus[model] === 'verifying' ? (
+                                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                  ) : verifyStatus[model] === 'valid' ? (
+                                    <ShieldCheck className="w-2.5 h-2.5" />
+                                  ) : verifyStatus[model] === 'invalid' ? (
+                                    <ShieldX className="w-2.5 h-2.5" />
+                                  ) : (
+                                    <ShieldQuestion className="w-2.5 h-2.5" />
+                                  )}
+                                  {verifyStatus[model] === 'valid' ? '完整'
+                                    : verifyStatus[model] === 'invalid' ? '不完整'
+                                      : verifyStatus[model] === 'verifying' ? '校验中'
+                                        : verifyStatus[model] === 'unknown' ? '未知'
+                                          : '校验'}
+                                </button>
                               </div>
                             )}
                           </div>
@@ -521,6 +666,15 @@ export function ModelView({ lang }: { lang: Language }) {
           </div>
         </div>
       </div>
+
+      {/* HuggingFace Download Modal */}
+      <HFDownloadModal
+        isOpen={showHFModal}
+        onClose={() => setShowHFModal(false)}
+        orgName={APP_CONFIG.modelDownload.huggingfaceOrg}
+        onDownloadComplete={fetchModels}
+        lang={lang}
+      />
     </div>
   );
 }

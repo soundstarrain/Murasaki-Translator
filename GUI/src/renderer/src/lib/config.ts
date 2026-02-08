@@ -9,19 +9,19 @@ export const APP_CONFIG = {
   // Official Links
   officialRepo: "https://github.com/soundstarrain/Murasaki-Translator",
   projectRepo: "https://github.com/soundstarrain/Murasaki-project",
-  feedbackEmail: "feedback@example.com",
+  feedbackEmail: "slimier.galls_9v@icloud.com",
 
   // Model Download Links - 模型下载地址
   modelDownload: {
-    huggingface: "https://huggingface.co/Murasaki-Project",
-    // ModelScope and Baidu are deprecated as per user request
+    huggingfaceOrg: "Murasaki-Project",  // Organization name for auto-discovery
+    huggingface: "https://huggingface.co/Murasaki-Project",  // Organization homepage
   },
 
   // Documentation
   docsUrl: "https://github.com/soundstarrain/Murasaki-Translator#readme",
 
   // Recommended Model
-  recommendedModel: "Murasaki-8B-v0.1-Q4_K_M.gguf", // Updated to match actual model
+  recommendedModel: "Murasaki-8B-v0.2-Q4_K_M.gguf", // Updated to match actual model
 } as const;
 
 // User Tips - 用户提示文本

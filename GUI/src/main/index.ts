@@ -1030,6 +1030,168 @@ ipcMain.handle('refresh-gpu-detection', async () => {
     }
 })
 
+ipcMain.handle('check-env-component', async (_event, component: string) => {
+    const middlewareDir = getMiddlewarePath()
+    const scriptPath = join(middlewareDir, 'env_fixer.py')
+    const pythonCmd = getPythonPath()
+
+    console.log(`[EnvFixer] Checking component: ${component}`)
+
+    return new Promise((resolve) => {
+        if (!fs.existsSync(scriptPath)) {
+            resolve({ success: false, error: `Script not found: ${scriptPath}` })
+            return
+        }
+
+        const proc = spawnPythonProcess(pythonCmd, ['env_fixer.py', '--check', '--json'], {
+            cwd: middlewareDir
+        })
+
+        let output = ''
+        let errorOutput = ''
+        let resolved = false
+
+        const timeout = setTimeout(() => {
+            if (resolved) return
+            resolved = true
+            proc.kill()
+            resolve({ success: false, error: 'Check timed out' })
+        }, 30000)
+
+        if (proc.stdout) {
+            proc.stdout.on('data', (d) => output += d.toString())
+        }
+        if (proc.stderr) {
+            proc.stderr.on('data', (d) => errorOutput += d.toString())
+        }
+
+        proc.on('error', (err) => {
+            if (resolved) return
+            resolved = true
+            clearTimeout(timeout)
+            resolve({ success: false, error: err.message })
+        })
+
+        proc.on('close', (code) => {
+            if (resolved) return
+            resolved = true
+            clearTimeout(timeout)
+
+            try {
+                const report = JSON.parse(output)
+                // 找到指定组件的信息
+                const componentData = report.components?.find((c: any) => c.name.toLowerCase() === component.toLowerCase())
+                resolve({
+                    success: true,
+                    report,
+                    component: componentData || null
+                })
+            } catch (e) {
+                resolve({ success: false, error: `Failed to parse report: ${e}`, output, errorOutput })
+            }
+        })
+    })
+})
+
+ipcMain.handle('fix-env-component', async (_event, component: string) => {
+    const middlewareDir = getMiddlewarePath()
+    const scriptPath = join(middlewareDir, 'env_fixer.py')
+    const pythonCmd = getPythonPath()
+
+    console.log(`[EnvFixer] Fixing component: ${component}`)
+
+    return new Promise((resolve) => {
+        if (!fs.existsSync(scriptPath)) {
+            resolve({ success: false, error: `Script not found: ${scriptPath}` })
+            return
+        }
+
+        const proc = spawnPythonProcess(pythonCmd, ['env_fixer.py', '--fix', component, '--json'], {
+            cwd: middlewareDir
+        })
+
+        let output = ''
+        let errorOutput = ''
+        let resolved = false
+        const timeout = setTimeout(() => {
+            if (resolved) return
+            resolved = true
+            proc.kill()
+            resolve({ success: false, error: 'Fix timed out (10 minutes)' })
+        }, 600000) // 10分钟超时
+        if (proc.stdout) {
+            proc.stdout.on('data', (d) => {
+                const str = d.toString()
+
+                // 解析进度信息并发送到前端
+                const lines = str.split('\n')
+                for (const line of lines) {
+                    const trimmedLine = line.trim()
+                    if (!trimmedLine) continue
+
+                    if (trimmedLine.startsWith('__PROGRESS__:')) {
+                        try {
+                            const progressData = JSON.parse(trimmedLine.substring('__PROGRESS__:'.length))
+                            console.log(`[EnvFixer] Progress: ${progressData.stage} ${progressData.progress}%`)
+                            // 发送进度事件到前端
+                            if (mainWindow && !mainWindow.isDestroyed()) {
+                                mainWindow.webContents.send('env-fix-progress', {
+                                    component,
+                                    ...progressData
+                                })
+                            }
+                        } catch (e) {
+                            console.error('[EnvFixer] Failed to parse progress:', e)
+                        }
+                    } else if (trimmedLine.startsWith('{') && trimmedLine.endsWith('}')) {
+                        // 尝试把可能是结果的 JSON 行收集起来，或者只是普通 log
+                        output += line + '\n'
+                    } else {
+                        output += line + '\n'
+                    }
+                }
+            })
+        }
+        if (proc.stderr) {
+            proc.stderr.on('data', (d) => errorOutput += d.toString())
+        }
+
+        proc.on('error', (err) => {
+            if (resolved) return
+            resolved = true
+            clearTimeout(timeout)
+            resolve({ success: false, error: err.message })
+        })
+
+        proc.on('close', (code) => {
+            if (resolved) return
+            resolved = true
+            clearTimeout(timeout)
+
+            try {
+                // 清理 output 中可能残留的非 JSON 内容
+                const cleanOutput = output.trim()
+                const jsonStart = cleanOutput.lastIndexOf('{')
+                const jsonEnd = cleanOutput.lastIndexOf('}')
+                const jsonStr = jsonStart >= 0 && jsonEnd > jsonStart
+                    ? cleanOutput.substring(jsonStart, jsonEnd + 1)
+                    : cleanOutput
+
+                const result = JSON.parse(jsonStr)
+                resolve({
+                    success: result.fixResult?.success || false,
+                    message: result.fixResult?.message || 'Unknown result',
+                    exitCode: code,
+                    output,
+                    errorOutput
+                })
+            } catch (e) {
+                resolve({ success: false, error: `Failed to parse result: ${e}`, output, errorOutput })
+            }
+        })
+    })
+})
+
 ipcMain.handle('test-rules', async (_event, { text, rules }) => {
     const middlewareDir = getMiddlewarePath()
     const scriptPath = join(middlewareDir, 'test_rules.py')
@@ -1602,12 +1764,16 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
     // Model selection
     let effectiveModelPath = modelPath
     const userDataPath = getUserDataPath()
+    console.log('[start-translation] modelPath from frontend:', modelPath)
+    console.log('[start-translation] userDataPath:', userDataPath)
 
     if (!effectiveModelPath) {
         // Auto-select from User Data models folder
         const modelDir = join(userDataPath, 'models')
+        console.log('[start-translation] Auto-selecting from:', modelDir)
         if (fs.existsSync(modelDir)) {
             const models = fs.readdirSync(modelDir).filter(f => f.endsWith('.gguf'))
+            console.log('[start-translation] Available models:', models)
             if (models.length > 0) {
                 effectiveModelPath = join(modelDir, models[0])
                 console.log("Auto-selected model:", effectiveModelPath)
@@ -1616,12 +1782,19 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
     } else if (!effectiveModelPath.includes('\\') && !effectiveModelPath.includes('/')) {
         // Relative model name, resolve to full path in User Data
         effectiveModelPath = join(userDataPath, 'models', effectiveModelPath)
+        console.log('[start-translation] Resolved relative path to:', effectiveModelPath)
     }
 
+    console.log('[start-translation] effectiveModelPath:', effectiveModelPath)
+    console.log('[start-translation] Model exists:', effectiveModelPath ? fs.existsSync(effectiveModelPath) : false)
+
     if (!effectiveModelPath || !fs.existsSync(effectiveModelPath)) {
+        console.error('[start-translation] Model not found, returning early')
         event.reply('log-update', `ERR: Model not found at ${effectiveModelPath}`)
         return
     }
+
+    console.log('[start-translation] Model check passed, building args...')
 
     // serverExePath 已在上面的 try-catch 中验证
 
@@ -2005,4 +2178,285 @@ ipcMain.handle('extract-terms', async (_event, options: { filePath?: string, tex
         const errorMsg = e instanceof Error ? e.message : String(e)
         return { success: false, error: errorMsg }
     }
+})
+
+// --- HuggingFace Download ---
+let hfDownloadProcess: ReturnType<typeof spawn> | null = null
+
+ipcMain.handle('hf-list-repos', async (_event, orgName: string) => {
+    const middlewarePath = getMiddlewarePath()
+    const pythonPath = getPythonPath()
+    const scriptPath = join(middlewarePath, 'hf_downloader.py')
+
+    if (!fs.existsSync(scriptPath)) {
+        return { error: 'hf_downloader.py not found' }
+    }
+
+    return new Promise((resolve) => {
+        const proc = spawnPythonProcess(pythonPath, [scriptPath, 'repos', orgName], {
+            cwd: middlewarePath,
+            stdio: ['pipe', 'pipe', 'pipe']
+        })
+
+        let stdout = ''
+        let stderr = ''
+
+        proc.stdout?.on('data', (data: Buffer) => {
+            stdout += data.toString()
+        })
+
+        proc.stderr?.on('data', (data: Buffer) => {
+            stderr += data.toString()
+        })
+
+        proc.on('close', (code) => {
+            if (code === 0) {
+                try {
+                    const result = JSON.parse(stdout.trim())
+                    resolve(result)
+                } catch {
+                    resolve({ error: 'Failed to parse response', raw: stdout })
+                }
+            } else {
+                resolve({ error: stderr || `Process exited with code ${code}` })
+            }
+        })
+
+        proc.on('error', (err) => {
+            resolve({ error: err.message })
+        })
+    })
+})
+
+ipcMain.handle('hf-list-files', async (_event, repoId: string) => {
+    const middlewarePath = getMiddlewarePath()
+    const pythonPath = getPythonPath()
+    const scriptPath = join(middlewarePath, 'hf_downloader.py')
+
+    if (!fs.existsSync(scriptPath)) {
+        return { error: 'hf_downloader.py not found' }
+    }
+
+    return new Promise((resolve) => {
+        const proc = spawnPythonProcess(pythonPath, [scriptPath, 'list', repoId], {
+            cwd: middlewarePath,
+            stdio: ['pipe', 'pipe', 'pipe']
+        })
+
+        let stdout = ''
+        let stderr = ''
+
+        proc.stdout?.on('data', (data: Buffer) => {
+            stdout += data.toString()
+        })
+
+        proc.stderr?.on('data', (data: Buffer) => {
+            stderr += data.toString()
+        })
+
+        proc.on('close', (code) => {
+            if (code === 0) {
+                try {
+                    const result = JSON.parse(stdout.trim())
+                    resolve(result)
+                } catch {
+                    resolve({ error: 'Failed to parse response', raw: stdout })
+                }
+            } else {
+                resolve({ error: stderr || `Process exited with code ${code}` })
+            }
+        })
+
+        proc.on('error', (err) => {
+            resolve({ error: err.message })
+        })
+    })
+})
+
+// Get models directory path
+ipcMain.handle('get-models-path', async () => {
+    const middlewarePath = getMiddlewarePath()
+    return join(middlewarePath, 'models')
+})
+
+ipcMain.handle('hf-download-start', async (event, repoId: string, fileName: string, mirror: string = 'direct') => {
+    const middlewarePath = getMiddlewarePath()
+    const pythonPath = getPythonPath()
+    const scriptPath = join(middlewarePath, 'hf_downloader.py')
+    const modelsPath = join(middlewarePath, 'models')
+
+    if (!fs.existsSync(scriptPath)) {
+        event.sender.send('hf-download-error', { message: 'hf_downloader.py not found' })
+        return { success: false }
+    }
+
+    // 单例保护：防止并发下载导致孤儿进程
+    if (hfDownloadProcess !== null) {
+        console.warn('[HF Download] Download already in progress, rejecting new request')
+        event.sender.send('hf-download-error', { message: '已有下载任务进行中，请等待完成或取消后再试' })
+        return { success: false, error: 'Download already in progress' }
+    }
+
+    // Ensure models directory exists
+    if (!fs.existsSync(modelsPath)) {
+        fs.mkdirSync(modelsPath, { recursive: true })
+    }
+
+    console.log(`[HF Download] Starting download: ${repoId}/${fileName} (mirror: ${mirror})`)
+
+    hfDownloadProcess = spawnPythonProcess(pythonPath, [
+        scriptPath, 'download', repoId, fileName, modelsPath, mirror
+    ], {
+
+        cwd: middlewarePath,
+        stdio: ['pipe', 'pipe', 'pipe']
+    })
+
+    hfDownloadProcess.stdout?.on('data', (data: Buffer) => {
+        const lines = data.toString().split('\n').filter(Boolean)
+        for (const line of lines) {
+            try {
+                const msg = JSON.parse(line)
+                if (msg.type === 'progress') {
+                    event.sender.send('hf-download-progress', msg)
+                } else if (msg.type === 'complete') {
+                    event.sender.send('hf-download-progress', { ...msg, status: 'complete', percent: 100 })
+                    hfDownloadProcess = null
+                } else if (msg.type === 'error') {
+                    event.sender.send('hf-download-error', { message: msg.message })
+                    hfDownloadProcess = null
+                }
+            } catch {
+                console.log('[HF Download] stdout:', line)
+            }
+        }
+    })
+
+    hfDownloadProcess.stderr?.on('data', (data: Buffer) => {
+        console.log('[HF Download] stderr:', data.toString())
+    })
+
+    hfDownloadProcess.on('close', (code) => {
+        console.log(`[HF Download] Process exited with code ${code}`)
+        if (code !== 0) {
+            event.sender.send('hf-download-error', { message: `Download process exited with code ${code}` })
+        }
+        hfDownloadProcess = null
+    })
+
+    hfDownloadProcess.on('error', (err) => {
+        event.sender.send('hf-download-error', { message: err.message })
+        hfDownloadProcess = null
+    })
+
+    return { success: true }
+})
+
+ipcMain.handle('hf-download-cancel', async () => {
+    if (hfDownloadProcess) {
+        console.log('[HF Download] Cancelling download...')
+        hfDownloadProcess.kill('SIGTERM')
+        hfDownloadProcess = null
+        return { success: true }
+    }
+    return { success: false, message: 'No download in progress' }
+})
+
+// Verify model integrity against HuggingFace
+ipcMain.handle('hf-verify-model', async (_event, orgName: string, filePath: string) => {
+    const middlewarePath = getMiddlewarePath()
+    const pythonPath = getPythonPath()
+    const scriptPath = join(middlewarePath, 'hf_downloader.py')
+
+    console.log(`[HF Verify] Verifying ${filePath} against ${orgName}...`)
+
+    return new Promise((resolve) => {
+        const proc = spawnPythonProcess(pythonPath, [
+            scriptPath, 'verify', orgName, filePath
+        ], {
+            cwd: middlewarePath,
+            stdio: ['pipe', 'pipe', 'pipe']
+        })
+
+        let stdout = ''
+        let stderr = ''
+
+        proc.stdout?.on('data', (data: Buffer) => {
+            stdout += data.toString()
+        })
+
+        proc.stderr?.on('data', (data: Buffer) => {
+            stderr += data.toString()
+        })
+
+        proc.on('close', (code) => {
+            if (code === 0) {
+                try {
+                    const lines = stdout.trim().split('\n')
+                    for (const line of lines) {
+                        const parsed = JSON.parse(line)
+                        if (parsed.type === 'verify_result') {
+                            resolve(parsed)
+                            return
+                        }
+                    }
+                    resolve({ error: 'No verification result' })
+                } catch (e) {
+                    resolve({ error: `Parse error: ${e}` })
+                }
+            } else {
+                resolve({ error: stderr || `Process exited with code ${code}` })
+            }
+        })
+
+        proc.on('error', (err) => {
+            resolve({ error: err.message })
+        })
+    })
+})
+
+// Check network connectivity to HuggingFace
+ipcMain.handle('hf-check-network', async () => {
+    const middlewarePath = getMiddlewarePath()
+    const pythonPath = getPythonPath()
+    const scriptPath = join(middlewarePath, 'hf_downloader.py')
+
+    if (!fs.existsSync(scriptPath)) {
+        return { status: 'error', message: 'hf_downloader.py not found' }
+    }
+
+    return new Promise((resolve) => {
+        const proc = spawnPythonProcess(pythonPath, [scriptPath, 'network'], {
+            cwd: middlewarePath,
+            stdio: ['pipe', 'pipe', 'pipe']
+        })
+
+        let stdout = ''
+        let stderr = ''
+
+        proc.stdout?.on('data', (data: Buffer) => {
+            stdout += data.toString()
+        })
+
+        proc.stderr?.on('data', (data: Buffer) => {
+            stderr += data.toString()
+        })
+
+        proc.on('close', (code) => {
+            if (code === 0) {
+                try {
+                    const result = JSON.parse(stdout.trim())
+                    resolve(result)
+                } catch {
+                    resolve({ status: 'error', message: 'Failed to parse response' })
+                }
+            } else {
+                resolve({ status: 'error', message: stderr || `Process exited with code ${code}` })
+            }
+        })
+
+        proc.on('error', (err) => {
+            resolve({ status: 'error', message: err.message })
+        })
+    })
 })

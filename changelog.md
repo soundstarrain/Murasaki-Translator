@@ -1,5 +1,24 @@
 # Murasaki Translator - Changelog
 
+## [1.6.0] - 2026-02-08
+
+### 新增功能 (Features)
+
+*   **新增环境诊断与修复系统**：
+    *   新增 `EnvFixerModal` 弹窗，提供 Python、CUDA、Vulkan、Llama 后端、中间件、文件权限六大组件的一站式诊断。
+    *   支持**一键修复**（自动 pip 安装依赖、Vulkan Runtime 下载安装）和**手动修复**（跳转官方下载页）两种模式。
+
+*   **新增模型功能**：
+    *   新增 `HFDownloadModal` 弹窗，集成 HF API 交互。
+    *   支持浏览 HF 组织仓库列表 (`hf-list-repos`) 和文件列表 (`hf-list-files`)。
+    *   支持下载启动/取消 (`hf-download-start/cancel`)，当前为单实例下载模式。
+    *   新增 `hf-verify-model` 模型完整性校验和 `hf-check-network` 简单连通性测试。
+
+*   **新增日志查看器**：新增 `LogViewerModal` 组件，支持查看终端日志、复制导出。
+
+---
+
+
 ## [1.5.2] - 2026-02-08
 
 ### 性能优化 (Performance)

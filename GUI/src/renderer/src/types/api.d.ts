@@ -149,6 +149,46 @@ export interface ElectronAPI {
         vulkan: { available: boolean; version?: string; devices?: string[] } | null
         llamaServer: { status: 'online' | 'offline' | 'unknown'; port?: number; model?: string }
     }>
+    
+    // Environment Fixer
+    checkEnvComponent: (component: 'Python' | 'CUDA' | 'Vulkan' | 'LlamaBackend' | 'Middleware' | 'Permissions') => Promise<{
+        success: boolean
+        report?: {
+            system: { platform: string; arch: string }
+            components: Array<{
+                name: string
+                status: 'ok' | 'warning' | 'error'
+                version: string | null
+                path: string | null
+                issues: string[]
+                fixes: string[]
+                canAutoFix: boolean
+            }>
+            summary: {
+                totalIssues: number
+                totalErrors: number
+                totalWarnings: number
+                overallStatus: string
+            }
+        }
+        component?: {
+            name: string
+            status: 'ok' | 'warning' | 'error'
+            version: string | null
+            path: string | null
+            issues: string[]
+            fixes: string[]
+            canAutoFix: boolean
+        }
+        error?: string
+    }>
+    fixEnvComponent: (component: 'Python' | 'CUDA' | 'Vulkan' | 'LlamaBackend' | 'Middleware' | 'Permissions') => Promise<{
+        success: boolean
+        message: string
+        exitCode?: number
+        output?: string
+        errorOutput?: string
+    }>
 
     // System
     showNotification: (title: string, body: string) => void

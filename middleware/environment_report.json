@@ -1,0 +1,68 @@
+{
+  "system": {
+    "platform": "Windows",
+    "arch": "AMD64"
+  },
+  "components": [
+    {
+      "name": "Python",
+      "status": "ok",
+      "version": "3.11.9",
+      "path": "E:\\project\\llmGUI\\middleware\\.venv\\Scripts\\python.exe",
+      "issues": [],
+      "fixes": [],
+      "canAutoFix": true
+    },
+    {
+      "name": "CUDA",
+      "status": "ok",
+      "version": null,
+      "path": null,
+      "issues": [],
+      "fixes": [],
+      "canAutoFix": false
+    },
+    {
+      "name": "Vulkan",
+      "status": "ok",
+      "version": "1.4.303",
+      "path": null,
+      "issues": [],
+      "fixes": [],
+      "canAutoFix": true
+    },
+    {
+      "name": "LlamaBackend",
+      "status": "ok",
+      "version": null,
+      "path": "e:\\project\\llmGUI\\middleware\\llama-b7770-bin-win-cuda-12.4-x64\\llama-server.exe",
+      "issues": [],
+      "fixes": [],
+      "canAutoFix": false
+    },
+    {
+      "name": "Middleware",
+      "status": "ok",
+      "version": null,
+      "path": "E:\\project\\llmGUI\\middleware",
+      "issues": [],
+      "fixes": [],
+      "canAutoFix": false
+    },
+    {
+      "name": "Permissions",
+      "status": "ok",
+      "version": null,
+      "path": null,
+      "issues": [],
+      "fixes": [],
+      "canAutoFix": false
+    }
+  ],
+  "summary": {
+    "totalIssues": 0,
+    "totalErrors": 0,
+    "totalWarnings": 0,
+    "overallStatus": "ok"
+  }
+}
