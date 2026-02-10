@@ -7,7 +7,7 @@ import json
 import re
 import subprocess
 import threading
-import shutil  # [淇] 鐢ㄤ簬澶囦唤鎹熷潖鐨勭紦瀛樻枃浠?
+import shutil  # [修复] 用于备份损坏的缓存文件
 from contextlib import nullcontext
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, Future, as_completed
@@ -45,8 +45,8 @@ from murasaki_translator.core.prompt import PromptBuilder
 from murasaki_translator.core.engine import InferenceEngine
 from murasaki_translator.core.parser import ResponseParser
 from murasaki_translator.core.quality_checker import QualityChecker, format_warnings_for_log, calculate_glossary_coverage
-from murasaki_translator.core.text_protector import TextProtector  # [Experimental] 鍗犱綅绗︿繚鎶?
-from murasaki_translator.core.cache import TranslationCache  # 缈昏瘧缂撳瓨鐢ㄤ簬鏍″
+from murasaki_translator.core.text_protector import TextProtector  # [Experimental] 占位符保护
+from murasaki_translator.core.cache import TranslationCache  # 翻译缓存用于校对
 from rule_processor import RuleProcessor
 from murasaki_translator.utils.monitor import HardwareMonitor
 from murasaki_translator.utils.line_aligner import LineAligner
@@ -57,42 +57,42 @@ from murasaki_translator.utils.alignment_handler import AlignmentHandler
 def load_glossary(path: Optional[str]) -> Dict[str, str]:
     """
     Robustly load glossary from JSON file.
-    Supports:
+    Supports: 
     - Murasaki Dict: {"jp": "zh"}
-    - 閫氱敤瀵硅薄鍒楄〃: [{"src": "jp", "dst": "zh"}]
+    - 通用对象列表: [{"src": "jp", "dst": "zh"}]
     """
     if not path or not os.path.exists(path) or not path.lower().endswith('.json'):
         return {}
-
+    
     try:
         with open(path, 'r', encoding='utf-8-sig') as f:
             data = json.load(f)
-
+        
         # Case 1: Standard Dict format {"src": "dst"}
         if isinstance(data, dict):
             return {str(k): str(v) for k, v in data.items() if k and v}
-
+        
         # Case 2: List of objects
         elif isinstance(data, list):
             glossary = {}
             for idx, entry in enumerate(data):
                 if not isinstance(entry, dict): continue
-
+                
                 # Heuristic search for source/target keys
                 src = entry.get('src') or entry.get('jp') or entry.get('original')
                 dst = entry.get('dst') or entry.get('zh') or entry.get('translation')
-
+                
                 if src and dst:
                     s, d = str(src), str(dst)
                     if s in glossary:
                          print(f"[Debug] Overwriting glossary entry: {s} (Old: {glossary[s]}, New: {d})")
                     glossary[s] = d
-
+            
             print(f"[Init] Detected List format JSON. Parsed {len(glossary)} valid entries.")
             return glossary
-
+            
         return {}
-
+            
     except Exception as e:
         print(f"[Warning] Failed to load glossary {os.path.basename(path)}: {e}")
         return {}
@@ -111,27 +111,27 @@ def load_rules(path: Optional[str]) -> List[Dict]:
 
 def load_existing_output(output_path: str) -> tuple:
     """
-    鍔犺浇宸叉湁杈撳嚭鏂囦欢锛岀敤浜庡閲忕炕璇戙€?
-    杩斿洖 (宸茬炕璇戣鏁? 宸茬炕璇戝唴瀹瑰垪琛? 鏄惁鏈夋晥)
+    加载已有输出文件，用于增量翻译。
+    返回 (已翻译行数, 已翻译内容列表, 是否有效)
     """
     if not os.path.exists(output_path):
         return 0, [], False
-
+    
     try:
         with open(output_path, 'r', encoding='utf-8') as f:
             content = f.read()
-
-        # 妫€鏌ユ槸鍚﹀寘鍚?summary锛堝畬鏁寸炕璇戠殑鏍囧織锛?
+        
+        # 检查是否包含 summary（完整翻译的标志）
         if '=' * 20 in content and 'Translation Summary' in content:
-            # 鏂囦欢宸插畬鎴愶紝涓嶉渶瑕佺画缈?
+            # 文件已完成，不需要续翻
             return -1, [], False
-
-        # 鍒嗗壊涓鸿锛屼繚鐣欑墿鐞嗚缁撴瀯锛堜笉杩涜 strip 杩囨护锛屼篃涓嶈繃婊ょ┖琛岋級
+        
+        # 分割为行，保留物理行结构（不进行 strip 过滤，也不过滤空行）
         lines = content.split('\n')
-        # 濡傛灉鏂囦欢浠ユ崲琛岀缁撳熬锛屽唴瀹逛腑鐨勬渶鍚庝竴涓┖瀛楃涓叉槸 split 浜х敓鐨勫櫔闊筹紝绉婚櫎瀹?
+        # 如果文件以换行符结尾，内容中的最后一个空字符串是 split 产生的噪音，移除它
         if content.endswith('\n'):
             lines = lines[:-1]
-
+            
         return len(lines), lines, True
     except Exception as e:
         print(f"[Warning] Failed to load existing output: {e}")
@@ -140,12 +140,12 @@ def load_existing_output(output_path: str) -> tuple:
 
 def get_missed_terms(source_text: str, translated_text: str, glossary: Dict[str, str]) -> List[tuple]:
     """
-    鑾峰彇鍘熸枃涓嚭鐜颁絾璇戞枃涓湭姝ｇ‘缈昏瘧鐨勬湳璇垪琛ㄣ€?
-    杩斿洖 [(鍘熸枃鏈, 鐩爣璇戞枃), ...]
+    获取原文中出现但译文中未正确翻译的术语列表。
+    返回 [(原文术语, 目标译文), ...]
     """
     missed = []
     for src_term, dst_term in glossary.items():
-        # 鎺掗櫎鍗曞瓧鏈
+        # 排除单字术语
         if len(src_term) > 1 and src_term in source_text:
             if dst_term not in translated_text:
                 missed.append((src_term, dst_term))
@@ -154,18 +154,18 @@ def get_missed_terms(source_text: str, translated_text: str, glossary: Dict[str,
 
 def build_retry_feedback(missed_terms: List[tuple], coverage: float) -> str:
     """
-    鏋勫缓閲嶈瘯鏃舵敞鍏ョ殑鍙嶉鏂囨湰锛岀敤浜庢彁閱掓ā鍨嬫敞鎰忔紡鎺夌殑鏈銆?
+    构建重试时注入的反馈文本，用于提醒模型注意漏掉的术语。
     """
     if not missed_terms:
         return ""
-
-    # 鏋勫缓鏈鍒楄〃
-    terms_str = "銆?.join([f"銆寋src}銆嶁啋銆寋dst}銆? for src, dst in missed_terms[:5]])
+    
+    # 构建术语列表
+    terms_str = "、".join([f"「{src}」→「{dst}」" for src, dst in missed_terms[:5]])
     if len(missed_terms) > 5:
-        terms_str += f" 绛?{len(missed_terms)} 椤?
-
-    feedback = f"\n\n銆愮郴缁熸彁绀恒€戜笂涓€杞炕璇戜腑浠ヤ笅鏈鏈纭簲鐢細{terms_str}銆傝鍦ㄦ湰娆＄炕璇戜腑涓ユ牸浣跨敤鏈琛ㄤ腑鐨勬爣鍑嗚瘧娉曪紝涓嶈鎿呰嚜绠€鍖栨垨鐪佺暐銆?
-
+        terms_str += f" 等 {len(missed_terms)} 项"
+    
+    feedback = f"\n\n【系统提示】上一轮翻译中以下术语未正确应用：{terms_str}。请在本次翻译中严格使用术语表中的标准译法，不要擅自简化或省略。"
+    
     return feedback
 
 
@@ -189,11 +189,11 @@ def translate_block_with_retry(
     """
     # Build Initial Prompt
     messages = prompt_builder.build_messages(
-        processed_src_text,
+        processed_src_text, 
         enable_cot=args.debug,
         preset=args.preset
     )
-
+    
     global_attempts = 0
     glossary_attempts = 0
     retry_reason = None
@@ -201,7 +201,7 @@ def translate_block_with_retry(
     last_coverage = 0.0
     best_result = None
     retry_history = []  # Track all retry attempts for debugging
-
+    
     final_output = None
 
     while True:
@@ -210,7 +210,7 @@ def translate_block_with_retry(
 
         current_temp = args.temperature
         current_rep_base = args.rep_penalty_base
-
+        
         if retry_reason == 'line_check' or retry_reason == 'strict_line_check':
             current_temp = min(args.temperature + (global_attempts * args.retry_temp_boost), 1.2)
         elif retry_reason == 'glossary':
@@ -228,7 +228,7 @@ def translate_block_with_retry(
                             "content": messages_for_attempt[j]["content"] + feedback
                         }
                         break
-
+        
         accumulated_output = ""
         def on_stream_chunk(chunk):
             nonlocal accumulated_output
@@ -250,7 +250,7 @@ def translate_block_with_retry(
             rep_step=args.rep_penalty_step,
             block_id=block_idx + 1
         )
-
+        
         raw_output = full_response_text
         parsed_lines, cot_content = response_parser.parse(raw_output or "", expected_count=0)
         has_content = parsed_lines and any(line.strip() for line in parsed_lines)
@@ -268,7 +268,7 @@ def translate_block_with_retry(
         dst_line_count = len([l for l in parsed_lines if l.strip()])
         diff = abs(dst_line_count - src_line_count)
         pct_diff = diff / max(1, src_line_count)
-
+        
         is_invalid_lines = False
         error_type = 'line_check'
         if strict_mode and diff > 0:
@@ -295,7 +295,7 @@ def translate_block_with_retry(
             )
             last_coverage = coverage
             last_missed_terms = get_missed_terms(original_src_text, translated_text, glossary)
-
+            
             if best_result is None or coverage > best_result[3]:
                 best_result = (parsed_lines.copy(), cot_content, raw_output, coverage, block_usage)
 
@@ -312,7 +312,7 @@ def translate_block_with_retry(
                     continue
                 elif best_result and best_result[3] > coverage:
                     parsed_lines, cot_content, raw_output, _, block_usage = best_result
-
+        
         final_output = {
             "parsed_lines": parsed_lines,
             "cot": cot_content,
@@ -325,19 +325,19 @@ def translate_block_with_retry(
         if best_result:
             parsed_lines, cot_content, raw_output, _, block_usage = best_result
         else:
-            parsed_lines = ["[缈昏瘧澶辫触]"] + original_src_text.split('\n')
+            parsed_lines = ["[翻译失败]"] + original_src_text.split('\n')
             cot_content, raw_output, block_usage = "", "", {}
         final_output = {"parsed_lines": parsed_lines, "cot": cot_content, "raw": raw_output, "usage": block_usage}
 
     base_text = '\n'.join(final_output["parsed_lines"])
     processed_text = post_processor.process(base_text, src_text=original_src_text, protector=protector, strict_line_count=strict_mode)
-
+    
     warnings = []
     try:
         qc = QualityChecker(glossary=glossary)
         warnings = qc.check_output(
-            [l for l in original_src_text.split('\n') if l.strip()],
-            [l for l in processed_text.split('\n') if l.strip()],
+            [l for l in original_src_text.split('\n') if l.strip()], 
+            [l for l in processed_text.split('\n') if l.strip()], 
             source_lang="ja"
         )
     except Exception as e:
@@ -363,36 +363,36 @@ def translate_block_with_retry(
 
 def calculate_skip_blocks(blocks, existing_lines: int, is_doc_mode: bool = False) -> int:
     """
-    鏍规嵁宸茬炕璇戣鏁拌绠楀簲璇ヨ烦杩囩殑鍧楁暟銆?
-    閲囩敤淇濆畧绛栫暐锛氬彧璺宠繃瀹屽叏鍖归厤鐨勫潡銆?
+    根据已翻译行数计算应该跳过的块数。
+    采用保守策略：只跳过完全匹配的块。
     """
     if existing_lines <= 0:
         return 0
-
+    
     cumulative_lines = 0
     for i, block in enumerate(blocks):
-        # 浼扮畻杩欎釜鍧楃殑搴旀湁杈撳嚭琛屾暟锛堜笌杈撳叆琛屾暟鐩稿悓锛?
+        # 估算这个块的应有输出行数（与输入行数相同）
         block_lines = block.prompt_text.count('\n') + 1
-
-        # doc 妯″紡涓嬶紝姣忎釜鍧楄緭鍑哄悗浼氬鍔犱竴涓┖琛?
+        
+        # doc 模式下，每个块输出后会多加一个空行
         physical_lines = block_lines + 1 if is_doc_mode else block_lines
-
-        # 濡傛灉褰撳墠鍧楀叏閮ㄥ姞鍏ュ悗瓒呰繃浜嗗凡鏈夎鏁帮紝璇存槑姝ゅ潡涓嶅畬鏁存垨鏈紑濮?
+        
+        # 如果当前块全部加入后超过了已有行数，说明此块不完整或未开始
         if cumulative_lines + physical_lines > existing_lines:
             return i
-
+            
         cumulative_lines += physical_lines
-
+    
     return len(blocks)
 
 
 def get_gpu_name():
-    """璺ㄥ钩鍙拌幏鍙?GPU 鍚嶇О"""
+    """跨平台获取 GPU 名称"""
     import sys as _sys
-
+    
     try:
         if _sys.platform == 'darwin':
-            # macOS: 浣跨敤 system_profiler
+            # macOS: 使用 system_profiler
             try:
                 import json as _json
                 result = subprocess.run(
@@ -411,16 +411,16 @@ def get_gpu_name():
             except Exception:
                 pass
             return "Apple GPU (Metal)"
-
+        
         elif _sys.platform == 'win32':
-            # Windows: 浼樺厛 nvidia-smi锛屽洖閫€ wmic
+            # Windows: 优先 nvidia-smi，回退 wmic
             try:
                 result = subprocess.check_output(
-                    "nvidia-smi -L",
-                    shell=True,
+                    "nvidia-smi -L", 
+                    shell=True, 
                     stderr=subprocess.STDOUT
                 ).decode('gb18030', errors='ignore')
-
+                
                 names = []
                 for line in result.strip().split('\n'):
                     if ":" in line and "GPU" in line:
@@ -434,8 +434,8 @@ def get_gpu_name():
                     return " & ".join(names)
             except Exception:
                 pass
-
-            # 鍥為€€鍒?wmic
+            
+            # 回退到 wmic
             try:
                 result = subprocess.run(
                     ['wmic', 'path', 'win32_VideoController', 'get', 'Name', '/format:csv'],
@@ -454,9 +454,9 @@ def get_gpu_name():
             except Exception:
                 pass
             return "Unknown GPU (Windows)"
-
+        
         else:
-            # Linux: 浼樺厛 nvidia-smi锛屽洖閫€ lspci
+            # Linux: 优先 nvidia-smi，回退 lspci
             try:
                 result = subprocess.run(
                     ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
@@ -468,8 +468,8 @@ def get_gpu_name():
                     return result.stdout.strip().split('\n')[0]
             except Exception:
                 pass
-
-            # 鍥為€€鍒?lspci
+            
+            # 回退到 lspci
             try:
                 result = subprocess.run(['lspci'], capture_output=True, text=True, timeout=5)
                 if result.returncode == 0:
@@ -479,42 +479,42 @@ def get_gpu_name():
             except Exception:
                 pass
             return "Unknown GPU (Linux)"
-
+    
     except Exception as e:
         return f"Unknown / CPU (Error: {str(e)})"
 
 def format_model_info(model_path: str):
     filename = os.path.basename(model_path)
-
+    
     # Custom Override for Murasaki model
     display_name = filename
     params = "Unknown"
     quant = "Unknown"
-
+    
     if "Murasaki" in filename or "ACGN" in filename or "Step150" in filename:
         display_name = "Murasaki-8B-v0.1"
-
+    
     # Extract details from filename (standard GGUF naming convention: Name-Size-Quant.gguf)
     lower_name = filename.lower()
-
+    
     # Rough parsing
     if "8b" in lower_name: params = "8B"
     elif "72b" in lower_name: params = "72B"
-
+    
     if "q4_k_m" in lower_name: quant = "Q4_K_M"
     elif "q8_0" in lower_name: quant = "Q8_0"
     elif "fp16" in lower_name: quant = "FP16"
-
+    
     return display_name, params, quant
 
 
 def translate_single_block(args):
     """
-    鍗曞潡缈昏瘧妯″紡 - 鐢ㄤ簬鏍″鐣岄潰鐨勯噸缈诲姛鑳?
-    鐩存帴缈昏瘧 args.single_block 涓殑鏂囨湰锛屾敮鎸佹枃鏈繚鎶わ紝杈撳嚭 JSON 鏍煎紡缁撴灉
+    单块翻译模式 - 用于校对界面的重翻功能
+    直接翻译 args.single_block 中的文本，支持文本保护，输出 JSON 格式结果
     """
     middleware_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
+    
     # Initialize Engine
     engine = InferenceEngine(
         server_path=args.server,
@@ -523,34 +523,34 @@ def translate_single_block(args):
         n_ctx=args.ctx,
         no_spawn=getattr(args, 'no_server_spawn', False),
         flash_attn=getattr(args, 'flash_attn', False),
-        kv_cache_type=getattr(args, 'kv_cache_type', "f16"),
+        kv_cache_type=getattr(args, 'kv_cache_type', "q8_0"),
         use_large_batch=getattr(args, 'use_large_batch', False),
         batch_size=getattr(args, 'batch_size', None),
         seed=getattr(args, 'seed', None)
     )
-
+    
     # Load Glossary
     glossary = load_glossary(args.glossary)
-
+    
     # Load Rules (Optional)
     pre_rules = load_rules(args.rules_pre) if hasattr(args, 'rules_pre') and args.rules_pre else []
     post_rules = load_rules(args.rules_post) if hasattr(args, 'rules_post') and args.rules_post else []
-
+    
     pre_processor = RuleProcessor(pre_rules)
     post_processor = RuleProcessor(post_rules)
     prompt_builder = PromptBuilder(glossary)
     parser = ResponseParser()
-
+    
     # Initialize Text Protector
     protector = None
     if getattr(args, 'text_protect', False):
          # Try to get patterns from app data or default
          protector = TextProtector()
-
-
-    # 閽堝 SRT/ASS 鐨勭壒娈婂伐绋嬪寲澶勭悊 (Rule Melting)
+    
+    
+    # 针对 SRT/ASS 的特殊工程化处理 (Rule Melting)
     is_sub = getattr(args, 'file', '').lower().endswith(('.srt', '.ass', '.ssa')) if args.file else False
-
+    
     # Strict mode logic for retranslate:
     # - all: Force strict line count
     # - subs: Force for subtitles and epub (epub usually isn't retranslated this way but for completeness)
@@ -563,7 +563,7 @@ def translate_single_block(args):
         # Check by file extension
         ext = os.path.splitext(args.file)[1].lower() if args.file else ""
         enforce_strict_alignment = ext in ['.srt', '.ass', '.ssa', '.epub']
-
+        
     if is_sub:
         # Rule melting for retranslate
         melt_patterns = ['ensure_single_newline', 'ensure_double_newline', 'clean_empty_lines', 'merge_short_lines']
@@ -573,29 +573,29 @@ def translate_single_block(args):
 
     try:
         engine.start_server()
-
+        
         # 1. Input Validation
         src_text = args.single_block
         if not src_text or not src_text.strip():
             raise ValueError("Input text is empty")
-
+            
         print(f"[Init] Retranslate started for block {args.file or 'Manual'}")
-
+        
         # Pre-processing & Protection
         print(f"[Process] Applying pre-processing rules (Strict: {enforce_strict_alignment})...")
         processed_src = pre_processor.process(src_text, strict_line_count=enforce_strict_alignment)
         processed_src = Normalizer.normalize(processed_src)
-
+            
         if protector:
             print(f"[Process] Applying text protection...")
             processed_src = protector.protect(processed_src)
 
         # 4. Translation with Unified Retry Strategy
         print(f"[Inference] Starting chat completion with unified retry strategy...")
-
+        
         # Disable balance logs in single block
-        args.balance_enable = False
-
+        args.balance_enable = False 
+        
         result_payload = translate_block_with_retry(
             block_idx=0,
             original_src_text=src_text,
@@ -612,7 +612,7 @@ def translate_single_block(args):
         )
 
         print("\n[Inference] Done.")
-
+        
         if result_payload["success"]:
             print(f"\n[Retranslate] Success! Generated {len(result_payload['out_text'])} chars.")
             result = {
@@ -628,13 +628,13 @@ def translate_single_block(args):
                 'dst': '',
                 'error': result_payload.get('error') or 'Translation failed'
             }
-
+        
         # Output
         if args.json_output:
             print(f"JSON_RESULT:{json.dumps(result, ensure_ascii=False)}")
         else:
             print(result.get('dst', ''))
-
+            
     except Exception as e:
         if args.json_output:
             print(f"JSON_RESULT:{json.dumps({'success': False, 'error': str(e)}, ensure_ascii=False)}")
@@ -657,34 +657,34 @@ def main():
     # Argument Parsing
     # Default server path relative to middleware directory
     middleware_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-    # 璺ㄥ钩鍙?llama-server 璺緞妫€娴?
+    
+    # 跨平台 llama-server 路径检测
     def get_llama_server_path(mdir: str) -> str:
-        """鏍规嵁骞冲彴鑷姩閫夋嫨姝ｇ‘鐨?llama-server 浜岃繘鍒?""
+        """根据平台自动选择正确的 llama-server 二进制"""
         import platform as plt
         import subprocess
         system = sys.platform
         machine = plt.machine().lower()
-
-        # 璺ㄥ钩鍙版娴?NVIDIA GPU锛堟敮鎸?Windows 澶氳矾寰勶級
+        
+        # 跨平台检测 NVIDIA GPU（支持 Windows 多路径）
         def has_nvidia_gpu() -> bool:
             import shutil
-            # Windows 涓?nvidia-smi 鍙兘涓嶅湪 PATH 涓?
+            # Windows 上 nvidia-smi 可能不在 PATH 中
             nvidia_smi_paths = ['nvidia-smi']
             if system == 'win32':
                 nvidia_smi_paths.extend([
                     r'C:\Windows\System32\nvidia-smi.exe',
                     r'C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe'
                 ])
-
+            
             for nvidia_smi in nvidia_smi_paths:
                 try:
-                    # 妫€鏌ュ懡浠ゆ槸鍚﹀瓨鍦?
+                    # 检查命令是否存在
                     if not os.path.isabs(nvidia_smi) and not shutil.which(nvidia_smi):
                         continue
                     if os.path.isabs(nvidia_smi) and not os.path.exists(nvidia_smi):
                         continue
-
+                    
                     result = subprocess.run(
                         [nvidia_smi, '--query-gpu=name', '--format=csv,noheader'],
                         capture_output=True, text=True, timeout=5
@@ -694,28 +694,28 @@ def main():
                         return True
                 except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
                     continue
-
+            
             logger.info("No NVIDIA GPU detected, using Vulkan/Metal fallback")
             return False
-
-        # 骞冲彴鏄犲皠琛?
+        
+        # 平台映射表
         if system == 'win32':
-            # Windows: 妫€娴?NVIDIA GPU
+            # Windows: 检测 NVIDIA GPU
             if has_nvidia_gpu():
                 subdir, binary = 'win-cuda', 'llama-server.exe'
             else:
                 subdir, binary = 'win-vulkan', 'llama-server.exe'
         elif system == 'darwin':
-            # macOS: ARM64 鐢?Metal锛寈64 鐢?CPU
+            # macOS: ARM64 用 Metal，x64 用 CPU
             if 'arm' in machine or 'aarch64' in machine:
                 subdir, binary = 'darwin-metal', 'llama-server'
             else:
                 subdir, binary = 'darwin-x64', 'llama-server'
         elif system == 'linux':
-            # Linux: 鏈?NVIDIA GPU 鍒欑敤 CUDA锛屽惁鍒?Vulkan
+            # Linux: 有 NVIDIA GPU 则用 CUDA，否则 Vulkan
             if has_nvidia_gpu():
                 subdir, binary = 'linux-cuda', 'llama-server'
-                # 濡傛灉 CUDA 鐗堟湰涓嶅瓨鍦紝鍥為€€ Vulkan
+                # 如果 CUDA 版本不存在，回退 Vulkan
                 cuda_path = os.path.join(mdir, 'bin', subdir, binary)
                 if not os.path.exists(cuda_path):
                     subdir = 'linux-vulkan'
@@ -723,14 +723,14 @@ def main():
                 subdir, binary = 'linux-vulkan', 'llama-server'
         else:
             raise RuntimeError(f"Unsupported platform: {system}")
-
-        # 浼樺厛妫€鏌ユ柊鐨?bin/ 鐩綍缁撴瀯
+        
+        # 优先检查新的 bin/ 目录结构
         new_path = os.path.join(mdir, 'bin', subdir, binary)
         if os.path.exists(new_path):
             logger.info(f"Using llama-server: {new_path}")
             return new_path
-
-        # 鍥為€€锛氭壂鎻忔棫鐨勭洰褰曠粨鏋?(llama-*)
+        
+        # 回退：扫描旧的目录结构 (llama-*)
         for entry in os.listdir(mdir):
             entry_path = os.path.join(mdir, entry)
             if os.path.isdir(entry_path):
@@ -738,16 +738,16 @@ def main():
                 if os.path.exists(candidate):
                     logger.info(f"Using legacy llama-server: {candidate}")
                     return candidate
-
+        
         raise FileNotFoundError(f"llama-server not found in {mdir}")
-
+    
     try:
         default_server = get_llama_server_path(middleware_dir)
     except FileNotFoundError as e:
         logger.warning(f"No llama-server found: {e}. Will require --server argument.")
         default_server = None
     default_model = os.path.join(middleware_dir, "models", "ACGN-8B-Step150-Q4_K_M.gguf")
-
+    
     parser = argparse.ArgumentParser(description="Murasaki Translator - High Fidelity System 2 Translation")
     parser.add_argument("--file", help="Input file path") # Check manually later
     parser.add_argument("--server", default=default_server)
@@ -755,7 +755,7 @@ def main():
     parser.add_argument("--glossary", help="Glossary JSON path")
     parser.add_argument("--gpu-layers", type=int, default=-1)
     parser.add_argument("--ctx", type=int, default=8192)
-    parser.add_argument("--preset", default="novel", choices=["novel", "script", "short"], help="Prompt preset: novel (杞诲皬璇?, script (鍓ф湰), short (鍗曞彞)")
+    parser.add_argument("--preset", default="novel", choices=["novel", "script", "short"], help="Prompt preset: novel (轻小说), script (剧本), short (单句)")
     parser.add_argument("--mode", default="doc", choices=["doc", "line"], help="Translation mode: doc (novel) or line (game/contrast)")
     parser.add_argument("--chunk-size", type=int, default=1000, help="Target char count for doc mode")
     parser.add_argument("--debug", action="store_true", help="Enable CoT stats and timing")
@@ -768,13 +768,13 @@ def main():
     parser.add_argument("--save-summary", action="store_true", help="Append summary to output")
     parser.add_argument("--traditional", action="store_true", help="Convert output to Traditional Chinese")
     parser.add_argument("--strict-mode", default="subs", choices=["off", "subs", "all"], help="Strict line alignment mode (default: subs)")
-
-    # Experimental Features (鍙湪 GUI 楂樼骇璁剧疆涓紑鍏?
+    
+    # Experimental Features (可在 GUI 高级设置中开关)
     parser.add_argument("--fix-ruby", action="store_true", help="[Experimental] Clean Ruby annotations from source")
     parser.add_argument("--fix-kana", action="store_true", help="[Experimental] Remove orphan kana from output")
     parser.add_argument("--fix-punctuation", action="store_true", help="[Experimental] Normalize punctuation in output")
-
-    # Quality Control Settings (楂樼骇璐ㄩ噺鎺у埗)
+    
+    # Quality Control Settings (高级质量控制)
     parser.add_argument("--temperature", type=float, default=0.7, help="Model temperature (0.1-1.5, default 0.7)")
     parser.add_argument("--line-check", action="store_true", help="Enable line count validation and auto-retry")
     parser.add_argument("--line-tolerance-abs", type=int, default=10, help="Line count absolute tolerance (default 10)")
@@ -783,24 +783,24 @@ def main():
     parser.add_argument("--rep-penalty-max", type=float, default=1.5, help="Max repetition penalty (default 1.5)")
     parser.add_argument("--rep-penalty-step", type=float, default=0.1, help="Internal loop penalty increment (default 0.1)")
     parser.add_argument("--max-retries", type=int, default=3, help="Max retries for empty output (default 3)")
-
-    # Glossary Coverage Check (鏈琛ㄨ鐩栫巼妫€娴?
+    
+    # Glossary Coverage Check (术语表覆盖率检测)
     parser.add_argument("--output-hit-threshold", type=float, default=60.0, help="Min output exact hit percentage to pass (default 60)")
     parser.add_argument("--cot-coverage-threshold", type=float, default=80.0, help="Min CoT coverage percentage to pass (default 80)")
     parser.add_argument("--coverage-retries", type=int, default=2, help="Max retries for low coverage (default 2)")
-
-    # Dynamic Retry Strategy (鍔ㄦ€侀噸璇曠瓥鐣?
+    
+    # Dynamic Retry Strategy (动态重试策略)
     parser.add_argument("--retry-temp-boost", type=float, default=0.05, help="Temperature boost per retry (default 0.05)")
     parser.add_argument("--retry-prompt-feedback", action="store_true", default=True, help="Inject feedback about missed terms in retry prompts")
-
-    # Incremental Translation (澧為噺缈昏瘧)
+    
+    # Incremental Translation (增量翻译)
     parser.add_argument("--resume", action="store_true", help="Resume from existing output file (skip translated content)")
 
-    # Text Protection (鏂囨湰淇濇姢)
+    # Text Protection (文本保护)
     parser.add_argument("--text-protect", action="store_true", help="Protect variables/tags from translation")
     parser.add_argument("--protect-patterns", help="Path to custom protection patterns file (one regex per line)")
 
-    # Cache & Proofreading (缂撳瓨涓庢牎瀵?
+    # Cache & Proofreading (缓存与校对)
     parser.add_argument("--save-cache", action="store_true", help="Save translation cache for proofreading")
     parser.add_argument("--cache-path", help="Custom directory to store cache files")
     parser.add_argument("--force-translation", action="store_true", help="Force re-translation (ignore existing cache)")
@@ -810,31 +810,31 @@ def main():
     parser.add_argument("--no-server-spawn", action="store_true", help="Client mode: connect to existing server")
     parser.add_argument("--server-host", default="127.0.0.1", help="External server host (default: 127.0.0.1)")
     parser.add_argument("--server-port", type=int, default=8080, help="External server port (default: 8080)")
-
+    
     parser.add_argument("--concurrency", type=int, default=1, help="Parallel slots count (default 1)")
     # High-Fidelity Granular Settings
     parser.add_argument("--high-fidelity", action="store_true", help="Master Switch: Enable recommended High-Fidelity settings")
     parser.add_argument("--flash-attn", action="store_true", help="Enable Flash Attention")
-    parser.add_argument("--kv-cache-type", default="f16", choices=["f16", "q8_0", "q5_1", "q4_0"], help="KV Cache Quantization (default: f16)")
+    parser.add_argument("--kv-cache-type", default="q8_0", choices=["f16", "q8_0", "q5_1", "q4_0"], help="KV Cache Quantization (default: q8_0)")
     parser.add_argument("--use-large-batch", action="store_true", help="Use large batch sizes (b=ub=1024 for safety)")
     parser.add_argument("--batch-size", type=int, help="Manual physical batch size (overrides large-batch default)")
     parser.add_argument("--seed", type=int, help="Lock sampling seed (e.g. 42)")
-
+    
     # Chunk Balancing Strategy
     parser.add_argument("--balance-enable", action="store_true", help="Enable chunk tail balancing")
     parser.add_argument("--balance-threshold", type=float, default=0.6, help="Tail balance threshold (default 0.6)")
     parser.add_argument("--balance-count", type=int, default=3, help="Tail balance range count (default 3)")
-
+    
     args = parser.parse_args()
 
     # Manual validation for --file
     if not args.single_block and not args.rebuild_from_cache and not args.file:
         parser.error("the following arguments are required: --file")
-
+    
     # High-Fidelity Logic is now handled by the frontend.
     # The backend simply respects the explicit arguments passed for kv_cache, batch size, etc.
     # if args.high_fidelity: ... (Removed)
-
+    
     # Concurrency Hard Limit (New requirement: max 16)
     if args.concurrency > 16:
         print(f"[Warning] Concurrency {args.concurrency} exceeds system limit of 16. Capping to 16.")
@@ -849,13 +849,13 @@ def main():
             if not os.path.exists(args.rebuild_from_cache):
                 print(f"[Error] Cache file not found: {args.rebuild_from_cache}")
                 return
-
+            
             with open(args.rebuild_from_cache, 'r', encoding='utf-8') as f:
                 cache_data = json.load(f)
-
+            
             source_path = cache_data.get('sourcePath')
             output_path = args.output or cache_data.get('outputPath')
-
+            
             if not source_path or not os.path.exists(source_path):
                 print(f"[Error] Source file not found or not recorded in cache: {source_path}")
                 # Fallback: if output_path is txt, we can still rebuild it without source
@@ -863,7 +863,7 @@ def main():
                      print(f"[Rebuild] Falling back to text-only rebuild for {output_path}")
                 else:
                     sys.exit(1) # Signal failure to Electron
-
+            
             from murasaki_translator.core.chunker import TextBlock
             blocks = []
             for b_data in cache_data.get('blocks', []):
@@ -872,10 +872,10 @@ def main():
                     prompt_text=b_data['dst'], # Use dst as the new text
                     metadata=b_data.get('metadata') # Try to get metadata if saved (v2.1+)
                 ))
-
+            
             # Re-sort to ensure order
             blocks.sort(key=lambda x: x.id)
-
+            
             # Use DocumentFactory
             if source_path and os.path.exists(source_path):
                 doc = DocumentFactory.get_document(source_path)
@@ -887,10 +887,10 @@ def main():
                 with open(output_path, 'w', encoding='utf-8') as f:
                     for b in blocks:
                         f.write(b.prompt_text + "\n\n")
-
+            
             print(f"[Success] Document rebuilt successfully: {output_path}")
             return
-
+            
         except Exception as e:
             print(f"[Error] Rebuild failed: {e}")
             import traceback
@@ -898,7 +898,7 @@ def main():
             sys.exit(1)
 
     # ========================================
-    # 鍗曞潡缈昏瘧妯″紡 (鐢ㄤ簬鏍″鐣岄潰閲嶇炕)
+    # 单块翻译模式 (用于校对界面重翻)
     # ========================================
     if args.single_block:
         return translate_single_block(args)
@@ -929,7 +929,7 @@ def main():
                 else:
                     print(f"[Warning] Glossary not found: {glossary_path} (checked absolute, script/glossaries, cwd/glossaries)")
                     glossary_path = None # Indicate no valid glossary path found
-
+        
         if glossary_path:
             glossary = load_glossary(glossary_path)
         else:
@@ -939,10 +939,10 @@ def main():
     _, file_ext = os.path.splitext(input_path)
     # Determine Architecture (Novel vs Structured vs Alignment)
     # is_structured: True for subtitle formats and alignment mode (which uses pseudo-SRT tags)
-    # 娉ㄦ剰锛氭櫘閫?.txt 鏂囦欢鏃犺浣跨敤浣曠妯″紡閮戒笉闇€瑕侀澶栫殑 .txt 鍚庣紑
+    # 注意：普通 .txt 文件无论使用何种模式都不需要额外的 .txt 后缀
     is_structured = file_ext.lower() in ['.epub', '.srt', '.ass', '.ssa'] or args.alignment_mode
-    # is_structured_doc: 鍐冲畾鏄惁闇€瑕佸啓鍏ヤ复鏃?.txt 鏂囦欢锛堜粎瀵逛簩杩涘埗/缁撴瀯鍖栨牸寮忛渶瑕侊級
-    is_structured_doc = is_structured  # 鍙湁鐪熸鐨勭粨鏋勫寲鏂囨。鎵嶉渶瑕佷复鏃?txt
+    # is_structured_doc: 决定是否需要写入临时 .txt 文件（仅对二进制/结构化格式需要）
+    is_structured_doc = is_structured  # 只有真正的结构化文档才需要临时 txt
 
     if args.output:
         output_path = args.output
@@ -950,9 +950,9 @@ def main():
         cot_path = f"{base}_cot{ext}"
     else:
         base, ext = os.path.splitext(input_path)
-        # 鍔ㄦ€佽幏鍙栨ā鍨嬪悕绉帮紙浠庢枃浠跺悕鎻愬彇锛屽幓鎺夋墿灞曞悕锛?
+        # 动态获取模型名称（从文件名提取，去掉扩展名）
         model_name = os.path.splitext(os.path.basename(args.model))[0] if args.model else "unknown"
-        # 缁熶竴鍛藉悕鏍煎紡: 鍘熸枃浠跺悕_妯″瀷鍚嶇О
+        # 统一命名格式: 原文件名_模型名称
         suffix = f"_{model_name}"
         output_path = f"{base}{suffix}{ext}"
         cot_path = f"{base}{suffix}_cot{ext}"
@@ -963,7 +963,7 @@ def main():
 
     # Temp Progress Path (Deterministic for Resume)
     temp_progress_path = f"{output_path}.temp.jsonl"
-
+    
     # Clean up OLD temp files in output directory (not glossary dir)
     try:
         out_dir = os.path.dirname(os.path.abspath(output_path))
@@ -983,7 +983,7 @@ def main():
     # But llama-server -c is total context.
     # The UI passes "ctx" (per slot). So we must multiply here.
     total_ctx = args.ctx * args.concurrency
-
+    
     # Context Hardcap (Llama-3/RoPE limit check)
     MAX_SYSTEM_CTX = 32768
     if total_ctx > MAX_SYSTEM_CTX:
@@ -1017,7 +1017,7 @@ def main():
         "balance_count": args.balance_count,
     }
     config_hash = hashlib.sha256(json.dumps(config_payload, sort_keys=True).encode()).hexdigest()[:16]
-
+    
     # Concurrency Warning (Flops/Bandwidth Bottleneck)
     # Concurrency Warning (Flops/Bandwidth Bottleneck)
     if args.concurrency >= 4:
@@ -1026,12 +1026,12 @@ def main():
 
     print(f"Initializing Engine (Server: {args.server}, Parallel: {args.concurrency}, HighFidelity: {args.high_fidelity})...")
     engine = InferenceEngine(
-        server_path=args.server,
+        server_path=args.server, 
         model_path=args.model,
         host=args.server_host,
         port=args.server_port,
         n_gpu_layers=args.gpu_layers,
-        n_ctx=total_ctx,
+        n_ctx=total_ctx, 
         n_parallel=args.concurrency,
         no_spawn=args.no_server_spawn,
         flash_attn=args.flash_attn,
@@ -1040,14 +1040,14 @@ def main():
         batch_size=args.batch_size,
         seed=args.seed
     )
-
+    
     # --- Smart Chunk Size Reduction for Structured Formats ---
     # These formats have significant token overhead that the chunker (char-based) cannot account for.
     effective_chunk_size = args.chunk_size
-
+    
     # 1. Alignment Mode: @id=X@ content @id=X@ anchors
     # Token overhead analysis:
-    #   - Each @id=123@ 鈮?5-6 tokens (Qwen3)
+    #   - Each @id=123@ ≈ 5-6 tokens (Qwen3)
     #   - Double anchor per line = ~12 tokens overhead
     #   - For short manga lines (~10 chars content), anchors add ~40% token overhead
     #   - Model must reproduce anchors in output, doubling effective overhead
@@ -1055,28 +1055,28 @@ def main():
     if args.alignment_mode:
         effective_chunk_size = int(args.chunk_size * 0.6)
         print(f"[Auto-Config] Alignment mode: chunk_size {args.chunk_size} -> {effective_chunk_size} (anchor overhead compensation)")
-
+    
     # 2. ASS/SSA: Pseudo-SRT format with timestamps, indices
     # ~60-70% structural overhead, use 50% reduction
     elif file_ext.lower() in ['.ass', '.ssa']:
         effective_chunk_size = int(args.chunk_size * 0.5)
         print(f"[Auto-Config] ASS format: chunk_size {args.chunk_size} -> {effective_chunk_size} (pseudo-SRT overhead)")
 
-
+    
     chunker = Chunker(
-        target_chars=effective_chunk_size,
+        target_chars=effective_chunk_size, 
         max_chars=effective_chunk_size * 2, # Soft limit doubled for buffer
         mode=args.mode,
         enable_balance=args.balance_enable,
         balance_threshold=args.balance_threshold,
         balance_range=args.balance_count
     )
-
+    
     prompt_builder = PromptBuilder(glossary)
     response_parser = ResponseParser()
+    
 
-
-
+    
     # --- Unified Pipeline Injection ---
     def add_unique_rule(rule_list, pattern, r_type='format', pos='append'):
         if any(r.get('pattern') == pattern for r in rule_list): return
@@ -1088,7 +1088,7 @@ def main():
     pre_rules = load_rules(args.rules_pre) if args.rules_pre else []
     if args.fix_ruby:
         add_unique_rule(pre_rules, "ruby_cleaner", pos='prepend')
-
+    
     # 2. Post-rules
     post_rules = load_rules(args.rules_post) if args.rules_post else []
     if args.fix_kana:
@@ -1102,16 +1102,16 @@ def main():
 
     # [Audit Fix] Auto-detect protection requirement from rules
     protection_rules = [r for r in post_rules if r.get('pattern') == 'restore_protection']
-
+    
     # [Formula Factory] Structured engineering
     if is_structured:
-        # 1. 寮哄埗寮€鍚爣绛句繚鎶?(鍗充娇鍓嶇娌″嬀閫夛紝涓轰簡淇濇姢閿氱偣 ID銆佺粨鏋勫拰鍚堟硶鏍囩)
+        # 1. 强制开启标签保护 (即使前端没勾选，为了保护锚点 ID、结构和合法标签)
         if not args.text_protect:
             print(f"[Auto-Config] Structured document detected. Enabling TextProtector for structural safety.")
             args.text_protect = True
-
-        # 2. 瑙勫垯鐔旀柇锛氶拡瀵瑰瓧骞曟牸寮忓拰瀵归綈妯″紡锛屽墧闄ゆ墍鏈夊彲鑳界牬鍧忔崲琛屾垨鍚堝苟琛屾暟鐨勮鍒?
-        # Alignment Mode 蹇呴』浜彈鍚岀瓑鐨勮鍒欑啍鏂緟閬囷紝鍚﹀垯 PostProcess 浼氱牬鍧?@id@ 缁撴瀯
+        
+        # 2. 规则熔断：针对字幕格式和对齐模式，剔除所有可能破坏换行或合并行数的规则
+        # Alignment Mode 必须享受同等的规则熔断待遇，否则 PostProcess 会破坏 @id@ 结构
         is_sub = input_path.lower().endswith(('.srt', '.ass', '.ssa')) or args.alignment_mode
         if is_sub:
             melt_patterns = ['ensure_single_newline', 'ensure_double_newline', 'clean_empty_lines', 'merge_short_lines']
@@ -1120,8 +1120,8 @@ def main():
             if len(post_rules) < original_count:
                 print(f"[Auto-Config] Subtitle/Alignment detected. Disabled {original_count - len(post_rules)} formatting rules to preserve structure.")
 
-    # [Critical Fix] 寮哄埗灏嗘牱寮忚繕鍘熼€昏緫缃簬鎵€鏈夊悗澶勭悊瑙勫垯鐨勬渶鏈锛岀‘淇濊繕鍘熷悗涓嶄細鍐嶆琚浼?
-    # 鍏堢Щ闄ゅ凡鏈夌殑锛堝鏋滄湁锛夛紝鍐嶈拷鍔犲埌鏈€鍚?
+    # [Critical Fix] 强制将样式还原逻辑置于所有后处理规则的最末端，确保还原后不会再次被误伤
+    # 先移除已有的（如果有），再追加到最后
     post_rules = [r for r in post_rules if r.get('pattern') != 'restore_protection']
     if args.text_protect:
         add_unique_rule(post_rules, "restore_protection")
@@ -1129,11 +1129,11 @@ def main():
 
     custom_protector_patterns = None
     if input_path.lower().endswith(('.srt', '.ass', '.ssa')):
-        # [Specialized Rule] 閽堝瀛楀箷锛屼紭鍏堜娇鐢ㄥ悎娉曠殑鏍囩鎹曡幏瑙勫垯锛岄伩鍏嶆嫤鎴?銆愩€?锛堬級 [ ] 绛?
+        # [Specialized Rule] 针对字幕，优先使用合法的标签捕获规则，避免拦截 【】 （） [ ] 等
         custom_protector_patterns = TextProtector.SUBTITLE_PATTERNS
         print("[Auto-Config] Using restrictive SUBTITLE_PATTERNS for legal tags only.")
     elif input_path.lower().endswith('.epub') or args.alignment_mode:
-        # [Specialized Rule] 閽堝 EPUB/Alignment锛屼繚鎶?@id=ID@/@end=ID@ 閿氱偣鍜屽彲鑳芥畫鐣欑殑 HTML 鏍囩
+        # [Specialized Rule] 针对 EPUB/Alignment，保护 @id=ID@/@end=ID@ 锚点和可能残留的 HTML 标签
         custom_protector_patterns = [r'@id=\d+@', r'@end=\d+@', r'<[^>]+>']
         print("[Auto-Config] Using EPUB_ANCHOR_PATTERNS for @id=ID@ anchors.")
 
@@ -1148,10 +1148,10 @@ def main():
     pre_processor = RuleProcessor(pre_rules)
     post_processor = RuleProcessor(post_rules)
 
-    # [Block Separator] 鍔ㄦ€佹娴嬶細濡傛灉鍚庡鐞嗚鍒欏寘鍚?ensure_double_newline锛屽垯 block 闂翠娇鐢ㄥ弻鎹㈣
-    # 杩欑‘淇?block 鍐呴儴鍜?block 涔嬮棿鐨勬崲琛岄鏍间竴鑷?
+    # [Block Separator] 动态检测：如果后处理规则包含 ensure_double_newline，则 block 间使用双换行
+    # 这确保 block 内部和 block 之间的换行风格一致
     use_double_newline_separator = any(
-        r.get('pattern') == 'ensure_double_newline' and r.get('active', True)
+        r.get('pattern') == 'ensure_double_newline' and r.get('active', True) 
         for r in post_rules
     )
 
@@ -1160,8 +1160,8 @@ def main():
 
     try:
         engine.start_server()
-
-
+        
+        
         if args.alignment_mode and input_path.lower().endswith('.txt'):
             print(f"[Alignment Mode] ENABLED: Context-aware alignment for {input_path}")
             items, structure_map, source_lines = AlignmentHandler.load_lines(input_path)
@@ -1172,43 +1172,43 @@ def main():
         else:
             doc = DocumentFactory.get_document(input_path)
             items = doc.load()
-
+            
             # Source Lines Calculation (for Novel/Doc mode)
             # For Alignment Mode, source_lines is already exact physical count needed for reconstruction
             source_lines = len([i for i in items if i['text'].strip()])
             structure_map = {} # Not used
-
+            
             # Chunking
             blocks = chunker.process(items)
             print(f"[{args.mode.upper()} Mode] Input split into {len(blocks)} blocks.")
-
+        
         # Helper for printing stats (Alignment mode has already calculated exact source lines)
         source_chars = sum(len(i['text']) for i in items if i['text'].strip())
-
+        
         # Debug output (only when --debug is enabled)
         if args.debug:
             print(f"[DEBUG] Input lines: {source_lines}, Total chars: {source_chars}")
             for bi, blk in enumerate(blocks):
                 print(f"[DEBUG] Block {bi+1}: {len(blk.prompt_text)} chars")
-
+        
         # Streaming Processing
         start_time = time.time() # Ensure initialized early
         total_chars = 0
         total_cot_chars = 0
-        total_out_chars = 0
+        total_out_chars = 0  
         total_time = 0
         total_tokens = 0 # Track total tokens used
         total_gen_tokens = 0 # Track total generated tokens (for smooth speed)
         total_gen_time = 0 # Track total generation duration (for smooth speed)
         total_lines = 0 # Track total output lines for stats
         last_progress_time = 0 # For rate limiting
-
-        # 鍒濆鍖栫炕璇戠紦瀛橈紙鐢ㄤ簬鏍″鐣岄潰锛?
+        
+        # 初始化翻译缓存（用于校对界面）
         translation_cache = TranslationCache(output_path, custom_cache_dir=args.cache_path, source_path=input_path) if args.save_cache else None
 
-        # [淇] 鍦ㄦ柇鐐圭画浼犳垨宸叉湁缂撳瓨鏃讹紝鍏堝姞杞藉凡鏈夌紦瀛樻暟鎹?
-        # 杩欐牱鍙互淇濈暀涔嬪墠缈昏瘧鐨勫潡锛岄伩鍏嶆牎瀵圭晫闈㈠彧鏄剧ず鎭㈠鍚庣殑閮ㄥ垎
-        # 闄ら潪浣跨敤 --force-translation 寮哄埗閲嶆柊缈昏瘧
+        # [修复] 在断点续传或已有缓存时，先加载已有缓存数据
+        # 这样可以保留之前翻译的块，避免校对界面只显示恢复后的部分
+        # 除非使用 --force-translation 强制重新翻译
         if translation_cache and translation_cache.cache_path and os.path.exists(translation_cache.cache_path):
             if args.force_translation:
                 print(f"[Cache] Force translation mode: ignoring existing cache and starting fresh")
@@ -1221,16 +1221,16 @@ def main():
                         print(f"[Cache] Failed to load existing cache, will create new one")
                 except Exception as e:
                     print(f"[Cache] Warning: Failed to load cache: {e}")
-                    # [鏁版嵁瀹夊叏] 鍦ㄦ竻绌哄墠澶囦唤鎹熷潖鐨勭紦瀛樻枃浠?
+                    # [数据安全] 在清空前备份损坏的缓存文件
                     try:
                         backup_path = translation_cache.cache_path + '.bak.corrupt'
                         shutil.copy2(translation_cache.cache_path, backup_path)
                         print(f"[Cache] Backed up corrupted cache to: {backup_path}")
                     except Exception as backup_error:
                         print(f"[Cache] Warning: Failed to backup corrupted cache: {backup_error}")
-                    # [灏佽] 浣跨敤 clear() 鏂规硶锛岄伩鍏嶇洿鎺ユ搷浣滃唴閮ㄧ粨鏋?
+                    # [封装] 使用 clear() 方法，避免直接操作内部结构
                     translation_cache.clear()
-
+        
         # Load legacy custom protection patterns file if provided via CLI
         if args.protect_patterns and os.path.exists(args.protect_patterns):
              try:
@@ -1244,21 +1244,21 @@ def main():
                          print("[Info] New rule-based protection pattern taking precedence over legacy file.")
              except Exception as e:
                  print(f"[Warning] Failed to load legacy protection patterns: {e}")
-
+        
         gpu_name = get_gpu_name()  # Get GPU Name once
         display_name, params, quant = format_model_info(args.model)
-
+        
         print("\nStarting Translation...")
         print(f"Output: {output_path}")
         if args.save_cot:
             print(f"Debug CoT: {cot_path}")
         print(f"GPU: {gpu_name} (Layers: {args.gpu_layers})")
         print(f"Model: {display_name} ({params}, {quant})")
-
-        # 璇︾粏閰嶇疆鐘舵€佹棩蹇?
+        
+        # 详细配置状态日志
         print("\n[Config] Feature Status:")
         print(f"  Temperature: {args.temperature}")
-        print(f"  Line Check: {'[V] Enabled' if args.line_check else '[X] Disabled'} (卤{args.line_tolerance_abs}/{args.line_tolerance_pct*100:.0f}%)")
+        print(f"  Line Check: {'[V] Enabled' if args.line_check else '[X] Disabled'} (±{args.line_tolerance_abs}/{args.line_tolerance_pct*100:.0f}%)")
         print(f"  Rep Penalty Retry: Base={args.rep_penalty_base}, Max={args.rep_penalty_max}")
         print(f"  Max Retries: {args.max_retries}")
         print(f"  Glossary Coverage: {'[V] Enabled' if args.output_hit_threshold < 100 else '[X] Disabled'} (Output>={args.output_hit_threshold}% or CoT>={args.cot_coverage_threshold}%, Retries={args.coverage_retries})")
@@ -1272,16 +1272,16 @@ def main():
         else:
             print(f"  Glossary: None")
         print()
-
-        # 鍙戦€佽緭鍑鸿矾寰勭粰鍓嶇锛堢敤浜庡巻鍙茶褰曞拰鏂囦欢鎵撳紑锛?
+        
+        # 发送输出路径给前端（用于历史记录和文件打开）
         sys.stdout.write(f"\nJSON_OUTPUT_PATH:{json.dumps({'path': output_path}, ensure_ascii=False)}\n")
         sys.stdout.flush()
-
+        
         # Init Monitor
         monitor = HardwareMonitor()
         if monitor.enabled:
             print(f"Hardware Monitor Active: {monitor.name}")
-
+            
             # Start Monitor Thread
             def run_monitor_loop():
                 # Correctly initialize baseline to avoid initial speed spike
@@ -1292,13 +1292,13 @@ def main():
                 except:
                     last_chars = 0
                     last_tokens = 0
-
+                
                 last_check_time = time.time()
-
+                
                 while True:
                     # Get Hardware Status (VRAM/GPU)
                     status = monitor.get_status() or {}
-
+                    
                     # Get Engine Metrics (KV Cache)
                     # Get Engine Metrics (KV Cache) - HTTP Request
                     try:
@@ -1314,51 +1314,51 @@ def main():
                         curr_tokens = engine.generated_tokens_count
                         now = time.time()
                         dt = now - last_check_time
-
+                        
                         if dt > 0.4: # Update every ~0.5s
                              speed_c = int((curr_chars - last_chars) / dt)
                              speed_t = round((curr_tokens - last_tokens) / dt, 1)
                              status['realtime_speed_chars'] = speed_c if speed_c > 0 else 0
                              status['realtime_speed_tokens'] = speed_t if speed_t > 0 else 0
-
+                             
                              last_chars = curr_chars
                              last_tokens = curr_tokens
                              last_check_time = now
                     except Exception as e:
                         # Should rarely happen
                         pass
-
+                    
                     if status:
                         safe_print_json("JSON_MONITOR", status)
                     time.sleep(0.5) # Fast update for smooth charts
-
+            
             monitor_thread = threading.Thread(target=run_monitor_loop, daemon=True)
             monitor_thread.start()
-
-        # 瀹氫箟鍏ㄥ眬璧峰鏃堕棿 (Fix NameError) - MOVED TO TOP
+        
+        # 定义全局起始时间 (Fix NameError) - MOVED TO TOP
         # start_time = time.time()
-
-        # 鍙戦€佸垵濮嬭剦鍐?JSON (Initial Progress Pulse)
-        # 杩欒 GUI 鐭ラ亾鎬诲潡鏁帮紝鍗充娇浠诲姟杩樻湭寮€濮嬪鐞?
+        
+        # 发送初始脉冲 JSON (Initial Progress Pulse)
+        # 这让 GUI 知道总块数，即使任务还未开始处理
         initial_progress = {
             "current": 0,
             "total": len(blocks),
             "percent": 0,
             "total_chars": 0,
             "total_lines": 0,
-            "source_chars": 0,
-            "source_lines": 0,
+            "source_chars": source_chars,
+            "source_lines": source_lines,
             "speed_chars": 0,
             "elapsed": 0
         }
         safe_print_json("JSON_PROGRESS", initial_progress)
-
+        
         # Incremental Translation / Resume Logic
         skip_blocks_from_output = 0 # Blocks skipped based on final output file
         precalculated_temp = {}    # Blocks already processed and stored in temp file
         existing_content = []      # [Audit Fix] Store lines for document reconstruction
         resume_config_matched = False
-
+        
         # Order-Sensitive Initialization
         all_results = [None] * len(blocks) # Pre-fill for structural reconstruction
 
@@ -1409,7 +1409,7 @@ def main():
                          print(f"[Resume] Loaded {len(precalculated_temp)} blocks from temp progress file.")
                 except Exception as e:
                     print(f"[Warning] Failed to load resume data from temp file: {e}")
-
+            
             # [Audit Fix] Fill skipped blocks from output file to support EPUB/SRT reconstruction
             # This MUST happen before Precision Resume Alignment
             if skip_blocks_from_output > 0:
@@ -1423,7 +1423,7 @@ def main():
                     elif existing_content:
                         block_lines_count = blocks[idx].prompt_text.count('\n') + 1
                         block_lines = existing_content[current_line_ptr : current_line_ptr + block_lines_count]
-
+                        
                         if block_lines:
                             all_results[idx] = {
                                 "success": True,
@@ -1438,11 +1438,11 @@ def main():
                             }
                         else:
                             print(f"[Resume] Warning: Could not find content for block {idx} in existing output.")
-
+                    
                     # Advance pointer (account for doc mode spacer if applicable)
                     block_lines_count = blocks[idx].prompt_text.count('\n') + 1
                     current_line_ptr += (block_lines_count + 1) if args.mode == "doc" else block_lines_count
-
+                
                 # [Fix] Synchronize skipped blocks to TranslationCache to prevent data loss on final save
                 if translation_cache:
                     for idx in range(skip_blocks_from_output):
@@ -1451,15 +1451,15 @@ def main():
                             # Extract warning types from result
                             w_types = [w['type'] if isinstance(w, dict) else w for w in res.get("warnings", [])]
                             translation_cache.add_block(
-                                idx,
-                                res.get('src_text', ''),
-                                res.get('preview_text', res.get('out_text', '')),
-                                w_types,
-                                res.get("cot", ""),
+                                idx, 
+                                res.get('src_text', ''), 
+                                res.get('preview_text', res.get('out_text', '')), 
+                                w_types, 
+                                res.get("cot", ""), 
                                 res.get("retry_history", [])
                             )
                     logger.info(f"[Cache] Synchronized {skip_blocks_from_output} skipped blocks to memory.")
-
+        
         # [Precision Resume] Determine how much content to KEEP from existing file
         # We rewrite the file instead of plain append ('a') to ensure perfect structural alignment
         # and eliminate residual/incomplete data from the previous crash.
@@ -1474,10 +1474,10 @@ def main():
                 else:
                     # Fallback to source if missing (should not happen with resume integrity)
                     rebuilt_parts.append(blocks[i].prompt_text)
-
+            
             block_separator = "\n\n" if (use_double_newline_separator or args.mode == "doc") else "\n"
             keep_content_str = block_separator.join(rebuilt_parts) + block_separator
-
+            
             # Update counters based on what we are KEEPING
             total_lines = keep_content_str.count('\n') # Rough approximation
             total_out_chars = len(keep_content_str)
@@ -1485,16 +1485,16 @@ def main():
 
         # Open output file: Always use 'w' and write kept content to ensure truncation of junk
         output_mode = 'w'
-
+        
         # Prepare Temp Output File (Append or Create)
         temp_file_mode = 'a' if (args.resume and len(precalculated_temp) > 0 and resume_config_matched) else 'w'
         temp_progress_file = open(temp_progress_path, temp_file_mode, encoding='utf-8', buffering=1)
-
+        
         # If starting fresh, write fingerprint
         if temp_file_mode == 'w':
             temp_progress_file.write(json.dumps({"type": "fingerprint", "hash": config_hash}) + "\n")
             temp_progress_file.flush()
-
+        
         cot_context = open(cot_path, 'w', encoding='utf-8', buffering=1) if args.save_cot else nullcontext()
         with open(actual_output_path, output_mode, encoding='utf-8', buffering=1) as f_out, \
              cot_context as f_cot:
@@ -1503,7 +1503,7 @@ def main():
             if keep_content_str:
                 f_out.write(keep_content_str)
                 f_out.flush()
-
+            
             # ========================================
             # Parallel Worker Function
             # ========================================
@@ -1532,14 +1532,14 @@ def main():
                     pause_file = output_path + ".pause"
                     while os.path.exists(pause_file):
                          time.sleep(1)
-
+                    
                     # Pre-processing using Unified RuleProcessor
                     logger.debug(f"[Block {block_idx+1}] Pre-processing start (len: {len(block.prompt_text)})")
                     processed_src_text = pre_processor.process(block.prompt_text, strict_line_count=strict_mode)
                     logger.debug(f"[Block {block_idx+1}] After Pre-rules: {len(processed_src_text)} chars")
-
+                    
                     processed_src_text = Normalizer.normalize(processed_src_text)
-
+                    
                     # Thread-Safe Text Protector (Local instantiation)
                     # Use custom_protector_patterns captured from outer scope
                     local_protector = None
@@ -1549,19 +1549,19 @@ def main():
                          # SRT/TXT requires non-aggressive cleaning to preserve structural newlines
                          _, ext = os.path.splitext(input_path)
                          is_ass_format = ext.lower() in ['.ass', '.ssa']
-
+                         
                          local_protector = TextProtector(
-                             patterns=custom_protector_patterns,
+                             patterns=custom_protector_patterns, 
                              block_id=block_idx + 1,
                              aggressive_cleaning=is_ass_format
                          )
                          logger.debug(f"[Block {block_idx+1}] [Experimental] Protection start")
                          processed_src_text = local_protector.protect(processed_src_text)
                          logger.debug(f"[Block {block_idx+1}] [Experimental] After Protection: {len(processed_src_text)} chars")
-
+                    
                     # Pre-processing & Protection happens locally in caller
                     # because they might vary (different blocks/pattern instances)
-
+                    
                     # Unified Call
                     return translate_block_with_retry(
                         block_idx=block_idx,
@@ -1593,7 +1593,7 @@ def main():
                 stored_result["is_restorer"] = True
                 return stored_result
 
-
+            
             # Stats Initialization
             total_out_chars = 0      # All Output Chars (Main + Summary etc)
             total_cot_chars = 0      # CoT Thinking Chars
@@ -1602,26 +1602,26 @@ def main():
             total_lines = 0          # Output Lines
             total_prompt_tokens = 0  # Input/Prompt Tokens (from Engine)
             total_gen_tokens = 0     # Generation Tokens (from Engine)
-
+            
             # ...
             # Main Execution Loop
             # ========================================
-
+            
             # Use ThreadPoolExecutor
             max_workers = args.concurrency
             executor = ThreadPoolExecutor(max_workers=max_workers)
-
+            
             # Submit all tasks
             # We maintain a map of future -> index
             future_to_index = {}
-
+            
 
             # Determine if we should use strict line count (Retry if line count mismatch)
             _, file_ext = os.path.splitext(input_path)
-            # [CRITICAL FIX] Do NOT re-calculate is_structured_doc here!
+            # [CRITICAL FIX] Do NOT re-calculate is_structured_doc here! 
             # It was already determined globally (lines ~770) and includes args.alignment_mode.
             # Re-calculating purely on extension would disable alignment mode for .txt.
-
+            
             # Strict mode logic:
             # - all: Force strict line count for EVERY file
             # - subs: Force for subtitles (.srt, .ass, .ssa) and .epub
@@ -1639,12 +1639,12 @@ def main():
                 print(f"[Init] Strict Line Count Mode INACTIVE (Policy: {args.strict_mode}).")
 
             print(f"Starting execution with {max_workers} threads...")
-
+            
             for i, block in enumerate(blocks):
                 # Resume skip
                 if i < skip_blocks_from_output:
                     continue
-
+                
                 # Check temp progress
                 if i in precalculated_temp:
                     future = executor.submit(restore_block_task, i, precalculated_temp[i])
@@ -1652,31 +1652,31 @@ def main():
                 else:
                     # Pass enforce_strict_alignment to task
                     future = executor.submit(process_block_task, i, block, enforce_strict_alignment)
-
+                
                 future_to_index[future] = i
-
+            
             # Note: EPUB/SRT reconstruction handled by memory rebuild logic above (skip_blocks_from_output)
-
+            
             # --- Execution Status Initialization ---
             results_buffer = {}
             next_write_idx = skip_blocks_from_output
-
-            # 缁熻淇锛氳繃婊ゆ帀绌哄潡锛堢敤浜庤礋杞藉潎琛＄殑鍗犱綅鍧楋級
+            
+            # 统计修正：过滤掉空块（用于负载均衡的占位块）
             effective_blocks_indices = [idx for idx, b in enumerate(blocks) if b.prompt_text.strip()]
             total_tasks_count = len(future_to_index)
             effective_total = len(effective_blocks_indices)
-            completed_count = 0
+            completed_count = 0 
             effective_completed = 0
-
+            
             # Session Stats for real-time speed (excluding restored blocks)
             session_out_chars = 0
-            session_out_lines = 0
-
+            session_out_lines = 0 
+            
             # Main result processing loop
             for future in as_completed(future_to_index):
                     block_idx = future_to_index[future]
                     try:
-                        result = future.result()
+                        result = future.result() 
                     except Exception as e:
                         safe_print(f"Worker Error for Block {block_idx+1}: {e}")
                         result = {
@@ -1686,24 +1686,19 @@ def main():
                             "cot": "", "raw_output": "", "warnings": [],
                             "lines_count": 0, "chars_count": 0, "cot_chars": 0, "usage": None
                         }
-
+                    
                     # Store results in buffer for ordered processing
                     results_buffer[block_idx] = result
                     completed_count += 1
                     if result["src_text"].strip():
                         effective_completed += 1
-
-                    block_src_text = result.get("src_text", "")
-                    if block_src_text.strip():
-                        total_source_chars += len(block_src_text)
-                        total_source_lines += len([l for l in block_src_text.splitlines() if l.strip()])
-
+                        
                     # Stats processing
                     if result["success"]:
                         total_out_chars += len(result["out_text"])
                         total_lines += result["lines_count"]
                         total_cot_chars += result["cot_chars"]
-
+                        
                         # Fix for Resume Mode Speed Spike:
                         # Only count stats for REAL GEN tasks towards speed calculation
                         # "is_restorer" results are instant and distort the speed metric
@@ -1714,8 +1709,8 @@ def main():
                             if result.get("usage"):
                                 total_prompt_tokens += result["usage"].get("prompt_tokens", 0)
                                 total_gen_tokens += result["usage"].get("completion_tokens", 0)
-
-
+                            
+                        
                         if block_idx not in precalculated_temp:
                             try:
                                 temp_line = json.dumps(result, ensure_ascii=False)
@@ -1723,71 +1718,75 @@ def main():
                                 temp_progress_file.flush()
                             except Exception as e:
                                 logger.debug(f"[TempProgress] Write failed: {e}")
-
-                    # Progress reporting (include failed blocks in completion/progress)
-                    elapsed_so_far = max(0.1, time.time() - start_time)
-
-                    # Speed Calculation uses SESSION stats only (successful generated content)
-                    current_speed_chars = session_out_chars / elapsed_so_far
-
-                    avg_time_per_block = elapsed_so_far / max(1, completed_count)
-                    remaining_time = (total_tasks_count - completed_count) * avg_time_per_block
-
-                    progress_data = {
-                        "current": effective_completed + len([idx for idx in range(skip_blocks_from_output) if blocks[idx].prompt_text.strip()]),
-                        "ordered_current": next_write_idx, "total": effective_total,
-                        "percent": ((effective_completed + len([idx for idx in range(skip_blocks_from_output) if blocks[idx].prompt_text.strip()])) / max(1, effective_total)) * 100,
-                        "total_chars": total_out_chars, "total_lines": total_lines,
-                        "source_chars": total_source_chars, "source_lines": total_source_lines,
-                        "speed_chars": round(current_speed_chars, 1), "speed_lines": round(session_out_lines / elapsed_so_far, 2),
-                        "speed_gen": round(total_gen_tokens / elapsed_so_far, 1), "speed_eval": round(total_prompt_tokens / elapsed_so_far, 1),
-                        "total_tokens": total_gen_tokens, "elapsed": elapsed_so_far, "remaining": int(remaining_time)
-                    }
-
-                    now = time.time()
-                    if (now - last_progress_time > 0.1) or (completed_count == total_tasks_count):
-                        safe_print_json("JSON_PROGRESS", progress_data)
-                        last_progress_time = now
+                        
+                        block_src_text = result["src_text"]
+                        total_source_chars += len(block_src_text)
+                        total_source_lines += len([l for l in block_src_text.splitlines() if l.strip()])
+                        
+                        # Progress reporting
+                        elapsed_so_far = max(0.1, time.time() - start_time)
+                        
+                        # Speed Calculation uses SESSION stats only
+                        current_speed_chars = session_out_chars / elapsed_so_far
+                        
+                        avg_time_per_block = elapsed_so_far / max(1, completed_count)
+                        remaining_time = (total_tasks_count - completed_count) * avg_time_per_block
+                        
+                        progress_data = {
+                            "current": effective_completed + len([idx for idx in range(skip_blocks_from_output) if blocks[idx].prompt_text.strip()]),
+                            "ordered_current": next_write_idx, "total": effective_total,
+                            "percent": ((effective_completed + len([idx for idx in range(skip_blocks_from_output) if blocks[idx].prompt_text.strip()])) / max(1, effective_total)) * 100,
+                            "total_chars": total_out_chars, "total_lines": total_lines,
+                            "source_chars": total_source_chars, "source_lines": total_source_lines, 
+                            "speed_chars": round(current_speed_chars, 1), "speed_lines": round(session_out_lines / elapsed_so_far, 2),
+                            "speed_gen": round(total_gen_tokens / elapsed_so_far, 1), "speed_eval": round(total_prompt_tokens / elapsed_so_far, 1),
+                            "total_tokens": total_gen_tokens, "elapsed": elapsed_so_far, "remaining": int(remaining_time)
+                        }
+                        
+                        now = time.time()
+                        if (now - last_progress_time > 0.1) or (completed_count == total_tasks_count):
+                            safe_print_json("JSON_PROGRESS", progress_data)
+                            last_progress_time = now
 
                     # Ordered write to file (consuming from results_buffer)
                     while next_write_idx in results_buffer:
                         res = results_buffer.pop(next_write_idx)
                         curr_disp = next_write_idx + 1
-
+                        
                         if res["success"]:
                             # [Alignment Mode] Post-Processing
                             # CRITICAL: Do NOT overwrite res["out_text"] with stripped version!
                             # We need the tags in "out_text" for save_reconstructed to work at the end.
                             # Only strip tags for the Preview/GUI.
                             if args.alignment_mode:
-                                res["preview_text"] = AlignmentHandler.process_result(res["out_text"])
+                                res["preview_text"] = AlignmentHandler.process_result(res["out_text"])  
                             else:
                                 res["preview_text"] = res["out_text"]
                             safe_print_json("JSON_PREVIEW_BLOCK", {"block": curr_disp, "src": res['src_text'], "output": res['preview_text']})
-
+                            
                             if translation_cache:
                                 w_types = [w['type'] for w in res["warnings"]] if res["warnings"] else []
                                 translation_cache.add_block(next_write_idx, res["src_text"], res["preview_text"], w_types, res["cot"], res.get("retry_history", []))
-
+                            
                             # Write to txt stream
-                            # 鍔ㄦ€佸垎闅旂锛氬鏋滃悗澶勭悊瑙勫垯鍖呭惈 ensure_double_newline锛屽垯 block 闂翠娇鐢ㄥ弻鎹㈣
+                            # 动态分隔符：如果后处理规则包含 ensure_double_newline，则 block 间使用双换行
                             block_separator = "\n\n" if (use_double_newline_separator or args.mode == "doc") else "\n"
                             f_out.write(res["out_text"] + block_separator)
-
+                            
                             if args.save_cot and res["cot"]:
                                 f_cot.write(f"[MURASAKI] ========== Block {curr_disp} ==========\n{res['raw_output']}\n\n")
                         else:
                             f_out.write(f"\n[Block {curr_disp} Failed]\n")
-
+                        
                         f_out.flush()
                         # CRITICAL: Store in all_results for post-processing reconstruction
                         all_results[next_write_idx] = res
                         next_write_idx += 1
 
             executor.shutdown(wait=True)
-
-        # [Final Structured Save]
-        # 姝ゆ搷浣滃湪 f_out 鍏抽棴鍚庢墽琛岋紝纭繚鎵€鏈夋枃鏈凡钀界洏
+        
+        # [Final Structured Save] 
+        # 此操作在 f_out 关闭后执行，确保所有文本已落盘
         if is_structured_doc:
             try:
                 # [Integrity Check] Ensure all blocks have valid results before reconstruction
@@ -1798,21 +1797,21 @@ def main():
                     # Output JSON error for GUI to display internal-style alert
                     safe_print_json("JSON_ERROR", {
                         "type": "resume_integrity",
-                        "title": "閲嶅缓澶辫触",
-                        "message": f"鏃犳硶閲嶅缓缁撴瀯鍖栨枃妗ｏ紒\n\n缂哄け {len(missing_blocks)} 涓炕璇戝潡銆俓n\n鍙兘鍘熷洜锛歕n1. 涓存椂鏂囦欢 (.temp.jsonl) 宸叉崯鍧忔垨琚垹闄n2. 杈撳嚭鏂囦欢涓庤繘搴︿笉鍖归厤\n\n寤鸿锛氬垹闄よ緭鍑烘枃浠跺苟閲嶆柊缈昏瘧銆?,
+                        "title": "重建失败",
+                        "message": f"无法重建结构化文档！\n\n缺失 {len(missing_blocks)} 个翻译块。\n\n可能原因：\n1. 临时文件 (.temp.jsonl) 已损坏或被删除\n2. 输出文件与进度不匹配\n\n建议：删除输出文件并重新翻译。",
                         "missing_count": len(missing_blocks)
                     })
                     raise ValueError(error_msg)
-
+                
                 print(f"[Final] Reconstructing structured document: {output_path}...")
                 from murasaki_translator.core.chunker import TextBlock
                 translated_blocks = []
                 for i in range(len(blocks)):
                     res = all_results[i]
                     if res and res.get('success'):
-                        # 鏋勯€?TextBlock 瀵硅薄浠ユ弧瓒?doc.save 鐨勭鍚?
+                        # 构造 TextBlock 对象以满足 doc.save 的签名
                         tb = TextBlock(id=i, prompt_text=res['out_text'])
-                        # 娉ㄥ叆鍏冩暟鎹互渚?EPUB 绮剧‘鍥炲～
+                        # 注入元数据以便 EPUB 精确回填
                         if hasattr(blocks[i], 'metadata') and blocks[i].metadata:
                             tb.metadata = blocks[i].metadata
                         translated_blocks.append(tb)
@@ -1823,14 +1822,14 @@ def main():
                         if hasattr(blocks[i], 'metadata') and blocks[i].metadata:
                             tb.metadata = blocks[i].metadata
                         translated_blocks.append(tb)
-
+                
                 if args.alignment_mode and input_path.lower().endswith('.txt'):
                     print(f"[Debug] Invoking save_reconstructed. MapSize={len(structure_map)}, TotalLines={source_lines}, Blocks={len(translated_blocks)}")
                     AlignmentHandler.save_reconstructed(output_path, translated_blocks, structure_map, total_physical_lines=source_lines)
                 else:
                     doc.save(output_path, translated_blocks)
                 print(f"[Final] Reconstruction complete: {output_path}")
-
+                
                 # [Cleanup] Remove intermediate .txt file after successful reconstruction
                 if actual_output_path != output_path and os.path.exists(actual_output_path):
                     try:
@@ -1843,25 +1842,25 @@ def main():
         else:
             print(f"[Success] Translation completed. Output saved to: {output_path}")
 
-        # 浠诲姟缁撴潫鍚庣殑鎬荤粨
+        # 任务结束后的总结
         total_time = time.time() - start_time
         if translation_cache:
             m_name = os.path.basename(args.model) if args.model else "Unknown"
             translation_cache.save(model_name=m_name, glossary_path=args.glossary or "", concurrency=args.concurrency)
 
-        # 鍙戦€佹渶缁?JSON 缁熻
+        # 发送最终 JSON 统计
         final_stats = {
             "sourceLines": total_source_lines, "sourceChars": total_source_chars,
             "outputLines": total_lines, "outputChars": total_out_chars,
             "totalTime": round(total_time, 2), "avgSpeed": round(total_out_chars / total_time, 1) if total_time > 0 else 0
         }
         safe_print_json("JSON_FINAL", final_stats)
-
-        # 娓呯悊涓存椂鏂囦欢
+        
+        # 清理临时文件
         try:
             temp_progress_file.close()
             if (completed_count + skip_blocks_from_output) >= len(blocks):
-                if os.path.exists(temp_progress_path):
+                if os.path.exists(temp_progress_path): 
                     os.remove(temp_progress_path)
                     print(f"[Cleanup] Removed temporary progress file: {os.path.basename(temp_progress_path)}")
         except: pass
@@ -1869,33 +1868,33 @@ def main():
     except KeyboardInterrupt:
         print("\n[System] Interrupted by user. Shutting down immediately...")
 
-        # [淇] 鐢ㄦ埛涓柇鏃朵篃淇濆瓨缂撳瓨锛岄伩鍏嶇炕璇戞暟鎹涪澶?
-        # [淇″彿閲嶅叆淇濇姢] 浣跨敤宓屽 try 闃叉绗簩娆?Ctrl+C 涓柇淇濆瓨杩囩▼
+        # [修复] 用户中断时也保存缓存，避免翻译数据丢失
+        # [信号重入保护] 使用嵌套 try 防止第二次 Ctrl+C 中断保存过程
         if 'translation_cache' in locals() and translation_cache and len(translation_cache.blocks) > 0:
             try:
                 m_name = os.path.basename(args.model) if args.model else "Unknown"
-                # 蹇界暐绗簩娆?Ctrl+C锛岀‘淇濈紦瀛樺啓鍏ュ畬鎴?
+                # 忽略第二次 Ctrl+C，确保缓存写入完成
                 try:
                     if translation_cache.save(model_name=m_name, glossary_path=args.glossary or "", concurrency=args.concurrency):
                         print(f"[Cache] Saved {len(translation_cache.blocks)} blocks before interrupt")
                     else:
                         print("[Cache] Warning: Failed to save cache on interrupt")
                 except KeyboardInterrupt:
-                    # [淇″彿閲嶅叆淇濇姢] 绗簩娆?Ctrl+C锛屽拷鐣ュ苟缁х画閫€鍑?
+                    # [信号重入保护] 第二次 Ctrl+C，忽略并继续退出
                     print("[Cache] Ignoring second interrupt during save, exiting...")
                 except Exception as cache_error:
                     print(f"[Cache] Error saving cache on interrupt: {cache_error}")
             except Exception as e:
                 print(f"[Cache] Unexpected error during cache save: {e}")
 
-        # [涓柇閲嶅缓] 浠?temp.jsonl 閲嶅缓棰勮 txt 渚涚敤鎴锋煡鐪嬪凡缈昏瘧鍐呭
+        # [中断重建] 从 temp.jsonl 重建预览 txt 供用户查看已翻译内容
         try:
             if 'temp_progress_path' in locals() and os.path.exists(temp_progress_path):
                 rebuild_path = output_path + ".interrupted.txt"
                 with open(temp_progress_path, 'r', encoding='utf-8') as tf:
                     lines = tf.readlines()
                 if lines:
-                    # json 宸插湪椤跺眰瀵煎叆锛屾棤闇€閲嶅瀵煎叆
+                    # json 已在顶层导入，无需重复导入
                     rebuilt_blocks = []
                     for line in lines:
                         try:

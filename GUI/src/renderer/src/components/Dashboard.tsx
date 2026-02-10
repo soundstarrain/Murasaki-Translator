@@ -1,10 +1,9 @@
 import { useEffect, useState, useRef, useCallback, forwardRef, useImperativeHandle } from "react"
-import { Play, X, FolderOpen, FileText, BookOpen, Clock, Zap, Layers, Terminal, ChevronDown, Plus, FolderPlus, Trash2, ArrowRight, AlertTriangle, GripVertical, RefreshCw, AlignLeft, Settings, Bot } from "lucide-react"
+import { Play, X, FolderOpen, FileText, BookOpen, Clock, Zap, Layers, Terminal, ChevronDown, Plus, FolderPlus, Trash2, ArrowRight, AlertTriangle, GripVertical, RefreshCw, AlignLeft } from "lucide-react"
 import { Button, Card, Tooltip as UITooltip } from "./ui/core"
 import { translations, Language } from "../lib/i18n"
 import { getVariants } from "../lib/utils"
 import { identifyModel } from "../lib/modelConfig"
-import { stripSystemMarkersForDisplay } from "../lib/displayText"
 import { addRecord, updateRecord, TranslationRecord, TriggerEvent } from "./HistoryView"
 
 import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer, Brush } from 'recharts'
@@ -12,8 +11,7 @@ import { HardwareMonitorBar, MonitorData } from "./HardwareMonitorBar"
 import { AlertModal } from "./ui/AlertModal"
 import { useAlertModal } from "../hooks/useAlertModal"
 import { FileIcon } from "./ui/FileIcon"
-import { FileConfigModal } from "./LibraryView"
-import { FileConfig, QueueItem, generateId, getFileType } from "../types/common"
+import { QueueItem, generateId, getFileType } from "../types/common"
 
 // Window.api type is defined in src/types/api.d.ts
 
@@ -80,14 +78,12 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
 
     const [currentQueueIndex, setCurrentQueueIndex] = useState(-1)
     const [completedFiles, setCompletedFiles] = useState<Set<string>>(new Set())
-    const [configItem, setConfigItem] = useState<QueueItem | null>(null)
 
     // Monitors
     const [monitorData, setMonitorData] = useState<MonitorData | null>(null)
 
     const [modelPath, setModelPath] = useState<string>("")
     const [glossaryPath, setGlossaryPath] = useState<string>("")
-    const [promptPreset, setPromptPreset] = useState<string>(() => localStorage.getItem("config_preset") || "novel")
     const [models, setModels] = useState<string[]>([])
     const [modelsInfoMap, setModelsInfoMap] = useState<Record<string, { paramsB?: number, sizeGB?: number }>>({})
 
@@ -112,15 +108,15 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         if (g) setGlossaries(g)
     }
 
-    // Sync Model on Active - 姣忔杩涘叆椤甸潰鏃朵富鍔ㄨ幏鍙栨ā鍨嬩俊鎭?    useEffect(() => {
+    // Sync Model on Active - 每次进入页面时主动获取模型信息
+    useEffect(() => {
         if (active) {
             fetchData()
-            setPromptPreset(localStorage.getItem("config_preset") || "novel")
             const path = localStorage.getItem("config_model")
             if (path) {
                 const name = path.split(/[/\\]/).pop() || path
                 setModelPath(path)
-                // 姣忔杩涘叆鏃堕兘涓诲姩鑾峰彇妯″瀷璇︾粏淇℃伅
+                // 每次进入时都主动获取模型详细信息
                 window.api?.getModelInfo(path).then(info => {
                     if (info) {
                         modelInfoRef.current = { ...info, name: name, path: path }
@@ -186,8 +182,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
 
     // Progress & Preview
     const [progress, setProgress] = useState({ current: 0, total: 0, percent: 0, elapsed: 0, remaining: 0, speedLines: 0, speedChars: 0, speedEval: 0, speedGen: 0, retries: 0 })
-    const [displayElapsed, setDisplayElapsed] = useState(0) // 鏈湴骞虫粦璁℃椂锛堝熀浜庡悗绔暟鎹級
-    const [displayRemaining, setDisplayRemaining] = useState(0) // 鏈湴骞虫粦鍊掕鏃?    const [chartData, setChartData] = useState<any[]>([])
+    const [displayElapsed, setDisplayElapsed] = useState(0) // 本地平滑计时（基于后端数据）
+    const [displayRemaining, setDisplayRemaining] = useState(0) // 本地平滑倒计时
+    const [chartData, setChartData] = useState<any[]>([])
     const [chartMode, setChartMode] = useState<'chars' | 'tokens' | 'vram' | 'gpu'>('chars')
     // Use Ref to access current chartMode inside onLogUpdate closure
     const chartModeRef = useRef(chartMode)
@@ -220,16 +217,17 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         if (modelPath) {
             window.api?.getModelInfo(modelPath).then(info => modelInfoRef.current = info)
 
-            // 妫€鏌ユ槸鍚︿负瀹樻柟妯″瀷锛屾樉绀鸿瘑鍒俊鎭?            const config = identifyModel(modelPath)
+            // 检查是否为官方模型，显示识别信息
+            const config = identifyModel(modelPath)
             if (config) {
-                console.log(`[Murasaki] 璇嗗埆鍒板畼鏂规ā鍨? ${config.displayName}`)
+                console.log(`[Murasaki] 识别到官方模型: ${config.displayName}`)
             }
         }
     }, [modelPath])
 
     // Confirm sync with file_queue for legacy
     useEffect(() => {
-        // We might want to keep file_queue synced in case other parts use it,
+        // We might want to keep file_queue synced in case other parts use it, 
         // but library_queue is the master.
         queueRef.current = queue
     }, [queue])
@@ -251,7 +249,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
     const handleProcessExit = useCallback((code: number) => {
         setIsRunning(false)
         const success = code === 0
-        setLogs(prev => [...prev, success ? '鉁?Translation completed successfully!' : `鉂?Process exited with code ${code}`]) // Keep English for logs for now or add keys later
+        setLogs(prev => [...prev, success ? '✅ Translation completed successfully!' : `❌ Process exited with code ${code}`]) // Keep English for logs for now or add keys later
 
         // Finalize history record
         if (currentRecordIdRef.current) {
@@ -282,7 +280,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         // Don't clear preview - keep showing last translation result
         // setPreview(null) - REMOVED to preserve last result
 
-        window.api?.showNotification('Murasaki Translator', success ? '缈昏瘧瀹屾垚锛? : '缈昏瘧宸插仠姝?)
+        window.api?.showNotification('Murasaki Translator', success ? '翻译完成！' : '翻译已停止')
 
         const queueIndex = currentQueueIndexRef.current
         const queue = queueRef.current
@@ -314,7 +312,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                 setQueue(prev => prev.map((item, i) => i === queueIndex ? { ...item, status: 'completed' } : item))
                 setCurrentQueueIndex(-1)
                 if (queue.length > 1) {
-                    window.api?.showNotification('Murasaki Translator', `鍏ㄩ儴 ${queue.length} 涓枃浠剁炕璇戝畬鎴愶紒`)
+                    window.api?.showNotification('Murasaki Translator', `全部 ${queue.length} 个文件翻译完成！`)
                 }
                 setProgress(prev => ({ ...prev, percent: 100 }))
             } else {
@@ -375,15 +373,12 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                 if (log.startsWith("JSON_PROGRESS:")) {
                     try {
                         const data = JSON.parse(log.substring("JSON_PROGRESS:".length))
-                        const elapsed = Math.max(0, Number(data.elapsed ?? 0))
-                        lastBackendElapsedRef.current = elapsed
-                        lastBackendUpdateRef.current = Date.now()
-                        hasReceivedProgressRef.current = true
-                        // 鐩存帴浣跨敤鍚庣鏁版嵁锛屼笉淇濈暀鏃у€硷紙閬垮厤涓婁竴娆¤繍琛岀殑娈嬬暀锛?                        setProgress(prev => ({
+                        // 直接使用后端数据，不保留旧值（避免上一次运行的残留）
+                        setProgress(prev => ({
                             current: data.current ?? 0,
                             total: data.total ?? 0,
                             percent: data.percent ?? 0,
-                            elapsed,
+                            elapsed: data.elapsed ?? 0,
                             remaining: data.remaining >= 0 ? data.remaining : 0,
                             speedLines: data.speed_lines > 0 ? data.speed_lines : 0,
                             speedChars: data.speed_chars > 0 ? data.speed_chars : 0,
@@ -401,7 +396,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                             chars: data.total_chars ?? progressDataRef.current.chars,
                             sourceLines: data.source_lines ?? progressDataRef.current.sourceLines,
                             sourceChars: data.source_chars ?? progressDataRef.current.sourceChars,
-                            outputPath: progressDataRef.current.outputPath, // 淇濈暀宸茶缃殑杈撳嚭璺緞
+                            outputPath: progressDataRef.current.outputPath, // 保留已设置的输出路径
                             speeds: data.speed_chars > 0
                                 ? [...progressDataRef.current.speeds, data.speed_chars].slice(-20)
                                 : progressDataRef.current.speeds
@@ -427,22 +422,21 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                         console.log("[Dashboard] Received JSON_RETRY:", data)
                         // Accumulate retries instead of just setting to attempt number
                         setProgress(prev => ({ ...prev, retries: prev.retries + 1 }))
-                        const blockNo = Number(data.block || 0)
-                        // 娣诲姞鍒拌Е鍙戜簨浠朵互渚胯褰曞埌鍘嗗彶
+                        // 添加到触发事件以便记录到历史
                         const retryType = data.type === 'repetition' ? 'rep_penalty_increase' :
                             data.type === 'glossary' ? 'glossary_missed' :
                                 data.type === 'empty' ? 'empty_retry' : 'line_mismatch'
                         triggersBufferRef.current.push({
                             time: new Date().toISOString(),
                             type: retryType,
-                            block: blockNo,
+                            block: data.block || 0,
                             message: data.type === 'repetition'
-                                ? `閲嶅鎯╃綒鎻愬崌鑷?${data.penalty}`
+                                ? `重复惩罚提升至 ${data.penalty}`
                                 : data.type === 'glossary'
-                                    ? `鏈瑕嗙洊鐜?${data.coverage?.toFixed(1)}% 涓嶈冻锛岄噸璇曚腑`
+                                    ? `术语覆盖率 ${data.coverage?.toFixed(1)}% 不足，重试中`
                                     : data.type === 'empty'
-                                        ? `鍖哄潡 ${data.block} 杈撳嚭涓虹┖锛岃烦杩?閲嶈瘯`
-                                        : `鍖哄潡 ${data.block} 琛屾暟宸紓 ${data.src_lines - data.dst_lines}锛岄噸璇曚腑`
+                                        ? `区块 ${data.block} 输出为空，跳过/重试`
+                                        : `区块 ${data.block} 行数差异 ${data.src_lines - data.dst_lines}，重试中`
                         })
                     } catch (e) { console.error("JSON_RETRY Parse Error:", e, log) }
                 } else if (log.includes("JSON_PREVIEW_BLOCK:")) {
@@ -453,14 +447,14 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                         setPreviewBlocks(prev => {
                             const next = { ...prev, [data.block]: { src: data.src, output: data.output } }
                             // Persist light-weight version? Or maybe persistence is less critical for realtime stream
-                            // but if user reloads?
+                            // but if user reloads? 
                             // Let's persist full blocks map?
                             try { localStorage.setItem("last_preview_blocks", JSON.stringify(next)) } catch (e) { }
                             return next
                         })
                     } catch (e) { console.error(e) }
                 } else if (log.startsWith("JSON_OUTPUT_PATH:")) {
-                    // 鎺ユ敹杈撳嚭鏂囦欢璺緞
+                    // 接收输出文件路径
                     try {
                         const data = JSON.parse(log.substring("JSON_OUTPUT_PATH:".length))
                         progressDataRef.current.outputPath = data.path || ''
@@ -483,8 +477,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                     try {
                         const data = JSON.parse(log.substring("JSON_ERROR:".length))
                         showAlert({
-                            title: data.title || "閿欒",
-                            description: data.message || "鍙戠敓鏈煡閿欒",
+                            title: data.title || "错误",
+                            description: data.message || "发生未知错误",
                             variant: 'destructive'
                         })
                     } catch (e) { console.error("JSON_ERROR Parse Error:", e) }
@@ -539,7 +533,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         }
     }, [])
 
-    // 蹇嵎閿洃鍚?(甯︽湁渚濊禆鏁扮粍锛岄槻姝㈤棴鍖呴櫡闃?
+    // 快捷键监听 (带有依赖数组，防止闭包陷阱)
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (!active) return
@@ -566,12 +560,14 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         }
     }))
 
-    // 鏃ュ織鑷姩婊氬姩鍒板簳閮?    useEffect(() => {
+    // 日志自动滚动到底部
+    useEffect(() => {
         logEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" })
     }, [logs])
 
-    // 棰勮鍖哄煙鑷姩婊氬姩鍒板簳閮?    useEffect(() => {
-        // 褰撻瑙堝唴瀹规洿鏂版椂锛屽己鍒舵粴鍔ㄥ埌搴曢儴
+    // 预览区域自动滚动到底部
+    useEffect(() => {
+        // 当预览内容更新时，强制滚动到底部
         if (srcPreviewRef.current) {
             isAutoScrolling.current = true
             srcPreviewRef.current.scrollTop = srcPreviewRef.current.scrollHeight
@@ -580,16 +576,19 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
             isAutoScrolling.current = true
             outPreviewRef.current.scrollTop = outPreviewRef.current.scrollHeight
         }
-        // 閲嶇疆鏍囧織浣嶏紙绋嶅井寤惰繜浠ラ槻浜嬩欢瑙﹀彂锛?        setTimeout(() => { isAutoScrolling.current = false }, 50)
+        // 重置标志位（稍微延迟以防事件触发）
+        setTimeout(() => { isAutoScrolling.current = false }, 50)
     }, [previewBlocks])
 
-    // 鏈湴骞虫粦璁℃椂鍣?- 鍩轰簬鍚庣 elapsed 鏁版嵁鎻掑€兼洿鏂?    const lastBackendElapsedRef = useRef<number>(0)
+    // 本地平滑计时器 - 基于后端 elapsed 数据插值更新
+    const lastBackendElapsedRef = useRef<number>(0)
     const lastBackendUpdateRef = useRef<number>(0)
     const hasReceivedProgressRef = useRef(false)
 
     useEffect(() => {
         if (!isRunning) {
-            // 缈昏瘧鍋滄鏃朵笉閲嶇疆鏄剧ず鏃堕棿锛屼繚鐣欐渶缁堢粨鏋?            // 浣嗗€掕鏃跺簲娓呴浂锛屽洜涓轰换鍔″凡缁撴潫
+            // 翻译停止时不重置显示时间，保留最终结果
+            // 但倒计时应清零，因为任务已结束
             lastBackendElapsedRef.current = 0
             lastBackendUpdateRef.current = 0
             hasReceivedProgressRef.current = false
@@ -597,14 +596,15 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
             return
         }
 
-        // 姣?100ms 鏇存柊鏄剧ず鏃堕棿
+        // 每 100ms 更新显示时间
         const timer = setInterval(() => {
-            // 浣跨敤鍚庣鏃堕棿 + 鏈湴鎻掑€?            if (lastBackendUpdateRef.current > 0 && hasReceivedProgressRef.current) {
+            // 使用后端时间 + 本地插值
+            if (lastBackendUpdateRef.current > 0 && lastBackendElapsedRef.current > 0) {
                 const localDelta = (Date.now() - lastBackendUpdateRef.current) / 1000
-                const interpolatedElapsed = Math.max(0, lastBackendElapsedRef.current + localDelta)
+                const interpolatedElapsed = lastBackendElapsedRef.current + localDelta
                 setDisplayElapsed(Math.floor(interpolatedElapsed))
 
-                // 鍊掕鏃舵彃鍊?(Smoothing Remaining Time)
+                // 倒计时插值 (Smoothing Remaining Time)
                 if (progress.remaining > 0) {
                     const smoothRemaining = Math.max(0, progress.remaining - localDelta)
                     setDisplayRemaining(Math.round(smoothRemaining))
@@ -613,7 +613,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                 }
 
             } else if (progress.elapsed > 0 && hasReceivedProgressRef.current) {
-                // 棣栨鏀跺埌鍚庣鏁版嵁鍓嶄娇鐢ㄥ悗绔€?(浠呭綋宸叉敹鍒版柊鏁版嵁鏃?
+                // 首次收到后端数据前使用后端值 (仅当已收到新数据时)
                 setDisplayElapsed(Math.floor(progress.elapsed))
                 setDisplayRemaining(Math.floor(progress.remaining))
             }
@@ -622,15 +622,15 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         return () => clearInterval(timer)
     }, [isRunning, progress.elapsed])
 
-    // 鏇存柊鍚庣鏃堕棿鍙傝€冪偣锛堟瘡娆℃敹鍒?JSON_PROGRESS 鏃讹級
-    // 鏇存柊鍚庣鏃堕棿鍙傝€冪偣锛堟瘡娆℃敹鍒?JSON_PROGRESS 鏃讹級
+    // 更新后端时间参考点（每次收到 JSON_PROGRESS 时）
+    // 更新后端时间参考点（每次收到 JSON_PROGRESS 时）
     useEffect(() => {
-        if (isRunning && hasReceivedProgressRef.current) {
+        if (progress.elapsed > 0) {
             lastBackendElapsedRef.current = progress.elapsed
             lastBackendUpdateRef.current = Date.now()
             hasReceivedProgressRef.current = true
         }
-    }, [isRunning, progress.elapsed])
+    }, [progress.elapsed])
 
     // Refresh chart data when mode changes
     useEffect(() => {
@@ -696,8 +696,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         }
 
         showConfirm({
-            title: lang === 'zh' ? '纭绉婚櫎' : 'Confirm Remove',
-            description: lang === 'zh' ? `纭畾瑕佺Щ闄?"${item.fileName}" 鍚楋紵` : `Are you sure you want to remove "${item.fileName}"?`,
+            title: lang === 'zh' ? '确认移除' : 'Confirm Remove',
+            description: lang === 'zh' ? `确定要移除 "${item.fileName}" 吗？` : `Are you sure you want to remove "${item.fileName}"?`,
             variant: 'destructive',
             onConfirm: () => {
                 const newQueue = [...queue]
@@ -714,7 +714,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
     const handleClearQueue = useCallback(() => {
         showConfirm({
             title: t.dashboard.clear,
-            description: (t as any).confirmClear || "纭畾瑕佹竻绌哄叏閮ㄧ炕璇戦槦鍒楀悧锛?,
+            description: (t as any).confirmClear || "确定要清空全部翻译队列吗？",
             variant: 'destructive',
             onConfirm: () => {
                 setQueue([])
@@ -722,11 +722,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
             }
         })
     }, [t, showConfirm])
-
-    const handleSaveFileConfig = useCallback((itemId: string, config: FileConfig) => {
-        setQueue(prev => prev.map((item) => item.id === itemId ? { ...item, config } : item))
-        setConfigItem(null)
-    }, [])
 
     // Drag handlers
     // Unified Drop Handler for Queue
@@ -803,9 +798,10 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         setIsRunning(true)
         setDisplayElapsed(0)
         setDisplayRemaining(0)
-        // 閲嶇疆 Ref 闃叉鏃ф暟鎹共鎵?        lastBackendElapsedRef.current = 0
-        lastBackendUpdateRef.current = Date.now()
-        hasReceivedProgressRef.current = true
+        // 重置 Ref 防止旧数据干扰
+        lastBackendElapsedRef.current = 0
+        lastBackendUpdateRef.current = 0
+        hasReceivedProgressRef.current = false
 
         setChartData([])
         chartHistoriesRef.current = { chars: [], tokens: [], vram: [], gpu: [] }
@@ -813,22 +809,26 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         setPreviewBlocks({})
         localStorage.removeItem("last_preview_blocks") // Clear persisted preview
 
-        // Load in-memory queue config overrides (fresh from Dashboard edits)
+        // Load Library Queue for Custom Config Overrides
         let customConfig: any = {}
-        const queueItem = queueRef.current.find((q) => q.path === inputPath)
-        if (queueItem?.config && !queueItem.config.useGlobalDefaults) {
-            customConfig = queueItem.config
-        }
+        try {
+            const libQueue = JSON.parse(localStorage.getItem("library_queue") || "[]")
+            const item = libQueue.find((q: any) => q.path === inputPath)
+            if (item && item.config && !item.config.useGlobalDefaults) {
+                customConfig = item.config
+            }
+        } catch (e) { console.error("Failed to load library config:", e) }
 
-        // 鏍规嵁 ctx 鑷姩璁＄畻 chunk-size
+        // 根据 ctx 自动计算 chunk-size
         const ctxValue = customConfig.contextSize || parseInt(localStorage.getItem("config_ctx") || "4096")
-        // 鍏紡锛?ctx * 0.9 - 500) / 3.5 * 1.3
-        //   - 0.9: 10% 瀹夊叏浣欓噺锛岄槻姝㈣竟鐣屾儏鍐垫埅鏂?        //   - 鍏朵綑涓庡師鍏紡鐩稿悓锛屼繚鎸佺粡楠岄獙璇佺殑鍙傛暟
+        // 公式：(ctx * 0.9 - 500) / 3.5 * 1.3
+        //   - 0.9: 10% 安全余量，防止边界情况截断
+        //   - 其余与原公式相同，保持经验验证的参数
         const calculatedChunkSize = Math.max(200, Math.min(3072, Math.floor(((ctxValue * 0.9 - 500) / 3.5) * 1.3)))
 
-        // Get effective model path (per-file override > global)
-        const effectiveModelPath = (customConfig.model || localStorage.getItem("config_model") || modelPath || "").trim()
-        if (!effectiveModelPath) {
+        // Get Model Path
+        const modelPath = localStorage.getItem("config_model")
+        if (!modelPath) {
             // Use custom AlertModal
             showAlert({ title: "Error", description: "Please select a model in the Model Management page first.", variant: 'destructive' })
             window.api?.showNotification("Error", "Please select a model in the Model Management page first.")
@@ -843,8 +843,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
             serverUrl: localStorage.getItem("config_server"),
             outputDir: customConfig.outputDir || localStorage.getItem("config_output_dir"),
             glossaryPath: glossaryOverride !== undefined ? glossaryOverride : (customConfig.glossaryPath || glossaryPath),
-            modelPath: effectiveModelPath,
-            preset: customConfig.preset || promptPreset || "novel",
+            preset: customConfig.preset || localStorage.getItem("config_preset") || "novel",
             rulesPre: JSON.parse(localStorage.getItem("config_rules_pre") || "[]"),
             rulesPost: JSON.parse(localStorage.getItem("config_rules_post") || "[]"),
 
@@ -873,15 +872,16 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
             repPenaltyStep: parseFloat(localStorage.getItem("config_rep_penalty_step") || "0.1"),
             maxRetries: parseInt(localStorage.getItem("config_max_retries") || "3"),
 
-            // Glossary Coverage Check (鏈琛ㄨ鐩栫巼妫€娴?
-            coverageCheck: localStorage.getItem("config_coverage_check") !== "false", // 榛樿寮€鍚?            outputHitThreshold: parseInt(localStorage.getItem("config_output_hit_threshold") || "60"),
+            // Glossary Coverage Check (术语表覆盖率检测)
+            coverageCheck: localStorage.getItem("config_coverage_check") !== "false", // 默认开启
+            outputHitThreshold: parseInt(localStorage.getItem("config_output_hit_threshold") || "60"),
             cotCoverageThreshold: parseInt(localStorage.getItem("config_cot_coverage_threshold") || "80"),
             coverageRetries: parseInt(localStorage.getItem("config_coverage_retries") || "3"),
 
-            // Incremental Translation (澧為噺缈昏瘧)
+            // Incremental Translation (增量翻译)
             resume: forceResume !== undefined ? forceResume : (localStorage.getItem("config_resume") === "true"),
 
-            // Dynamic Retry Strategy (鍔ㄦ€侀噸璇曠瓥鐣?
+            // Dynamic Retry Strategy (动态重试策略)
             retryTempBoost: parseFloat(localStorage.getItem("config_retry_temp_boost") || "0.1"),
             retryPromptFeedback: localStorage.getItem("config_retry_prompt_feedback") !== "false",
 
@@ -891,7 +891,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
             // Concurrency
             concurrency: customConfig.concurrency ?? parseInt(localStorage.getItem("config_concurrency") || "1"),
             flashAttn: customConfig.flashAttn !== undefined ? customConfig.flashAttn : (localStorage.getItem("config_flash_attn") === "true"),
-            kvCacheType: customConfig.kvCacheType || localStorage.getItem("config_kv_cache_type") || "f16",
+            kvCacheType: customConfig.kvCacheType || localStorage.getItem("config_kv_cache_type") || "q8_0",
             useLargeBatch: localStorage.getItem("config_use_large_batch") === "true",
             physicalBatchSize: parseInt(localStorage.getItem("config_physical_batch_size") || "1024"),
             seed: customConfig.seed !== undefined ? customConfig.seed : (localStorage.getItem("config_seed") ? parseInt(localStorage.getItem("config_seed")!) : undefined),
@@ -916,7 +916,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
             id: recordId,
             fileName: inputPath.split(/[/\\]/).pop() || inputPath,
             filePath: inputPath,
-            modelName: effectiveModelPath.split(/[/\\]/).pop() || effectiveModelPath,
+            modelName: modelPath.split(/[/\\]/).pop() || modelPath,
             startTime: new Date().toISOString(),
             status: 'running',
             totalBlocks: 0,
@@ -939,7 +939,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         setAlignmentMode(finalConfig.alignmentMode)
         setSaveCot(finalConfig.saveCot)
 
-        window.api?.startTranslation(inputPath, effectiveModelPath, finalConfig)
+        window.api?.startTranslation(inputPath, modelPath, finalConfig)
     }
 
     // --- State for Confirmation Modal ---
@@ -969,16 +969,15 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
 
     const checkAndStart = async (inputPath: string, index: number) => {
         // ... (Duplicate config logic? Or refactor?)
-        // Refactoring is cleaner.
+        // Refactoring is cleaner. 
         // But to minimize changes, I will implement a lightweight check using the same config loading.
 
-        const queueItem = queueRef.current[index]
-        const queueCustomConfig = (queueItem?.config && !queueItem.config.useGlobalDefaults) ? queueItem.config : {}
-        const effectiveModelPath = (queueCustomConfig.model || localStorage.getItem("config_model") || modelPath || "").trim()
+
+
         const config = {
             // Minimal config needed for checkOutputFileExists
-            outputDir: queueCustomConfig.outputDir || localStorage.getItem("config_output_dir"),
-            modelPath: effectiveModelPath,
+            outputDir: localStorage.getItem("config_output_dir"),
+            modelPath: modelPath, // 传递模型路径用于生成输出文件名
         }
 
 
@@ -1043,7 +1042,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
     const handleStop = () => {
         console.log('[Dashboard] User requested stop')
         window.api?.stopTranslation()
-        // 绔嬪嵆鏇存柊 UI 鐘舵€侊紙鍚庣涔熶細鍙戦€?process-exit 浜嬩欢锛?        setIsRunning(false)
+        // 立即更新 UI 状态（后端也会发送 process-exit 事件）
+        setIsRunning(false)
         setCurrentQueueIndex(-1)
     }
 
@@ -1054,7 +1054,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         return `${m}m ${s}s`
     }
 
-    // 楂樹寒鍚屼竴琛屼腑宸﹀彸瀵瑰簲鐨勫叡鍚屾眽瀛?    const highlightLineCommonCJK = (text: string, compareText: string, isSource: boolean) => {
+    // 高亮同一行中左右对应的共同汉字
+    const highlightLineCommonCJK = (text: string, compareText: string, isSource: boolean) => {
         // Strip backend warning tags from display text
         // These tags might be inserted by backend for debugging/warning purposes
         // Tags to strip: line_mismatch, high_similarity, kana_residue, etc.
@@ -1071,12 +1072,12 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
 
         const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf]/g
 
-        // 鏋勫缓姣旇緝瀛楃闆嗭紙鍖呭惈寮備綋瀛楋級
+        // 构建比较字符集（包含异体字）
         const compareChars = new Set<string>()
         const matches = compareText.match(cjkRegex)
         if (matches) {
             for (const char of matches) {
-                // 娣诲姞鍘熷瀛楃鍜屾墍鏈夊紓浣撳瓧
+                // 添加原始字符和所有异体字
                 compareChars.add(char)
                 const variants = getVariants(char)
                 if (variants) {
@@ -1092,7 +1093,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         let inHighlight = false
 
         for (const char of text) {
-            // 妫€鏌ュ瓧绗︽槸鍚﹀湪姣旇緝闆嗕腑锛堝寘鍚紓浣撳瓧锛?            const isCJK = cjkRegex.test(char)
+            // 检查字符是否在比较集中（包含异体字）
+            const isCJK = cjkRegex.test(char)
             cjkRegex.lastIndex = 0
 
             let isCommonCJK = false
@@ -1100,7 +1102,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                 if (compareChars.has(char)) {
                     isCommonCJK = true
                 } else {
-                    // 妫€鏌ュ綋鍓嶅瓧绗︾殑寮備綋瀛楁槸鍚﹀湪姣旇緝闆嗕腑
+                    // 检查当前字符的异体字是否在比较集中
                     const charVariants = getVariants(char)
                     if (charVariants) {
                         for (const v of charVariants) {
@@ -1141,11 +1143,12 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
         )
     }
 
-    // 鍧楃骇瀵归綈棰勮娓叉煋 (Block-Aligned)
+    // 块级对齐预览渲染 (Block-Aligned)
     const renderBlockAlignedPreview = () => {
         const blocks = Object.entries(previewBlocks).sort((a, b) => Number(a[0]) - Number(b[0]))
 
-        // 鎭㈠鎬荤粺璁′俊鎭?        let totalSrcLines = 0
+        // 恢复总统计信息
+        let totalSrcLines = 0
         let totalOutLines = 0
         blocks.forEach(([_, data]) => {
             totalSrcLines += (data.src || '').split(/\r?\n/).filter(l => l.trim()).length
@@ -1165,7 +1168,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
 
         return (
             <div className="flex-1 overflow-hidden flex flex-col">
-                {/* 琛ㄥご (鎭㈠缁熻淇℃伅) */}
+                {/* 表头 (恢复统计信息) */}
                 <div className="flex border-b border-border shrink-0">
                     <div className="w-10 shrink-0 border-r border-border/20" />
                     <div className="flex-1 px-3 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-wider bg-muted/10 border-r border-border/30 flex items-center gap-2">
@@ -1173,24 +1176,24 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                     </div>
                     <div className="flex-1 px-3 py-2 text-[10px] font-bold text-primary uppercase tracking-wider bg-primary/5 flex items-center gap-2">
                         {t.dashboard.target} <span className="text-[9px] font-normal opacity-60">({totalOutLines} {t.dashboard.lines})</span>
-                        {lineCountMismatch && <span className="text-[8px] text-blue-500 bg-blue-500/10 px-1.5 py-0.5 rounded">琛屾暟涓嶅尮閰?/span>}
+                        {lineCountMismatch && <span className="text-[8px] text-blue-500 bg-blue-500/10 px-1.5 py-0.5 rounded">行数不匹配</span>}
                     </div>
                 </div>
 
-                {/* 鍐呭鍖?*/}
+                {/* 内容区 */}
                 <div
                     ref={srcPreviewRef}
                     className="flex-1 overflow-y-auto"
                 >
                     {blocks.map(([blockId, data]) => {
-                        // 浣跨敤鍗曟崲琛屽垎鍓诧紝鍥犱负 raw text 杩欓噷鐨勬崲琛屽氨鏄鍒嗛殧
+                        // 使用单换行分割，因为 raw text 这里的换行就是行分隔
                         const sLines = (data.src || '').split(/\r?\n/).filter(l => l.trim())
                         const oLines = (data.output || '').split(/\r?\n/).filter(l => l.trim())
                         const maxL = Math.max(sLines.length, oLines.length)
 
                         return (
                             <div key={blockId} className="border-b border-border/40 relative group/block">
-                                {/* 鏄惧紡 Block 缂栧彿鏍囪 */}
+                                {/* 显式 Block 编号标记 */}
                                 <div className="sticky top-0 left-0 z-20 pointer-events-none opacity-50 group-hover/block:opacity-100 transition-opacity">
                                     <span className="inline-block bg-muted/80 backdrop-blur text-[9px] text-muted-foreground px-1.5 py-0.5 rounded-br border-r border-b border-border/30 font-mono">
                                         # {blockId}
@@ -1203,17 +1206,16 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                                     globalLineCount++
                                     const srcLine = sLines[i] || ''
                                     const outLine = oLines[i] || ''
-                                    const displaySrcLine = stripSystemMarkersForDisplay(srcLine)
-                                    const displayOutLine = stripSystemMarkersForDisplay(outLine)
 
-                                    // 璀﹀憡妫€鏌?                                    let warning = null
+                                    // 警告检查
+                                    let warning = null
                                     if (outLine.includes('line_mismatch')) warning = { msg: t.dashboard.lineMismatch || 'Line Mismatch' }
                                     if (outLine.includes('high_similarity')) warning = { msg: t.dashboard.similarityWarn || 'High Similarity' }
                                     if (outLine.includes('glossary_missed')) warning = { msg: 'Glossary Missed' }
 
                                     return (
                                         <div key={i} className={`flex border-b border-border/5 hover:bg-muted/5 transition-colors ${!srcLine ? 'bg-blue-500/5' : ''}`}>
-                                            {/* 琛屽彿 */}
+                                            {/* 行号 */}
                                             <div className="w-10 shrink-0 text-[10px] text-right pr-2 py-3 select-none text-muted-foreground/30 font-mono relative">
                                                 {globalLineCount}
                                                 {warning && (
@@ -1222,13 +1224,13 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                                                     </div>
                                                 )}
                                             </div>
-                                            {/* 鍘熸枃 */}
+                                            {/* 原文 */}
                                             <div className="flex-1 px-4 py-3 text-sm leading-[1.75] border-r border-border/20 text-muted-foreground/80 break-words whitespace-pre-wrap">
-                                                {displaySrcLine ? highlightLineCommonCJK(displaySrcLine, displayOutLine, true) : <span className="text-muted-foreground/20">鈥?/span>}
+                                                {srcLine ? highlightLineCommonCJK(srcLine, outLine, true) : <span className="text-muted-foreground/20">—</span>}
                                             </div>
-                                            {/* 璇戞枃 (鎭㈠鍘熻儗鏅壊) */}
+                                            {/* 译文 (恢复原背景色) */}
                                             <div className="flex-1 px-4 py-3 text-sm leading-[1.75] font-medium text-foreground break-words whitespace-pre-wrap bg-primary/[0.03]">
-                                                {displayOutLine ? highlightLineCommonCJK(displayOutLine, displaySrcLine, false) : <span className="text-blue-500/30 italic text-xs">...</span>}
+                                                {outLine ? highlightLineCommonCJK(outLine, srcLine, false) : <span className="text-blue-500/30 italic text-xs">...</span>}
                                             </div>
                                         </div>
                                     )
@@ -1244,21 +1246,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
 
     const needsModel = models.length === 0
     const canStart = queue.length > 0 && !isRunning
-    const fileConfigLabel = lang === "zh" ? "鏂囦欢璁剧疆" : lang === "jp" ? "銉曘偂銈ゃ儷瑷畾" : "File Settings"
-    const presetOptions = [
-        {
-            value: "novel",
-            label: lang === "zh" ? "杞诲皬璇存ā寮?(榛樿)" : lang === "jp" ? "灏忚銉兗銉?(銉囥儠銈┿儷銉?" : "Novel Mode (Default)",
-        },
-        {
-            value: "script",
-            label: lang === "zh" ? "鍓ф湰妯″紡" : lang === "jp" ? "銈广偗銉儣銉堛儮銉笺儔 (Galgame)" : "Script Mode (Galgame)",
-        },
-        {
-            value: "short",
-            label: lang === "zh" ? "鍗曞彞妯″紡" : lang === "jp" ? "鐭枃銉兗銉? : "Short Mode",
-        },
-    ]
 
     return (
         <div
@@ -1306,7 +1293,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                                         <div
                                             key={item.id}
                                             ref={i === currentQueueIndex ? activeQueueItemRef : null}
-                                            className={`flex items-center gap-2 p-2.5 rounded-lg text-xs group transition-all
+                                            className={`flex items-center gap-2 p-2.5 rounded-lg text-xs group transition-all 
                                                 ${i === currentQueueIndex ? 'bg-primary/20 text-primary shadow-sm ring-1 ring-primary/20' :
                                                     completedFiles.has(item.path) ? 'bg-secondary/30 text-muted-foreground opacity-60 hover:opacity-100' :
                                                         'hover:bg-secondary'}`}
@@ -1372,19 +1359,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                                                     <span className="truncate text-[10px] opacity-50 cursor-pointer hover:opacity-100 hover:text-foreground transition-opacity">{item.path}</span>
                                                 </UITooltip>
                                             </div>
-                                            <UITooltip content={fileConfigLabel}>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="w-6 h-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation()
-                                                        setConfigItem(item)
-                                                    }}
-                                                >
-                                                    <Settings className="w-3 h-3 text-muted-foreground hover:text-foreground" />
-                                                </Button>
-                                            </UITooltip>
                                             <Button
                                                 variant="ghost"
                                                 size="icon"
@@ -1435,10 +1409,10 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                     )}
 
                     {/* Config Row - Compact Property Bar Style */}
-                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-2 shrink-0">
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-2 shrink-0">
                         <div className={`bg-card/80 hover:bg-card px-3 py-2 rounded-lg border flex items-center gap-3 transition-all cursor-pointer ${!modelPath && models.length > 0 ? 'border-amber-500/50 ring-1 ring-amber-500/20' : 'border-border/50 hover:border-border'}`}>
                             <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white">
-                                <Bot className="w-3.5 h-3.5" />
+                                <FileText className="w-3.5 h-3.5" />
                             </div>
                             <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2">
@@ -1471,32 +1445,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                             </div>
                             <div title={t.modelView.refresh || "Refresh"} onClick={(e) => { e.stopPropagation(); fetchData() }} className="p-1 hover:bg-muted rounded-full cursor-pointer transition-colors z-10 mr-1 group/refresh">
                                 <RefreshCw className="w-3.5 h-3.5 text-muted-foreground group-hover/refresh:text-primary transition-colors" />
-                            </div>
-                            <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0 opacity-40" />
-                        </div>
-                        <div className="bg-card/80 hover:bg-card px-3 py-2 rounded-lg border border-border/50 hover:border-border flex items-center gap-3 transition-all cursor-pointer">
-                            <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white">
-                                <Settings className="w-3.5 h-3.5" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <span className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">
-                                    {t.config.promptPreset}
-                                </span>
-                                <select
-                                    className="w-full bg-transparent text-sm font-medium text-foreground outline-none cursor-pointer truncate -ml-0.5"
-                                    value={promptPreset}
-                                    onChange={(e) => {
-                                        const value = e.target.value || "novel"
-                                        setPromptPreset(value)
-                                        localStorage.setItem("config_preset", value)
-                                    }}
-                                >
-                                    {presetOptions.map((option) => (
-                                        <option key={option.value} value={option.value}>
-                                            {option.label}
-                                        </option>
-                                    ))}
-                                </select>
                             </div>
                             <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0 opacity-40" />
                         </div>
@@ -1621,7 +1569,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                                     </div>
                                 </div>
                             </div>
-                            {/* 鍥哄畾楂樺害瀹瑰櫒锛屽交搴曡В鍐?ResponsiveContainer 鐨?0 灏哄鎶ラ敊 */}
+                            {/* 固定高度容器，彻底解决 ResponsiveContainer 的 0 尺寸报错 */}
                             <div style={{ width: '100%', flex: 1, position: 'relative', minHeight: '180px' }}>
                                 {active && chartData.length > 0 ? (
                                     <ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={100}>
@@ -1708,7 +1656,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                     </div>
 
                     <div className="flex items-center gap-2">
-                        <UITooltip content="TXT鏂囦欢杈呭姪瀵归綈锛氶€傜敤浜庢极鐢诲拰娓告垙鏂囨湰锛岃緟鍔╄緭鍑烘寜鐓ц杩涜瀵归綈銆傚皬璇寸瓑杩炶疮鎬ф枃鏈笉寤鸿寮€鍚紝浼氬奖鍝嶇炕璇戞晥鏋溿€?>
+                        <UITooltip content="TXT文件辅助对齐：适用于漫画和游戏文本，辅助输出按照行进行对齐。小说等连贯性文本不建议开启，会影响翻译效果。">
                             <div
                                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${alignmentMode
                                     ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-500 dark:text-indigo-400'
@@ -1721,10 +1669,10 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                                 }}
                             >
                                 <AlignLeft className={`w-3 h-3 ${alignmentMode ? 'text-indigo-500' : 'text-muted-foreground/70'}`} />
-                                <span>杈呭姪瀵归綈</span>
+                                <span>辅助对齐</span>
                             </div>
                         </UITooltip>
-                        <UITooltip content={<>CoT瀵煎嚭锛氬彟澶栦繚瀛樹竴浠藉甫鎬濊€冭繃绋嬬殑缈昏瘧鏂囨湰</>}>
+                        <UITooltip content={<>CoT导出：另外保存一份带思考过程的翻译文本</>}>
                             <div
                                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${saveCot
                                     ? 'bg-amber-500/15 border-amber-500/40 text-amber-500 dark:text-amber-400'
@@ -1733,7 +1681,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                                 onClick={() => { setSaveCot(!saveCot); localStorage.setItem("config_save_cot", String(!saveCot)) }}
                             >
                                 <FileText className={`w-3 h-3 ${saveCot ? 'text-amber-500' : 'text-muted-foreground/70'}`} />
-                                <span>CoT瀵煎嚭</span>
+                                <span>CoT导出</span>
                             </div>
                         </UITooltip>
                         <div className="flex items-center gap-2 cursor-pointer hover:bg-secondary/50 px-3 py-1.5 rounded-lg transition-colors" onClick={() => setLogsCollapsed(!logsCollapsed)}>
@@ -1796,7 +1744,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                                             variant="outline"
                                             className="w-full h-11 border-border bg-background hover:bg-secondary text-foreground font-medium dark:bg-muted/10 dark:border-white/5 dark:hover:bg-muted/30"
                                         >
-                                            閲嶆柊缈昏瘧
+                                            重新翻译
                                         </Button>
 
                                         {confirmModal.onSkip && (
@@ -1805,7 +1753,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                                                 variant="outline"
                                                 className="w-full h-11 border-border bg-background hover:bg-secondary text-foreground font-medium dark:bg-muted/10 dark:border-white/5 dark:hover:bg-muted/30"
                                             >
-                                                璺宠繃鏂囦欢
+                                                跳过文件
                                             </Button>
                                         )}
                                     </div>
@@ -1817,7 +1765,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                                         variant="ghost"
                                         className="w-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 text-sm font-medium h-10"
                                     >
-                                        鍋滄鍏ㄩ儴缈昏瘧浠诲姟
+                                        停止全部翻译任务
                                     </Button>
                                 </div>
                             </div>
@@ -1825,15 +1773,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(({ lang, active, onRunn
                     </div>
                 )
             }
-
-            {configItem && (
-                <FileConfigModal
-                    item={configItem}
-                    lang={lang}
-                    onSave={(config) => handleSaveFileConfig(configItem.id, config)}
-                    onClose={() => setConfigItem(null)}
-                />
-            )}
 
             <AlertModal {...alertProps} />
         </div >

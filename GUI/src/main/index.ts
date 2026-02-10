@@ -11,7 +11,8 @@ import { TranslateOptions } from './remoteClient'
 let pythonProcess: ChildProcess | null = null
 let mainWindow: BrowserWindow | null = null
 
-// 涓昏繘绋嬫棩蹇楃紦鍐插尯 - 鐢ㄤ簬璋冭瘯宸ュ叿绠辨煡鐪嬪畬鏁寸粓绔棩蹇?const mainProcessLogs: string[] = []
+// 主进程日志缓冲区 - 用于调试工具箱查看完整终端日志
+const mainProcessLogs: string[] = []
 const MAX_MAIN_LOGS = 1000
 
 // 鎷︽埅 console 鏂规硶鏀堕泦鏃ュ織
@@ -338,7 +339,8 @@ const spawnPythonProcess = (
         // PyInstaller bundle 宸插唴缃叆鍙ｇ偣锛岄渶绉婚櫎鑴氭湰璺緞
         // args = ['path/to/main.py', '--file', ...] -> ['--file', ...]
         cmd = pythonInfo.path
-        // 绉婚櫎绗竴涓厓绱狅紙鑴氭湰璺緞锛夛紝鍙繚鐣欏疄闄呭弬鏁?        finalArgs = args.slice(1)
+        // 移除脚本路径，仅保留实际参数
+        finalArgs = args.slice(1)
         console.log(`[Spawn Bundle] ${cmd} ${finalArgs.join(' ')}`)
     } else {
         // Python mode: python script.py args
@@ -401,7 +403,7 @@ ipcMain.handle('select-directory', async () => {
 // Select folder for cache file browsing
 ipcMain.handle('select-folder', async (_event, options?: { title?: string }) => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
-        title: options?.title || '閫夋嫨鏂囦欢澶?,
+        title: options?.title || '选择文件夹',
         properties: ['openDirectory']
     })
     if (canceled) return null
@@ -760,7 +762,8 @@ ipcMain.handle('get-system-diagnostics', async () => {
         return `"${value.replace(/"/g, '\\"')}"`
     }
 
-    // 杈呭姪鍑芥暟锛氬甫瓒呮椂鐨勫紓姝ユ墽琛?    const execWithTimeout = async (cmd: string, timeout: number): Promise<{ stdout: string, stderr: string }> => {
+    // 辅助函数：带超时的异步执行
+    const execWithTimeout = async (cmd: string, timeout: number): Promise<{ stdout: string, stderr: string }> => {
         const controller = new AbortController()
         const timeoutId = setTimeout(() => controller.abort(), timeout)
         try {
@@ -950,7 +953,8 @@ ipcMain.handle('get-system-diagnostics', async () => {
         }
     })()
 
-    // 骞惰绛夊緟鎵€鏈夋娴嬪畬鎴?    await Promise.all([gpuPromise, pythonPromise, cudaPromise, vulkanPromise])
+    // 并行等待所有检测完成
+    await Promise.all([gpuPromise, pythonPromise, cudaPromise, vulkanPromise])
 
     // llama-server Status Check (Use ServerManager's actual port)
     const checkPort = (port: number): Promise<boolean> => {
@@ -1039,7 +1043,8 @@ ipcMain.handle('read-server-log', async () => {
         const maxBytes = 512 * 1024 // 鏈€澶氳鍙?512KB (绾?10000 琛?
         const lineCount = 500
 
-        // 濡傛灉鏂囦欢杈冨皬锛岀洿鎺ヨ鍙?        if (stats.size <= maxBytes) {
+        // 如果文件较小，直接读取
+        if (stats.size <= maxBytes) {
             const content = fs.readFileSync(logPath, 'utf-8')
             const lines = content.split('\n')
             return {
@@ -1050,7 +1055,8 @@ ipcMain.handle('read-server-log', async () => {
             }
         }
 
-        // 澶ф枃浠讹細鍙鍙栨湯灏鹃儴鍒?        return new Promise((resolve) => {
+        // 大文件：仅读取末尾部分
+        return new Promise((resolve) => {
             const chunks: string[] = []
             const startPos = Math.max(0, stats.size - maxBytes)
             const stream = fs.createReadStream(logPath, {
@@ -1309,7 +1315,8 @@ ipcMain.handle('check-env-component', async (_event, component: string) => {
                     resolve({ success: false, error: 'Failed to parse report: no JSON object found', output, errorOutput })
                     return
                 }
-                // 鎵惧埌鎸囧畾缁勪欢鐨勪俊鎭?                const componentData = report.components?.find((c: any) => c.name.toLowerCase() === component.toLowerCase())
+                // 找到指定组件的信息
+                const componentData = report.components?.find((c: any) => c.name.toLowerCase() === component.toLowerCase())
                 resolve({
                     success: true,
                     report,
@@ -1352,7 +1359,8 @@ ipcMain.handle('fix-env-component', async (_event, component: string) => {
         if (proc.stdout) {
             proc.stdout.on('data', (d) => {
                 stdoutBuffer += d.toString()
-                // 瑙ｆ瀽杩涘害淇℃伅骞跺彂閫佸埌鍓嶇锛堝甫鍒嗙墖鎷兼帴锛岄伩鍏嶈法 chunk JSON 鏂锛?                const lines = stdoutBuffer.split(/\r?\n/)
+                // 解析进度并发送到前端（带分片拼接，避免跨 chunk JSON 断裂）
+                const lines = stdoutBuffer.split(/\r?\n/)
                 stdoutBuffer = lines.pop() || ''
                 for (const line of lines) {
                     const trimmedLine = line.trim()
@@ -1613,7 +1621,8 @@ ipcMain.handle('save-cache', async (_event, cachePath: string, data: Record<stri
     }
 })
 
-// 閲嶅缓鏂囨。锛堜粠缂撳瓨锛?ipcMain.handle('rebuild-doc', async (_event, { cachePath, outputPath }) => {
+// 重建文档（从缓存）
+ipcMain.handle('rebuild-doc', async (_event, { cachePath, outputPath }) => {
     try {
         const middlewareDir = getMiddlewarePath()
         const scriptPath = join(middlewareDir, 'murasaki_translator', 'main.py')
@@ -1699,7 +1708,8 @@ ipcMain.handle('retranslate-block', async (event, { src, index, modelPath, confi
         if (config.deviceMode === 'cpu') {
             args.push('--gpu-layers', '0')
         } else {
-            // 榛樿浣跨敤 -1 (鍏ㄩ儴鍔犺浇鍒?GPU)锛屽鏋滅敤鎴锋寚瀹氫簡鍊煎垯浣跨敤鐢ㄦ埛鍊?            const gpuLayers = config.gpuLayers !== undefined ? config.gpuLayers : -1
+            // 默认使用 -1（尽可能加载到 GPU），若用户指定则使用用户值
+            const gpuLayers = config.gpuLayers !== undefined ? config.gpuLayers : -1
             args.push('--gpu-layers', gpuLayers.toString())
         }
 
@@ -1829,7 +1839,8 @@ ipcMain.handle('retranslate-block', async (event, { src, index, modelPath, confi
     })
 })
 
-// 淇濆瓨鏂囦欢瀵硅瘽妗?ipcMain.handle('save-file', async (_event, options: { title?: string; defaultPath?: string; filters?: Electron.FileFilter[] }) => {
+// 保存文件对话框
+ipcMain.handle('save-file', async (_event, options: { title?: string; defaultPath?: string; filters?: Electron.FileFilter[] }) => {
     const result = await dialog.showSaveDialog({
         title: options?.title || 'Save File',
         defaultPath: options?.defaultPath,
@@ -1846,7 +1857,8 @@ ipcMain.handle('open-path', async (_event, filePath: string) => {
     return 'File not found'
 })
 
-// 鍦ㄦ枃浠剁鐞嗗櫒涓樉绀烘枃浠?// 鍦ㄦ枃浠剁鐞嗗櫒涓樉绀烘枃浠?鏂囦欢澶?ipcMain.handle('open-folder', async (_event, filePath: string) => {
+// 在文件管理器中显示文件/文件夹
+ipcMain.handle('open-folder', async (_event, filePath: string) => {
     // Resolve relative path if it starts with 'middleware'
     if (filePath.startsWith('middleware')) {
         let relativePart = filePath.replace(/^middleware[\\/]/, '')
@@ -1915,10 +1927,12 @@ ipcMain.handle('check-output-file-exists', async (_event, { inputFile, config })
             const ext = extname(inputFile)
             const base = inputFile.substring(0, inputFile.length - ext.length)
 
-            // 浠庢ā鍨嬭矾寰勬彁鍙栨ā鍨嬪悕绉帮紙鍘绘帀鎵╁睍鍚嶏級
-            // 鈿狅笍 鍋ュ．鎬у鐞嗭細鍏煎 Windows/POSIX 璺緞鍒嗛殧绗?            let modelName = 'unknown'
+            // 从模型路径提取模型名称（去掉扩展名）
+            // 健壮性处理：兼容 Windows/POSIX 路径分隔符
+            let modelName = 'unknown'
             if (config.modelPath && typeof config.modelPath === 'string' && config.modelPath.trim()) {
-                // 缁熶竴澶勭悊 Windows (\) 鍜?POSIX (/) 鍒嗛殧绗?                const normalizedPath = config.modelPath.replace(/\\/g, '/')
+                // 统一处理 Windows (\\) 和 POSIX (/) 分隔符
+                const normalizedPath = config.modelPath.replace(/\\/g, '/')
                 const fileName = normalizedPath.split('/').pop() || ''
                 modelName = fileName.replace(/\.gguf$/i, '') || 'unknown'
             }
@@ -1935,7 +1949,8 @@ ipcMain.handle('check-output-file-exists', async (_event, { inputFile, config })
             return { exists: true, path: outPath }
         }
 
-        // 妫€娴嬩复鏃惰繘搴︽枃浠讹紙缈昏瘧涓柇鍚庣殑涓昏缂撳瓨锛?        const tempPath = outPath + '.temp.jsonl'
+        // 检测临时进度文件（翻译中断后的主要缓存）
+        const tempPath = outPath + '.temp.jsonl'
         if (fs.existsSync(tempPath)) {
             console.log("Detected existing temp progress:", tempPath)
             return { exists: true, path: tempPath, isCache: true }
@@ -1970,7 +1985,8 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
     const pythonCmd = getPythonPath()
     console.log("Using Python:", pythonCmd)
 
-    // 浣跨敤璺ㄥ钩鍙版娴嬭幏鍙栨纭殑浜岃繘鍒惰矾寰?    let serverExePath: string
+    // 使用跨平台检测获取正确的二进制路径
+    let serverExePath: string
     try {
         const platformInfo = detectPlatform()
         event.reply('log-update', `System: Platform ${platformInfo.os}/${platformInfo.arch}, Backend: ${platformInfo.backend}`)
@@ -2058,7 +2074,8 @@ ipcMain.on('start-translation', (event, { inputFile, modelPath, config }) => {
             args.push('--gpu-layers', '0')
             console.log("Mode: CPU Only (Forced gpu-layers 0)")
         } else {
-            // 榛樿浣跨敤 -1 (鍏ㄩ儴鍔犺浇鍒?GPU)锛屽鏋滅敤鎴锋寚瀹氫簡鍊煎垯浣跨敤鐢ㄦ埛鍊?            const gpuLayers = config.gpuLayers !== undefined ? config.gpuLayers : -1
+            // 默认使用 -1（尽可能加载到 GPU），若用户指定则使用用户值
+            const gpuLayers = config.gpuLayers !== undefined ? config.gpuLayers : -1
             args.push('--gpu-layers', gpuLayers.toString())
             console.log(`Mode: GPU with ${gpuLayers} layers`)
         }
@@ -2510,9 +2527,10 @@ ipcMain.handle('hf-download-start', async (event, repoId: string, fileName: stri
         return { success: false }
     }
 
-    // 鍗曚緥淇濇姢锛氶槻姝㈠苟鍙戜笅杞藉鑷村鍎胯繘绋?    if (hfDownloadProcess !== null) {
+    // 单例保护：防止并发下载导致孤儿进程
+    if (hfDownloadProcess !== null) {
         console.warn('[HF Download] Download already in progress, rejecting new request')
-        event.sender.send('hf-download-error', { message: '宸叉湁涓嬭浇浠诲姟杩涜涓紝璇风瓑寰呭畬鎴愭垨鍙栨秷鍚庡啀璇? })
+        event.sender.send('hf-download-error', { message: '已有下载任务进行中，请等待完成或取消后再试' })
         return { success: false, error: 'Download already in progress' }
     }
 

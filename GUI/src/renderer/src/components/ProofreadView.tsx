@@ -1,9 +1,9 @@
 /**
- * ProofreadView - 鏍″鐣岄潰 (Redesigned)
- * 閲囩敤鍙屾爮鑱斿姩甯冨眬 (Split View) + 鍐呰仈缂栬緫 (In-Place Edit)
+ * ProofreadView - 校对界面 (Redesigned)
+ * 采用双栏联动布局 (Split View) + 内联编辑 (In-Place Edit)
  */
 
-import React, { useState, useRef, useEffect, useMemo } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { Button, Tooltip } from './ui/core'
 import {
     FolderOpen,
@@ -33,7 +33,7 @@ import {
 } from 'lucide-react'
 import { Language } from '../lib/i18n'
 
-// 缂撳瓨 Block 绫诲瀷
+// 缓存 Block 类型
 interface CacheBlock {
     index: number
     src: string
@@ -45,7 +45,7 @@ interface CacheBlock {
     dstLines: number
 }
 
-// 缂撳瓨鏂囦欢绫诲瀷
+// 缓存文件类型
 interface CacheData {
     version: string
     outputPath: string
@@ -72,16 +72,6 @@ import { ResultChecker } from './ResultChecker'
 import { findHighSimilarityLines } from '../lib/quality-check'
 import { AlertModal } from './ui/AlertModal'
 import { useAlertModal } from '../hooks/useAlertModal'
-import { stripSystemMarkersForDisplay } from '../lib/displayText'
-
-function trimLeadingEmptyLines(text: string) {
-    const lines = text.split('\n')
-    let startIdx = 0
-    while (startIdx < lines.length && lines[startIdx].trim() === '') {
-        startIdx++
-    }
-    return lines.slice(startIdx).join('\n')
-}
 
 // ...
 
@@ -89,7 +79,8 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
 
     const { alertProps, showAlert, showConfirm } = useAlertModal()
 
-    // 鐘舵€?    const [cacheData, setCacheData] = useState<CacheData | null>(null)
+    // 状态
+    const [cacheData, setCacheData] = useState<CacheData | null>(null)
     const [cachePath, setCachePath] = useState<string>('')
     const [loading, setLoading] = useState(false)
 
@@ -102,12 +93,14 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
     const [showQualityCheck, setShowQualityCheck] = useState(false)
     const [glossary, setGlossary] = useState<Record<string, string>>({})
 
-    // 缂栬緫鐘舵€?    const [editingBlockId, setEditingBlockId] = useState<number | null>(null)
+    // 编辑状态
+    const [editingBlockId, setEditingBlockId] = useState<number | null>(null)
     const [editingText, setEditingText] = useState('')
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const [retranslatingBlocks, setRetranslatingBlocks] = useState<Set<number>>(new Set())
 
-    // 鎼滅储涓庤繃婊?    const [searchKeyword, setSearchKeyword] = useState('')
+    // 搜索与过滤
+    const [searchKeyword, setSearchKeyword] = useState('')
     const [filterWarnings, setFilterWarnings] = useState(false)
 
     const [currentMatchIndex, setCurrentMatchIndex] = useState(-1)
@@ -124,7 +117,6 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
     // Line Mode - strict line-by-line alignment with line numbers
     const [lineMode, setLineMode] = useState(true) // Default to line mode
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
-    const [selectionLockColumn, setSelectionLockColumn] = useState<'src' | 'dst' | null>(null)
 
     // Sync with parent for navigation guard
     useEffect(() => {
@@ -132,16 +124,6 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
         const isBusy = hasUnsavedChanges || loading || retranslatingBlocks.size > 0
         onUnsavedChangesChange?.(isBusy)
     }, [hasUnsavedChanges, loading, retranslatingBlocks.size, onUnsavedChangesChange])
-
-    useEffect(() => {
-        const releaseSelectionLock = () => setSelectionLockColumn(null)
-        window.addEventListener('mouseup', releaseSelectionLock)
-        window.addEventListener('dragend', releaseSelectionLock)
-        return () => {
-            window.removeEventListener('mouseup', releaseSelectionLock)
-            window.removeEventListener('dragend', releaseSelectionLock)
-        }
-    }, [])
 
 
     // Initial Load - Setup Listeners
@@ -246,7 +228,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
         scrollToBlock(matchList[prev].blockIndex)
     }
 
-    // 鍒嗛〉
+    // 分页
     const [currentPage, setCurrentPage] = useState(1)
     const pageSize = 20
 
@@ -362,7 +344,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
             try {
                 const defaultPath = localStorage.getItem("config_cache_dir") || undefined
                 const result = await window.api?.selectFile({
-                    title: '閫夋嫨缈昏瘧缂撳瓨鏂囦欢',
+                    title: '选择翻译缓存文件',
                     defaultPath: defaultPath,
                     filters: [{ name: 'Cache Files', extensions: ['cache.json'] }]
                 } as any)
@@ -382,7 +364,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
 
         if (hasUnsavedChanges) {
             showConfirm({
-                title: t.config.proofread.unsavedChanges.split('锛?)[0],
+                title: t.config.proofread.unsavedChanges.split('，')[0],
                 description: t.config.proofread.unsavedChanges,
                 onConfirm: executeLoad
             })
@@ -408,7 +390,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                 if (['epub', 'srt', 'ass', 'ssa'].includes(ext || '')) {
                     const rebuildResult = await window.api?.rebuildDoc({ cachePath })
                     if (!rebuildResult?.success) {
-                        throw new Error(`鏂囨。閲嶅缓澶辫触: ${rebuildResult?.error || '妯″瀷鍚庣鏈甯歌繑鍥炵粨鏋?}`)
+                        throw new Error(`文档重建失败: ${rebuildResult?.error || '模型后端未正常返回结果'}`)
                     }
                 } else if (ext === 'txt') {
                     // Direct write for TXT (matching Murasaki \n\n rule)
@@ -423,15 +405,15 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
             setHasUnsavedChanges(false) // Reset on save
             setLoading(false)
             showAlert({
-                title: '淇濆瓨鎴愬姛',
-                description: '缈昏瘧缂撳瓨涓庤緭鍑烘枃浠跺凡鍚屾銆?,
+                title: '保存成功',
+                description: '翻译缓存与输出文件已同步。',
                 variant: 'success'
             })
         } catch (error) {
             console.error('Failed to save cache:', error)
             setLoading(false)
             showAlert({
-                title: '淇濆瓨澶辫触',
+                title: '保存失败',
                 description: String(error),
                 variant: 'destructive'
             })
@@ -449,7 +431,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
         if (!cacheData) return
         try {
             const result = await window.api?.saveFile({
-                title: '瀵煎嚭璇戞枃',
+                title: '导出译文',
                 defaultPath: cacheData.outputPath,
                 filters: [{ name: 'Text Files', extensions: ['txt'] }]
             })
@@ -495,8 +477,8 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
         // Global Lock: Enforce single-threading for manual re-translation
         if (retranslatingBlocks.size > 0 || loading) {
             showAlert({
-                title: '璇风瓑寰?,
-                description: '褰撳墠鏈夋鍦ㄨ繘琛岀殑閲嶇炕鎴栦繚瀛樹换鍔★紝璇风瓑寰呭叾瀹屾垚銆?,
+                title: '请等待',
+                description: '当前有正在进行的重翻或保存任务，请等待其完成。',
                 variant: 'destructive'
             })
             return
@@ -506,7 +488,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
         if (!modelPath) {
             showAlert({
                 title: t.advancedFeatures,
-                description: '璇峰厛鍦ㄦā鍨嬬鐞嗛〉闈㈤€夋嫨涓€涓ā鍨嬶紒',
+                description: '请先在模型管理页面选择一个模型！',
                 variant: 'destructive'
             })
             return
@@ -532,7 +514,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                 rulesPost: JSON.parse(localStorage.getItem("config_rules_post") || "[]"),
                 strictMode: localStorage.getItem("config_strict_mode") || "off", // Default to off for manual retry unless set
                 flashAttn: localStorage.getItem("config_flash_attn") !== "false", // Most models support it now
-                kvCacheType: localStorage.getItem("config_kv_cache_type") || "f16",
+                kvCacheType: localStorage.getItem("config_kv_cache_type") || "q8_0",
             }
 
             const result = await window.api?.retranslateBlock({
@@ -551,7 +533,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                 })
             } else {
                 showAlert({
-                    title: '閲嶇炕澶辫触',
+                    title: '重翻失败',
                     description: result?.error || 'Unknown error',
                     variant: 'destructive'
                 })
@@ -559,7 +541,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
         } catch (error) {
             console.error('Failed to retranslate:', error)
             showAlert({
-                title: '閲嶇炕閿欒',
+                title: '重翻错误',
                 description: String(error),
                 variant: 'destructive'
             })
@@ -593,14 +575,14 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
             const flags = isRegex ? 'gi' : 'i'
             const pattern = isRegex ? searchKeyword : searchKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-            // We need to replace only ONE instance in this block?
+            // We need to replace only ONE instance in this block? 
             // Or if the block has multiple matches, which one?
             // Simplifying: Replace ALL occurrences in THIS block first, or just the first one?
-            // "Replace" button usually replaces the *currently highlighted* match.
+            // "Replace" button usually replaces the *currently highlighted* match. 
             // Since our highlighting is visual and our search is regex global, locating the specific instance index is hard.
             // Compromise: Replace the First Match in the block string that matches.
             // Limitation: If multiple matches exist in one block, this strategy might replace the wrong one if not careful.
-            // But for now, let's just use string.replace (which replaces first occurrence only if global flag not set,
+            // But for now, let's just use string.replace (which replaces first occurrence only if global flag not set, 
             // but we usually use global for highlight).
 
             // Let's use a non-global regex to replace just the first occurrence
@@ -610,7 +592,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
             if (newDst !== block.dst) {
                 updateBlockDst(block.index, newDst)
                 // Move to next match after replace
-                // Note: The match list will update via useEffect, potentially resetting index.
+                // Note: The match list will update via useEffect, potentially resetting index. 
                 // We might lose position, but that's acceptable for v1.
             } else {
                 nextMatch()
@@ -681,36 +663,31 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
 
     // --- Filtering & Pagination ---
 
-    const filteredBlocks = useMemo(() => {
-        const blocks = cacheData?.blocks || []
-        return blocks.filter(block => {
-            if (searchKeyword) {
-                const kw = searchKeyword.toLowerCase()
-                if (!block.src.toLowerCase().includes(kw) &&
-                    !block.dst.toLowerCase().includes(kw)) {
-                    return false
-                }
+    const filteredBlocks = cacheData?.blocks.filter(block => {
+        if (searchKeyword) {
+            const kw = searchKeyword.toLowerCase()
+            if (!block.src.toLowerCase().includes(kw) &&
+                !block.dst.toLowerCase().includes(kw)) {
+                return false
             }
-            if (filterWarnings && block.warnings.length === 0) return false
-            return true
-        })
-    }, [cacheData?.blocks, searchKeyword, filterWarnings])
+        }
+        if (filterWarnings && block.warnings.length === 0) return false
+        return true
+    }) || []
 
     const totalPages = Math.ceil(filteredBlocks.length / pageSize)
-    const paginatedBlocks = useMemo(() => {
-        return filteredBlocks.slice(
-            (currentPage - 1) * pageSize,
-            currentPage * pageSize
-        )
-    }, [filteredBlocks, currentPage, pageSize])
+    const paginatedBlocks = filteredBlocks.slice(
+        (currentPage - 1) * pageSize,
+        currentPage * pageSize
+    )
 
     // --- Helper UI ---
 
     // Status Indicator
     const StatusIndicator = ({ block }: { block: CacheBlock }) => {
         if (block.warnings.length > 0) return <Tooltip content={block.warnings.join(', ')}><div><AlertTriangle className="w-4 h-4 text-amber-500" /></div></Tooltip>
-        if (block.status === 'edited') return <Tooltip content="宸茬紪杈?><div className="w-2 h-2 rounded-full bg-blue-500" /></Tooltip>
-        if (block.status === 'processed') return <Tooltip content="宸插鐞?><div><Check className="w-3 h-3 text-green-500/50" /></div></Tooltip>
+        if (block.status === 'edited') return <Tooltip content="已编辑"><div className="w-2 h-2 rounded-full bg-blue-500" /></Tooltip>
+        if (block.status === 'processed') return <Tooltip content="已处理"><div><Check className="w-3 h-3 text-green-500/50" /></div></Tooltip>
         return null
     }
 
@@ -719,15 +696,16 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
 
     // Grid template for synchronized columns (fixed 50:50 layout)
     const gridTemplate = '50% 50%'
-    const displaySrcByBlockIndex = useMemo(() => {
-        const map = new Map<number, string>()
-        for (const block of paginatedBlocks) {
-            const trimmedSrc = trimLeadingEmptyLines(block.src)
-            const displaySrc = stripSystemMarkersForDisplay(trimmedSrc)
-            map.set(block.index, displaySrc)
+
+    // Helper: trim leading empty lines from block text
+    const trimLeadingEmptyLines = (text: string) => {
+        const lines = text.split('\n')
+        let startIdx = 0
+        while (startIdx < lines.length && lines[startIdx].trim() === '') {
+            startIdx++
         }
-        return map
-    }, [paginatedBlocks])
+        return lines.slice(startIdx).join('\n')
+    }
 
     // Get ALL cache files from translation history
     const getAllHistoryFiles = (): { path: string; name: string; date: string; inputPath?: string; model?: string }[] => {
@@ -790,15 +768,15 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
             if (data && data.blocks) {
                 await processLoadedData(data, path)
             } else {
-                const msg = !data ? "鏂囦欢涓嶅瓨鍦ㄦ垨宸叉崯鍧? : "鍐呭鏍煎紡涓嶆纭?(缂哄皯 blocks)"
+                const msg = !data ? "文件不存在或已损坏" : "内容格式不正确 (缺少 blocks)"
                 console.error(`[Proofread] ${msg}:`, path)
                 throw new Error(msg)
             }
         } catch (e) {
             console.error('Failed to load cache:', e)
             showAlert({
-                title: '鏃犳硶鍔犺浇鏍″鏂囦欢',
-                description: `璇诲彇鏂囦欢澶辫触: ${path}\n鍘熷洜: ${e instanceof Error ? e.message : String(e)}`,
+                title: '无法加载校对文件',
+                description: `读取文件失败: ${path}\n原因: ${e instanceof Error ? e.message : String(e)}`,
                 variant: 'destructive'
             })
         } finally {
@@ -830,7 +808,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                     {allHistory.length > 0 && (
                         <Button onClick={() => setShowHistoryModal(true)} variant="outline" size="lg" className="gap-2">
                             <History className="w-5 h-5" />
-                            缈昏瘧鍘嗗彶 ({allHistory.length})
+                            翻译历史 ({allHistory.length})
                         </Button>
                     )}
                 </div>
@@ -870,7 +848,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                             <div className="px-6 py-4 border-b flex items-center justify-between">
                                 <h3 className="text-lg font-semibold flex items-center gap-2">
                                     <History className="w-5 h-5 text-primary" />
-                                    缈昏瘧鍘嗗彶
+                                    翻译历史
                                 </h3>
                                 <button onClick={() => setShowHistoryModal(false)} className="p-1.5 hover:bg-muted rounded-md">
                                     <X className="w-4 h-4" />
@@ -978,17 +956,17 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                                 {cachePath.split(/[/\\]/).pop()}
                             </span>
                             <span className="text-[10px] text-muted-foreground flex items-center gap-2">
-                                <span>{cacheData.stats.blockCount} 鍧?/span>
-                                <span>{cacheData.stats.srcLines} 琛?/span>
+                                <span>{cacheData.stats.blockCount} 块</span>
+                                <span>{cacheData.stats.srcLines} 行</span>
                                 {Object.keys(glossary).length > 0 ? (
-                                    <Tooltip content="宸插姞杞芥湳璇〃">
+                                    <Tooltip content="已加载术语表">
                                         <span className="flex items-center gap-1 text-primary/80">
                                             <Book className="w-3 h-3" /> {Object.keys(glossary).length}
                                         </span>
                                     </Tooltip>
                                 ) : (
                                     cacheData.glossaryPath && (
-                                        <Tooltip content="鏈琛ㄦ湭鍔犺浇鎴栦负绌?>
+                                        <Tooltip content="术语表未加载或为空">
                                             <span className="flex items-center gap-1 text-amber-500">
                                                 <AlertTriangle className="w-3 h-3" /> 0
                                             </span>
@@ -1007,7 +985,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
                             <input
                                 type="text"
-                                placeholder="鎼滅储..."
+                                placeholder="搜索..."
                                 className="w-full pl-7 pr-3 py-1 text-sm bg-secondary/50 border rounded focus:bg-background transition-colors outline-none font-mono"
                                 value={searchKeyword}
                                 onChange={e => setSearchKeyword(e.target.value)}
@@ -1023,12 +1001,12 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                         {searchKeyword && (
                             <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
                                 <span className="tabular-nums">{matchList.length > 0 ? currentMatchIndex + 1 : 0}/{matchList.length}</span>
-                                <Tooltip content="涓婁竴涓尮閰?>
+                                <Tooltip content="上一个匹配">
                                     <button onClick={prevMatch} className="p-0.5 hover:bg-secondary rounded">
                                         <ChevronUp className="w-3.5 h-3.5" />
                                     </button>
                                 </Tooltip>
-                                <Tooltip content="涓嬩竴涓尮閰?>
+                                <Tooltip content="下一个匹配">
                                     <button onClick={nextMatch} className="p-0.5 hover:bg-secondary rounded">
                                         <ChevronDown className="w-3.5 h-3.5" />
                                     </button>
@@ -1036,7 +1014,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                             </div>
                         )}
                         {/* Toggles */}
-                        <Tooltip content="姝ｅ垯琛ㄨ揪寮忔ā寮?>
+                        <Tooltip content="正则表达式模式">
                             <button
                                 onClick={() => setIsRegex(!isRegex)}
                                 className={`p-1 rounded text-xs ${isRegex ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
@@ -1044,7 +1022,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                                 <Regex className="w-3.5 h-3.5" />
                             </button>
                         </Tooltip>
-                        <Tooltip content="鏌ユ壘鏇挎崲">
+                        <Tooltip content="查找替换">
                             <button
                                 onClick={() => setShowReplace(!showReplace)}
                                 className={`p-1 rounded text-xs ${showReplace ? 'bg-secondary' : 'text-muted-foreground hover:bg-muted'}`}
@@ -1052,7 +1030,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                                 <Replace className="w-3.5 h-3.5" />
                             </button>
                         </Tooltip>
-                        <Tooltip content="鍙樉绀鸿鍛?>
+                        <Tooltip content="只显示警告">
                             <button
                                 onClick={() => { setFilterWarnings(!filterWarnings); setCurrentPage(1) }}
                                 className={`p-1 rounded text-xs ${filterWarnings ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/30' : 'text-muted-foreground hover:bg-muted'}`}
@@ -1060,7 +1038,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                                 <Filter className="w-3.5 h-3.5" />
                             </button>
                         </Tooltip>
-                        <Tooltip content={lineMode ? '琛屾ā寮?(鐐瑰嚮鍒囨崲娈佃惤妯″紡)' : '娈佃惤妯″紡 (鐐瑰嚮鍒囨崲琛屾ā寮?'}>
+                        <Tooltip content={lineMode ? '行模式 (点击切换段落模式)' : '段落模式 (点击切换行模式)'}>
                             <button
                                 onClick={() => setLineMode(!lineMode)}
                                 className={`p-1 rounded text-xs ${lineMode ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
@@ -1137,8 +1115,8 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                 <div ref={containerRef} className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-border">
                     {/* Header Row */}
                     <div className="sticky top-0 z-20 grid bg-muted/80 backdrop-blur border-b text-xs font-medium text-muted-foreground" style={{ gridTemplateColumns: gridTemplate }}>
-                        <div className="px-4 py-2 border-r border-border/50">鍘熸枃 (Source)</div>
-                        <div className="px-4 py-2">璇戞枃 (Translation)</div>
+                        <div className="px-4 py-2 border-r border-border/50">原文 (Source)</div>
+                        <div className="px-4 py-2">译文 (Translation)</div>
                     </div>
 
                     {/* Blocks */}
@@ -1149,8 +1127,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                             const simSet = new Set(simLines)
 
                             // In line mode, render line-by-line with synchronized heights
-                            const srcText = displaySrcByBlockIndex.get(block.index) ?? trimLeadingEmptyLines(block.src)
-                            const srcLinesRaw = srcText.split('\n')
+                            const srcLinesRaw = trimLeadingEmptyLines(block.src).split('\n')
                             const dstText = editingBlockId === block.index ? editingText : trimLeadingEmptyLines(block.dst)
                             const dstLinesRaw = dstText.split('\n')
 
@@ -1169,7 +1146,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                                     <div className="flex items-center gap-2 px-3 py-1 border-b border-border/10 bg-muted/20">
                                         <span className="text-[10px] text-muted-foreground/50 font-mono">#{block.index + 1}</span>
                                         <StatusIndicator block={block} />
-                                        <Tooltip content="閲嶆柊缈昏瘧姝ゅ潡">
+                                        <Tooltip content="重新翻译此块">
                                             <button
                                                 onClick={() => retranslateBlock(block.index)}
                                                 className={`w-5 h-5 flex items-center justify-center rounded transition-all opacity-0 group-hover:opacity-100 ${loading ? 'text-muted-foreground' : 'text-primary/50 hover:text-primary hover:bg-primary/10'}`}
@@ -1180,7 +1157,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                                         </Tooltip>
                                         {/* Log button - show when block has logs */}
                                         {blockLogs[block.index]?.length > 0 && (
-                                            <Tooltip content="鏌ョ湅缈昏瘧鏃ュ織">
+                                            <Tooltip content="查看翻译日志">
                                                 <button
                                                     onClick={() => setShowLogModal(block.index)}
                                                     className="w-5 h-5 flex items-center justify-center rounded transition-all text-blue-500/70 hover:text-blue-500 hover:bg-blue-500/10"
@@ -1199,6 +1176,12 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                                             <div
                                                 className="grid"
                                                 style={{ gridTemplateColumns: gridTemplate }}
+                                                onClick={() => {
+                                                    if (editingBlockId !== block.index) {
+                                                        setEditingBlockId(block.index)
+                                                        setEditingText(dstText)
+                                                    }
+                                                }}
                                             >
                                                 {srcLines.map((srcLine, lineIdx) => {
                                                     const dstLine = dstLines[lineIdx] || ''
@@ -1215,29 +1198,14 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                                                     return (
                                                         <React.Fragment key={lineIdx}>
                                                             {/* Source cell */}
-                                                            <div
-                                                                className={`relative border-r border-border/20 ${isWarning ? 'bg-amber-500/20' : ''}`}
-                                                                style={cellStyle}
-                                                                onMouseDown={() => setSelectionLockColumn('src')}
-                                                            >
+                                                            <div className={`relative border-r border-border/20 ${isWarning ? 'bg-amber-500/20' : ''}`} style={cellStyle}>
                                                                 <span style={{ position: 'absolute', left: '12px', width: '24px', textAlign: 'right', fontSize: '10px', color: 'hsl(var(--muted-foreground)/0.5)', userSelect: 'none', lineHeight: '20px' }}>{lineIdx + 1}</span>
-                                                                <span className={`whitespace-pre-wrap text-foreground ${selectionLockColumn === 'dst' ? 'select-none' : 'select-text'}`}>{srcLine || '\u00A0'}</span>
+                                                                <span className="whitespace-pre-wrap text-foreground select-text">{srcLine || '\u00A0'}</span>
                                                             </div>
                                                             {/* Translation cell */}
-                                                            <div
-                                                                className={`relative cursor-text ${isWarning ? 'bg-amber-500/20' : ''}`}
-                                                                style={cellStyle}
-                                                                onMouseDown={() => setSelectionLockColumn('dst')}
-                                                                onClick={() => {
-                                                                    if (window.getSelection()?.toString().trim()) return
-                                                                    if (editingBlockId !== block.index) {
-                                                                        setEditingBlockId(block.index)
-                                                                        setEditingText(dstText)
-                                                                    }
-                                                                }}
-                                                            >
+                                                            <div className={`relative cursor-text ${isWarning ? 'bg-amber-500/20' : ''}`} style={cellStyle}>
                                                                 <span style={{ position: 'absolute', left: '12px', width: '24px', textAlign: 'right', fontSize: '10px', color: 'hsl(var(--muted-foreground)/0.5)', userSelect: 'none', lineHeight: '20px' }}>{lineIdx + 1}</span>
-                                                                <span className={`whitespace-pre-wrap text-foreground ${selectionLockColumn === 'src' ? 'select-none' : 'select-text'} ${editingBlockId === block.index ? 'opacity-0' : ''}`}>{dstLine || '\u00A0'}</span>
+                                                                <span className={`whitespace-pre-wrap text-foreground select-text ${editingBlockId === block.index ? 'opacity-0' : ''}`}>{dstLine || '\u00A0'}</span>
                                                             </div>
                                                         </React.Fragment>
                                                     )
@@ -1298,7 +1266,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                                         // Block Mode: Original layout
                                         <div className="grid relative" style={{ gridTemplateColumns: gridTemplate }}>
                                             <div className="px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap text-foreground select-text overflow-x-auto border-r border-border/20">
-                                                <HighlightText text={srcText} keyword={searchKeyword} warningLines={simSet} showLineNumbers={false} />
+                                                <HighlightText text={trimLeadingEmptyLines(block.src)} keyword={searchKeyword} warningLines={simSet} showLineNumbers={false} />
                                             </div>
                                             <div className="relative px-3 py-2 text-sm leading-relaxed overflow-x-auto cursor-text">
                                                 <HighlightText
@@ -1431,7 +1399,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                                     <Terminal className="w-5 h-5 text-amber-500" />
                                 </div>
                                 <div>
-                                    <h3 className="text-sm font-medium text-zinc-100">鎺ㄧ悊缁嗚妭 - 鍖哄潡 {showLogModal + 1}</h3>
+                                    <h3 className="text-sm font-medium text-zinc-100">推理细节 - 区块 {showLogModal + 1}</h3>
                                     <p className="text-xs text-zinc-500">Manual Retranslation Virtual Log</p>
                                 </div>
                             </div>
@@ -1446,7 +1414,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                             {(blockLogs[showLogModal] || []).length === 0 ? (
                                 <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2">
                                     <Clock className="w-8 h-8 opacity-20" />
-                                    <p>绛夊緟鏃ュ織杈撳嚭...</p>
+                                    <p>等待日志输出...</p>
                                 </div>
                             ) : (
                                 (blockLogs[showLogModal] || []).map((line, i) => (
@@ -1458,7 +1426,7 @@ export default function ProofreadView({ t, lang, onUnsavedChangesChange }: Proof
                         </div>
                         <div className="p-3 border-t border-zinc-800 bg-zinc-900/80 flex justify-end">
                             <Button variant="ghost" size="sm" className="text-zinc-400" onClick={() => setShowLogModal(null)}>
-                                鍏抽棴
+                                关闭
                             </Button>
                         </div>
                     </div>

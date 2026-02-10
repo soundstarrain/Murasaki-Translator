@@ -72,7 +72,8 @@ export class ServerManager {
         const middlewareDir = getMiddlewarePath()
         const userDataPath = getUserDataPath()
 
-        // 浣跨敤璺ㄥ钩鍙版娴嬭幏鍙栨纭殑浜岃繘鍒惰矾寰?        let serverExePath: string
+        // 使用跨平台检测获取正确的二进制路径
+        let serverExePath: string
         try {
             const platformInfo = detectPlatform()
             console.log(`[ServerManager] Platform: ${platformInfo.os}/${platformInfo.arch}, Backend: ${platformInfo.backend}`)

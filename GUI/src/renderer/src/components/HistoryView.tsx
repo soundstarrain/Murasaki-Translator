@@ -290,24 +290,13 @@ function RecordDetailContent({
   const shouldCollapse = fullRecord.triggers.length > COLLAPSE_THRESHOLD;
   const [triggersExpanded, setTriggersExpanded] = useState(!shouldCollapse);
   const displayTriggers = triggersExpanded ? fullRecord.triggers : fullRecord.triggers.slice(0, COLLAPSE_THRESHOLD);
-  const sourceLines = fullRecord.sourceLines || 0;
-  const outputLines = fullRecord.totalLines || 0;
-  const sourceChars = fullRecord.sourceChars || 0;
-  const outputChars = fullRecord.totalChars || 0;
-  const retryCount = fullRecord.triggers.filter(
-    (tr) =>
-      tr.type === "empty_retry" ||
-      tr.type === "line_mismatch" ||
-      tr.type === "rep_penalty_increase" ||
-      tr.type === "glossary_missed",
-  ).length;
 
   if (isLoading) {
     return (
       <CardContent className="pt-0 border-t">
         <div className="flex items-center justify-center py-8 text-muted-foreground">
           <div className="animate-spin w-4 h-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-          {lang === "en" ? "Loading..." : "鍔犺浇涓?.."}
+          {lang === "en" ? "Loading..." : "加载中..."}
         </div>
       </CardContent>
     );
@@ -324,18 +313,18 @@ function RecordDetailContent({
           </div>
           <div>
             <p className="text-muted-foreground text-xs">{t.historyView.stats.lines}</p>
-            <p className="font-medium">{sourceLines} / {outputLines}</p>
+            <p className="font-medium">{fullRecord.totalLines || 0}</p>
           </div>
           <div>
             <p className="text-muted-foreground text-xs">{t.historyView.stats.chars}</p>
-            <p className="font-medium">{sourceChars.toLocaleString()} / {outputChars.toLocaleString()}</p>
+            <p className="font-medium">{fullRecord.totalChars?.toLocaleString() || 0}</p>
           </div>
           <div>
             <p className="text-muted-foreground text-xs">{t.historyView.stats.speed}</p>
             <p className="font-medium">{fullRecord.avgSpeed || 0}</p>
           </div>
           <div>
-            <p className="text-muted-foreground text-xs">{lang === "en" ? "Concurrency" : "骞跺彂"}</p>
+            <p className="text-muted-foreground text-xs">{lang === "en" ? "Concurrency" : "并发"}</p>
             <p className="font-medium">{fullRecord.config.concurrency || 1}</p>
           </div>
           <div>
@@ -344,7 +333,15 @@ function RecordDetailContent({
           </div>
           <div>
             <p className="text-muted-foreground text-xs">{t.historyView.stats.retries}</p>
-            <p className="font-medium">{retryCount}</p>
+            <p className="font-medium">
+              {fullRecord.triggers.filter(
+                (tr) =>
+                  tr.type === "empty_retry" ||
+                  tr.type === "line_mismatch" ||
+                  tr.type === "rep_penalty_increase" ||
+                  tr.type === "parse_fallback"
+              ).length}
+            </p>
           </div>
         </div>
 
@@ -382,12 +379,12 @@ function RecordDetailContent({
                 {triggersExpanded ? (
                   <>
                     <ChevronDown className="w-3 h-3" />
-                    {lang === "en" ? "Collapse" : "鏀惰捣"}
+                    {lang === "en" ? "Collapse" : "收起"}
                   </>
                 ) : (
                   <>
                     <ChevronRight className="w-3 h-3" />
-                    {lang === "en" ? `Show all ${fullRecord.triggers.length} triggers` : `灞曞紑鍏ㄩ儴 ${fullRecord.triggers.length} 鏉}
+                    {lang === "en" ? `Show all ${fullRecord.triggers.length} triggers` : `展开全部 ${fullRecord.triggers.length} 条`}
                   </>
                 )}
               </button>
@@ -399,7 +396,7 @@ function RecordDetailContent({
         {fullRecord.logs.length > 0 && (
           <div>
             <p className="text-xs font-medium text-muted-foreground mb-2">
-              {t.dashboard.terminal} (鍏?{fullRecord.logs.length} 鏉?
+              {t.dashboard.terminal} (共 {fullRecord.logs.length} 条)
             </p>
             <div className="bg-slate-100 dark:bg-slate-900/50 rounded-lg p-3 max-h-80 overflow-y-auto font-mono text-xs text-slate-700 dark:text-slate-300 space-y-0.5 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700 border border-slate-200 dark:border-slate-800">
               {fullRecord.logs.map((log, i) => (
@@ -550,7 +547,7 @@ export function HistoryView({ lang }: { lang: Language }) {
       ``,
       e.configTitle,
       `${e.temp} ${fullRecord.config.temperature}`,
-      `${e.lineCheck} ${fullRecord.config.lineCheck ? (lang === "en" ? "ON" : "寮€鍚?) : lang === "en" ? "OFF" : "鍏抽棴"}`,
+      `${e.lineCheck} ${fullRecord.config.lineCheck ? (lang === "en" ? "ON" : "开启") : lang === "en" ? "OFF" : "关闭"}`,
       `${e.repPenalty} ${fullRecord.config.repPenaltyBase}`,
       `${e.maxRetries} ${fullRecord.config.maxRetries}`,
       `Concurrency: ${fullRecord.config.concurrency || 1}`,
@@ -675,7 +672,7 @@ export function HistoryView({ lang }: { lang: Language }) {
                           {record.fileName}
                         </CardTitle>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          {formatDate(record.startTime)} 路{" "}
+                          {formatDate(record.startTime)} ·{" "}
                           {formatDuration(record.duration)}
                         </p>
                       </div>

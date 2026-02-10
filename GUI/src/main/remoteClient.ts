@@ -234,7 +234,8 @@ export class RemoteClient {
         // 鍒涘缓浠诲姟
         const { taskId } = await this.createTranslation(options)
 
-        // 杞鐘舵€?        while (true) {
+        // 轮询状态
+        while (true) {
             const status = await this.getTaskStatus(taskId)
 
             if (onProgress) {
@@ -254,7 +255,8 @@ export class RemoteClient {
                 throw new Error('Translation cancelled')
             }
 
-            // 绛夊緟 500ms 鍐嶆煡璇?            await new Promise((resolve) => setTimeout(resolve, 500))
+            // 等待 500ms 后再次查询
+            await new Promise((resolve) => setTimeout(resolve, 500))
         }
     }
 
@@ -273,7 +275,8 @@ export class RemoteClient {
             headers['Authorization'] = `Bearer ${this.config.apiKey}`
         }
 
-        // 浣跨敤 AbortController 瀹炵幇瓒呮椂鎺у埗锛堝師鐢?fetch 涓嶆敮鎸?timeout 閫夐」锛?        const controller = new AbortController()
+        // 使用 AbortController 实现超时控制（原生 fetch 不支持 timeout 选项）
+        const controller = new AbortController()
         const timeoutId = setTimeout(() => controller.abort(), this.config.timeout || 300000)
 
         try {

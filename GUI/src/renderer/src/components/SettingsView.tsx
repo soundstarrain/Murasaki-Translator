@@ -85,31 +85,23 @@ export function SettingsView({ lang }: { lang: Language }) {
                     timestamp: Date.now()
                 }))
             } else {
-                setDiagError('璇婃柇缁撴灉涓虹┖锛岃妫€鏌ョ郴缁熸潈闄?)
+                setDiagError('诊断结果为空，请检查系统权限')
             }
         } catch (e) {
             console.error('Failed to load diagnostics:', e)
             const errorMsg = String(e)
             if (errorMsg.includes('EACCES') || errorMsg.includes('permission')) {
-                setDiagError('鏉冮檺涓嶈冻锛氭棤娉曡闂郴缁熶俊鎭紝璇蜂互绠＄悊鍛樿韩浠借繍琛?)
+                setDiagError('权限不足：无法访问系统信息，请以管理员身份运行')
             } else if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
-                setDiagError('鎵弿瓒呮椂锛氱郴缁熷搷搴旇繃鎱紝璇风◢鍚庨噸璇?)
+                setDiagError('扫描超时：系统响应过慢，请稍后重试')
             } else if (errorMsg.includes('ENOENT') || errorMsg.includes('not found')) {
-                setDiagError('缁勪欢缂哄け锛氶儴鍒嗚瘖鏂伐鍏锋湭瀹夎')
+                setDiagError('组件缺失：部分诊断工具未安装')
             } else {
-                setDiagError(`鎵弿澶辫触锛?{errorMsg}`)
+                setDiagError(`扫描失败：${errorMsg}`)
             }
         }
         setDiagLoading(false)
     }
-
-    const getParentDirFromPath = (pathValue?: string | null) => {
-        if (!pathValue) return ''
-        if (!pathValue.includes('/') && !pathValue.includes('\\')) return ''
-        return pathValue.replace(/[\\/][^\\/]+$/, '')
-    }
-
-    const pythonRuntimeDir = getParentDirFromPath(diagnostics?.python?.path)
 
     const checkEnvironmentComponent = async (component: 'Python' | 'CUDA' | 'Vulkan' | 'LlamaBackend' | 'Middleware' | 'Permissions') => {
         try {
@@ -155,22 +147,22 @@ export function SettingsView({ lang }: { lang: Language }) {
 
             setAlertConfig({
                 open: true,
-                title: result.success ? '淇瀹屾垚' : '淇澶辫触',
-                description: result.message || '鏈繑鍥炶缁嗕俊鎭?,
+                title: result.success ? '修复完成' : '修复失败',
+                description: result.message || '未返回详细信息',
                 variant: result.success ? 'success' : 'destructive',
                 showCancel: false,
-                confirmText: '纭畾',
+                confirmText: '确定',
                 onConfirm: async () => {
                     await checkEnvironmentComponent(component)
                     setAlertConfig({
                         open: true,
-                        title: '杩愯鐜璇婃柇涓庝慨澶?,
+                        title: '运行环境诊断与修复',
                         description: renderEnvFixerContent(),
                         variant: 'info',
                         showCancel: true,
                         showIcon: false,
-                        cancelText: '鍏抽棴',
-                        confirmText: '鍒锋柊妫€娴?,
+                        cancelText: '关闭',
+                        confirmText: '刷新检测',
                         closeOnConfirm: false,
                         onConfirm: async () => {
                             await checkAllEnvironmentComponents()
@@ -182,11 +174,11 @@ export function SettingsView({ lang }: { lang: Language }) {
         } catch (e) {
             setAlertConfig({
                 open: true,
-                title: '淇澶辫触',
+                title: '修复失败',
                 description: String(e),
                 variant: 'destructive',
                 showCancel: false,
-                confirmText: '纭畾',
+                confirmText: '确定',
                 onConfirm: () => setAlertConfig(prev => ({ ...prev, open: false }))
             })
         }
@@ -455,12 +447,12 @@ export function SettingsView({ lang }: { lang: Language }) {
 
     const renderEnvFixerContent = () => {
         const components: Array<{ name: 'Python' | 'CUDA' | 'Vulkan' | 'LlamaBackend' | 'Middleware' | 'Permissions'; label: string; icon: any; description: string }> = [
-            { name: 'Python', label: 'Python 鐜', icon: Terminal, description: '鍐呭祵 Python 瑙ｉ噴鍣紙鐗堟湰 >= 3.10锛? },
-            { name: 'CUDA', label: 'CUDA 鐜', icon: Zap, description: 'NVIDIA GPU 鍔犻€熸敮鎸侊紙鍙€夛級' },
-            { name: 'Vulkan', label: 'Vulkan 鐜', icon: Box, description: '璺ㄥ钩鍙?GPU 鍔犻€燂紙鍙€夛級' },
-            { name: 'LlamaBackend', label: 'Llama 鍚庣', icon: Server, description: '鏈湴 LLM 鎺ㄧ悊鏈嶅姟锛堢鍙?11434锛? },
-            { name: 'Middleware', label: '涓棿浠舵枃浠?, icon: Layers, description: '缈昏瘧寮曟搸鏍稿績鏂囦欢' },
-            { name: 'Permissions', label: '鏂囦欢鏉冮檺', icon: ShieldCheck, description: '绋嬪簭杩愯鎵€闇€鐨勭洰褰曡闂潈闄? }
+            { name: 'Python', label: 'Python 环境', icon: Terminal, description: '内嵌 Python 解释器（版本 >= 3.10）' },
+            { name: 'CUDA', label: 'CUDA 环境', icon: Zap, description: 'NVIDIA GPU 加速支持（可选）' },
+            { name: 'Vulkan', label: 'Vulkan 环境', icon: Box, description: '跨平台 GPU 加速（可选）' },
+            { name: 'LlamaBackend', label: 'Llama 后端', icon: Server, description: '本地 LLM 推理服务（端口 11434）' },
+            { name: 'Middleware', label: '中间件文件', icon: Layers, description: '翻译引擎核心文件' },
+            { name: 'Permissions', label: '文件权限', icon: ShieldCheck, description: '程序运行所需的目录访问权限' }
         ]
 
         const statusColors = {
@@ -480,7 +472,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                 {envCheckLoading ? (
                     <div className="flex flex-col items-center justify-center py-8 gap-3">
                         <RefreshCw className="w-8 h-8 animate-spin text-primary/40" />
-                        <span className="text-sm text-muted-foreground">姝ｅ湪妫€娴嬭繍琛岀幆澧?..</span>
+                        <span className="text-sm text-muted-foreground">正在检测运行环境...</span>
                     </div>
                 ) : (
                     <div className="space-y-3">
@@ -506,7 +498,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                         {result && (
                                             <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium ${statusColors[result.status]}`}>
                                                 <StatusIcon className="w-3 h-3" />
-                                                {result.status === 'ok' ? '姝ｅ父' : result.status === 'warning' ? '璀﹀憡' : '閿欒'}
+                                                {result.status === 'ok' ? '正常' : result.status === 'warning' ? '警告' : '错误'}
                                             </div>
                                         )}
                                     </div>
@@ -524,7 +516,7 @@ export function SettingsView({ lang }: { lang: Language }) {
 
                                     {result && result.fixes.length > 0 && (
                                         <div className="pl-10 space-y-1">
-                                            <p className="text-xs font-medium text-muted-foreground mb-1">淇寤鸿锛?/p>
+                                            <p className="text-xs font-medium text-muted-foreground mb-1">修复建议：</p>
                                             {result.fixes.map((fix, idx) => (
                                                 <div key={idx} className="flex items-start gap-2 text-xs text-muted-foreground">
                                                     <Info className="w-3 h-3 text-blue-500 mt-0.5 shrink-0" />
@@ -547,19 +539,19 @@ export function SettingsView({ lang }: { lang: Language }) {
                                                     {isFixing ? (
                                                         <>
                                                             <RefreshCw className="w-3 h-3 animate-spin" />
-                                                            淇涓?..
+                                                            修复中...
                                                         </>
                                                     ) : (
                                                         <>
                                                             <Wrench className="w-3 h-3" />
-                                                            鑷姩淇
+                                                            自动修复
                                                         </>
                                                     )}
                                                 </Button>
                                             ) : (
                                                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                                                     <AlertCircle className="w-3 h-3 text-yellow-600" />
-                                                    闇€瑕佹墜鍔ㄤ慨澶嶏紙瑙佷笂鏂瑰缓璁級
+                                                    需要手动修复（见上方建议）
                                                 </div>
                                             )}
                                         </div>
@@ -574,8 +566,8 @@ export function SettingsView({ lang }: { lang: Language }) {
                     <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/50 p-3 rounded">
                         <Info className="w-3 h-3 mt-0.5 shrink-0 text-blue-500" />
                         <div className="space-y-1">
-                            <p>妫€娴嬪埌闂鏃讹紝璇锋牴鎹慨澶嶅缓璁繘琛屾搷浣溿€傚ぇ閮ㄥ垎鐜闂闇€瑕佹墜鍔ㄨВ鍐筹紙濡傚畨瑁呴┍鍔ㄦ垨閲嶆柊瀹夎绋嬪簭锛夈€?/p>
-                            <p>鐐瑰嚮"鍒锋柊妫€娴?鍙噸鏂版鏌ユ墍鏈夌粍浠剁殑鐘舵€併€?/p>
+                            <p>检测到问题时，请根据修复建议进行操作。大部分环境问题需要手动解决（如安装驱动或重新安装程序）。</p>
+                            <p>点击"刷新检测"可重新检查所有组件的状态。</p>
                         </div>
                     </div>
                 </div>
@@ -602,7 +594,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 py-2 bg-secondary/10 border-b">
                         <CardTitle className="text-base flex items-center gap-2 font-bold">
                             <ShieldCheck className="w-4 h-4 text-primary" />
-                            杩愯鐜璇婃柇
+                            运行环境诊断
                         </CardTitle>
                         <Button
                             variant="ghost"
@@ -612,7 +604,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                             className="gap-1.5 h-7 text-xs hover:bg-primary/10 hover:text-primary transition-colors"
                         >
                             <RefreshCw className={cn("w-3 h-3", diagLoading && "animate-spin")} />
-                            {diagLoading ? '鍒锋柊涓? : '鍒锋柊'}
+                            {diagLoading ? '刷新中' : '刷新'}
                         </Button>
                     </CardHeader>
                     <CardContent className="p-0">
@@ -624,13 +616,13 @@ export function SettingsView({ lang }: { lang: Language }) {
                                 <span className="text-sm text-destructive font-medium text-center px-4">{diagError}</span>
                                 <Button variant="outline" size="sm" onClick={() => loadDiagnostics(true)} className="mt-2">
                                     <RefreshCw className="w-3 h-3 mr-1.5" />
-                                    閲嶈瘯
+                                    重试
                                 </Button>
                             </div>
                         ) : diagLoading && !diagnostics ? (
                             <div className="flex flex-col items-center justify-center py-12 gap-3">
                                 <Activity className="w-8 h-8 animate-pulse text-primary/40" />
-                                <span className="text-sm text-muted-foreground font-medium">姝ｅ湪鎵弿绯荤粺纭欢涓庣幆澧冧緷璧?..</span>
+                                <span className="text-sm text-muted-foreground font-medium">正在扫描系统硬件与环境依赖...</span>
                             </div>
                         ) : diagnostics ? (
                             <div className="divide-y divide-border">
@@ -641,7 +633,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                             <Layout className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                                         </div>
                                         <div className="space-y-1 min-w-0">
-                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">鎿嶄綔绯荤粺</p>
+                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">操作系统</p>
                                             <p className="text-sm font-semibold truncate">
                                                 {diagnostics.os.platform === 'win32' ? `Windows ${diagnostics.os.release}` :
                                                     diagnostics.os.platform === 'darwin' ? 'macOS' : 'Linux'}
@@ -656,7 +648,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                             <Zap className="w-4 h-4 text-yellow-600 dark:text-yellow-400" />
                                         </div>
                                         <div className="space-y-1 min-w-0">
-                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">鍥惧舰澶勭悊鍣?/p>
+                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">图形处理器</p>
                                             {diagnostics.gpu ? (
                                                 <>
                                                     <p className="text-[13px] font-semibold truncate leading-tight" title={diagnostics.gpu.name}>
@@ -667,7 +659,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                                     </p>
                                                 </>
                                             ) : (
-                                                <p className="text-sm font-semibold text-muted-foreground">鏈娴嬪埌 NVIDIA</p>
+                                                <p className="text-sm font-semibold text-muted-foreground">未检测到 NVIDIA</p>
                                             )}
                                         </div>
                                     </div>
@@ -678,7 +670,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                             <Terminal className="w-4 h-4 text-green-600 dark:text-green-400" />
                                         </div>
                                         <div className="space-y-1 min-w-0">
-                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Python 鐜</p>
+                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Python 环境</p>
                                             {diagnostics.python ? (
                                                 <>
                                                     <p className="text-sm font-semibold flex items-center gap-1.5">
@@ -692,7 +684,8 @@ export function SettingsView({ lang }: { lang: Language }) {
                                             ) : (
                                                 <p className="text-sm font-semibold text-red-500 flex items-center gap-1">
                                                     <XCircleIcon className="w-3 h-3" />
-                                                    鏈畨瑁?                                                </p>
+                                                    未安装
+                                                </p>
                                             )}
                                         </div>
                                     </div>
@@ -705,14 +698,14 @@ export function SettingsView({ lang }: { lang: Language }) {
                                             <Box className="w-4 h-4 text-purple-600 dark:text-purple-400" />
                                         </div>
                                         <div className="space-y-1">
-                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">CUDA 鍔犻€?/p>
+                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">CUDA 加速</p>
                                             {diagnostics.cuda?.available ? (
                                                 <p className="text-sm font-semibold flex items-center gap-1.5">
-                                                    鐗堟湰 {diagnostics.cuda.version}
+                                                    版本 {diagnostics.cuda.version}
                                                     <CheckCircle2 className="w-3 h-3 text-green-500" />
                                                 </p>
                                             ) : (
-                                                <p className="text-sm font-semibold text-muted-foreground">鏈鍑?nvcc</p>
+                                                <p className="text-sm font-semibold text-muted-foreground">未检出 nvcc</p>
                                             )}
                                         </div>
                                     </div>
@@ -723,14 +716,14 @@ export function SettingsView({ lang }: { lang: Language }) {
                                             <Layers className="w-4 h-4 text-orange-600 dark:text-orange-400" />
                                         </div>
                                         <div className="space-y-1">
-                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Vulkan 鍚庣</p>
+                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Vulkan 后端</p>
                                             {diagnostics.vulkan?.available ? (
                                                 <p className="text-sm font-semibold flex items-center gap-1.5">
-                                                    {diagnostics.vulkan.version ? `鐗堟湰 ${diagnostics.vulkan.version}` : '鍙敤椹卞姩宸插姞杞?}
+                                                    {diagnostics.vulkan.version ? `版本 ${diagnostics.vulkan.version}` : '可用驱动已加载'}
                                                     <CheckCircle2 className="w-3 h-3 text-green-500" />
                                                 </p>
                                             ) : (
-                                                <p className="text-sm font-semibold text-muted-foreground">涓嶅彲鐢?/p>
+                                                <p className="text-sm font-semibold text-muted-foreground">不可用</p>
                                             )}
                                         </div>
                                     </div>
@@ -741,11 +734,12 @@ export function SettingsView({ lang }: { lang: Language }) {
                                             <Link className="w-4 h-4 text-zinc-600 dark:text-zinc-400" />
                                         </div>
                                         <div className="space-y-1 min-w-0">
-                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">鎺ㄧ悊鍚庣</p>
+                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">推理后端</p>
                                             {diagnostics.llamaServer.status === 'online' ? (
                                                 <>
                                                     <p className="text-sm font-semibold flex items-center gap-1.5 text-primary">
-                                                        鍦ㄧ嚎鏈嶅姟涓?                                                        <Activity className="w-3 h-3 animate-pulse" />
+                                                        在线服务中
+                                                        <Activity className="w-3 h-3 animate-pulse" />
                                                     </p>
                                                     <p className="text-[10px] font-mono text-muted-foreground/70 truncate">
                                                         localhost:{diagnostics.llamaServer.port}
@@ -753,7 +747,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                                 </>
                                             ) : (
                                                 <p className="text-sm font-semibold text-muted-foreground flex items-center gap-1.5">
-                                                    绂荤嚎
+                                                    离线
                                                     <span className="w-2 h-2 rounded-full bg-zinc-300 dark:bg-zinc-600" />
                                                 </p>
                                             )}
@@ -763,7 +757,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                             </div>
                         ) : (
                             <div className="p-8 text-center bg-secondary/5 border-y">
-                                <p className="text-sm text-muted-foreground font-medium italic">灏氭湭鍒濆鍖栬瘖鏂暟鎹紝鐐瑰嚮鍙充笂瑙掑紑濮嬫娴?/p>
+                                <p className="text-sm text-muted-foreground font-medium italic">尚未初始化诊断数据，点击右上角开始检测</p>
                             </div>
                         )}
 
@@ -771,22 +765,22 @@ export function SettingsView({ lang }: { lang: Language }) {
                         <div className="py-2 px-4 bg-muted/30 border-t flex items-center justify-between">
                             <div className="flex items-center gap-2">
                                 <TerminalSquare className="w-4 h-4 text-muted-foreground/60" />
-                                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">璋冭瘯宸ュ叿绠?/span>
+                                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">调试工具箱</span>
                             </div>
                             <div className="flex gap-2">
-                                <Tooltip content="鍦ㄦ枃浠惰祫婧愮鐞嗗櫒涓墦寮€ Python 鐜鎵€鍦ㄧ洰褰?>
+                                <Tooltip content="在文件资源管理器中打开 Python 环境所在目录">
                                     <Button
                                         variant="outline"
                                         size="sm"
                                         className="h-7 text-[11px] gap-1.5 bg-background shadow-xs hover:bg-secondary transition-all"
-                                        onClick={() => window.api?.openPath(pythonRuntimeDir)}
-                                        disabled={!pythonRuntimeDir}
+                                        onClick={() => window.api?.openPath(diagnostics?.python?.path?.replace(/\\[^\\]+$/, '') || '')}
+                                        disabled={!diagnostics?.python}
                                     >
                                         <FolderOpen className="w-3 h-3" />
-                                        鎵撳紑杩愯鐩綍
+                                        打开运行目录
                                     </Button>
                                 </Tooltip>
-                                <Tooltip content="鏌ョ湅鎺ㄧ悊鍚庣鐨勫疄鏃惰繍琛屾棩蹇?>
+                                <Tooltip content="查看推理后端的实时运行日志">
                                     <Button
                                         variant="outline"
                                         size="sm"
@@ -794,10 +788,10 @@ export function SettingsView({ lang }: { lang: Language }) {
                                         onClick={() => setShowServerLogModal(true)}
                                     >
                                         <Activity className="w-3 h-3" />
-                                        鏌ョ湅杩愯鏃ュ織
+                                        查看运行日志
                                     </Button>
                                 </Tooltip>
-                                <Tooltip content="鏌ョ湅寮€鍙戞ā寮忎笅鐨勫畬鏁翠富杩涚▼缁堢鏃ュ織">
+                                <Tooltip content="查看开发模式下的完整主进程终端日志">
                                     <Button
                                         variant="outline"
                                         size="sm"
@@ -805,10 +799,10 @@ export function SettingsView({ lang }: { lang: Language }) {
                                         onClick={() => setShowTerminalLogModal(true)}
                                     >
                                         <TerminalSquare className="w-3 h-3" />
-                                        鏌ョ湅缁堢鏃ュ織
+                                        查看终端日志
                                     </Button>
                                 </Tooltip>
-                                <Tooltip content="妫€鏌ュ苟淇杩愯鐜闂">
+                                <Tooltip content="检查并修复运行环境问题">
                                     <Button
                                         variant="outline"
                                         size="sm"
@@ -816,7 +810,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                         onClick={() => setShowEnvFixerModal(true)}
                                     >
                                         <Wrench className="w-3 h-3" />
-                                        鐜淇宸ュ叿
+                                        环境修复工具
                                     </Button>
                                 </Tooltip>
                             </div>
@@ -849,7 +843,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     {t.settingsView.selectDir}
                                 </Button>
                                 {outputDir && (
-                                    <Tooltip content="閲嶇疆涓洪粯璁?>
+                                    <Tooltip content="重置为默认">
                                         <Button
                                             variant="ghost"
                                             size="sm"
@@ -893,7 +887,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                     {t.settingsView.selectDir}
                                 </Button>
                                 {cacheDir && (
-                                    <Tooltip content="閲嶇疆涓洪粯璁?>
+                                    <Tooltip content="重置为默认">
                                         <Button
                                             variant="ghost"
                                             size="sm"
@@ -1060,7 +1054,7 @@ export function SettingsView({ lang }: { lang: Language }) {
                                 onClick={() => window.api?.openExternal(APP_CONFIG.modelDownload.huggingface)}
                             >
                                 <div className="flex items-center justify-between mb-2">
-                                    <span className="text-lg">馃</span>
+                                    <span className="text-lg">🤗</span>
                                     <ExternalLink className="w-3 h-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </div>
                                 <span className="font-semibold text-sm">{t.settingsView.modelHub}</span>

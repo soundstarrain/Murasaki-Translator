@@ -19,11 +19,11 @@ class InferenceEngine:
     Handles server startup, health checks, chat completions with retry logic.
     """
 
-    def __init__(self, server_path: str, model_path: str, host: str = "127.0.0.1", port: int = 8080,
+    def __init__(self, server_path: str, model_path: str, host: str = "127.0.0.1", port: int = 8080, 
                  n_gpu_layers: int = -1, n_ctx: int = 8192, n_parallel: int = 1, no_spawn: bool = False,
                  # Granular High-Fidelity Options
                  flash_attn: bool = False,
-                 kv_cache_type: str = "f16",
+                 kv_cache_type: str = "q8_0",
                  use_large_batch: bool = False,
                  batch_size: Optional[int] = None,
                  seed: Optional[int] = None):
@@ -35,20 +35,20 @@ class InferenceEngine:
         self.n_ctx = n_ctx
         self.n_parallel = n_parallel
         self.no_spawn = no_spawn
-
+        
         # Store Granular Options
         self.flash_attn = flash_attn
         self.kv_cache_type = kv_cache_type
         self.use_large_batch = use_large_batch
         self.batch_size = batch_size
         self.seed = seed
-
+        
         self._usage_lock = threading.Lock()
         self.last_usage = None
         self.base_url = f"http://{host}:{port}"
         self.session = requests.Session()
         self.process = None
-
+        
         # Real-time stats counters (Atomic-like usage in GIL)
         self.generated_chars_count = 0
         self.generated_tokens_count = 0
@@ -77,17 +77,17 @@ class InferenceEngine:
             "--reasoning-format", "deepseek-legacy",
             "--metrics" # Enable Prometheus metrics for KV Cache monitoring
         ]
-
+        
         # --- Granular High-Fidelity CLI Construction ---
-
+        
         # 1. Flash Attention (Required for stability in high concurrency)
         if self.flash_attn:
             cmd.extend(["-fa", "on"])
-
-        # 2. KV Cache Selection (Default F16)
+            
+        # 2. KV Cache Selection (Default Q8_0)
         if self.kv_cache_type:
             cmd.extend(["--cache-type-k", self.kv_cache_type, "--cache-type-v", self.kv_cache_type])
-
+            
         # 3. Large Batch Size (Forced Physical Sync - Safe min(1024, ctx))
         if self.batch_size:
             final_batch = min(self.batch_size, self.n_ctx)
@@ -95,31 +95,31 @@ class InferenceEngine:
         elif self.use_large_batch:
             safe_batch = min(1024, self.n_ctx)
             cmd.extend(["-b", str(safe_batch), "-ub", str(safe_batch)])
-
+            
         # 5. Seed Locking
         if self.seed is not None:
             cmd.extend(["-s", str(self.seed)])
-
+            
         # Logging active features
         features = []
         if self.flash_attn: features.append("FlashAttn")
-        if self.kv_cache_type != "f16": features.append(f"KV:{self.kv_cache_type}")
+        if self.kv_cache_type != "q8_0": features.append(f"KV:{self.kv_cache_type}")
         if self.batch_size: features.append(f"Batch:{self.batch_size}")
         elif self.use_large_batch: features.append("BigBatch(1024)")
         if self.seed is not None: features.append(f"Seed={self.seed}")
-
+        
         if features:
             logger.info(f"High-Fidelity Features Enabled: {', '.join(features)}")
-
+        
         logger.info(f"[GPU Config] n_gpu_layers={self.n_gpu_layers} (0=CPU only, -1=All layers to GPU)")
-
-        # 灏嗚緭鍑洪噸瀹氬悜鍒?server.log锛屼繚鎸?GUI 鏃ュ織娓呮磥
+        
+        # 将输出重定向到 server.log，保持 GUI 日志清洁
         self.server_log = open("server.log", "w", encoding='utf-8')
-        self.process = subprocess.Popen(cmd, stdout=self.server_log, stderr=self.server_log)
+        self.process = subprocess.Popen(cmd, stdout=self.server_log, stderr=self.server_log) 
 
         atexit.register(self.stop_server)
         self._wait_for_ready()
-
+        
     def _wait_for_ready(self, timeout=180):
         logger.info("Waiting for server to be ready...")
         start = time.time()
@@ -130,7 +130,7 @@ class InferenceEngine:
                 break
 
             try:
-                # 浣跨敤鏍囧噯鍋ュ悍妫€鏌ユ帴鍙?
+                # 使用标准健康检查接口
                 resp = self.session.get(f"{self.base_url}/v1/models", timeout=5)
                 if resp.status_code == 200:
                     logger.info("Server is ready!")
@@ -138,9 +138,9 @@ class InferenceEngine:
             except Exception:
                 pass
             time.sleep(1)
-
+            
         self.stop_server()
-
+        
         # Try to extract a useful error from the log
         error_hint = "Server failed to start within timeout"
         try:
@@ -157,7 +157,7 @@ class InferenceEngine:
                             error_hint = f"Unsupported parameter or architecture found in logs."
         except Exception as e:
             logger.warning(f"Failed to read server log for error hints: {e}")
-
+        
         raise TimeoutError(f"{error_hint} (Check server.log for details)")
 
     def stop_server(self):
@@ -177,7 +177,7 @@ class InferenceEngine:
                      self.process.wait()
             except Exception as e:
                 logger.error(f"Error stopping server: {e}")
-
+            
             # Windows specific: ensure llama-server is 100% killed
             if os.name == 'nt':
                 try:
@@ -185,14 +185,14 @@ class InferenceEngine:
                     startupinfo = subprocess.STARTUPINFO()
                     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                     startupinfo.wShowWindow = 0 # SW_HIDE
-
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                    
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], 
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  startupinfo=startupinfo)
                 except: pass
-
+                
             self.process = None
-
+            
         if hasattr(self, 'session') and self.session:
              try:
                  self.session.close()
@@ -215,35 +215,35 @@ class InferenceEngine:
 
     def chat_completion(self, messages: List[Dict], temperature: float = 0.7, stream: bool = True, stream_callback=None, rep_base: float = 1.0, rep_max: float = 1.5, rep_step: float = 0.1, block_id: int = 0) -> str:
         """
-        璋冪敤 Chat Completion API (With Auto-Retry Strategy)
+        调用 Chat Completion API (With Auto-Retry Strategy)
         Strategy:
         1. Try with RepetitionPenalty=rep_base (Training Default).
         2. If Repetition Loop detected, Retry with higher penalty up to rep_max.
         """
-
+        
         # Local state for this request (Thread-Safe)
         local_last_usage = None
         local_token_count = 0
-
-        # 寮哄埗鍏滃簳锛岄槻姝㈤厤缃敊璇鑷存寰幆
+        
+        # 强制兜底，防止配置错误导致死循环
         if rep_step <= 0:
             rep_step = 0.1
 
-        # 鍔ㄦ€佺敓鎴愬皾璇曠瓥鐣?
+        # 动态生成尝试策略
         attempts = [rep_base]
         if rep_base < rep_max:
-            # 绗簩娆″皾璇曪細璺冲埌 1.2 鎴?base + 0.2
+            # 第二次尝试：跳到 1.2 或 base + 0.2
             second = max(1.2, rep_base + 0.2)
             if second <= rep_max:
                 attempts.append(round(second, 2))
-            # 閫掑
+            # 递增
             p = second + rep_step
             while p <= rep_max + 0.05:  # Allow slightly over due to float prec
                 attempts.append(round(p, 2))
                 p += rep_step
-
+             
         final_idx = len(attempts) - 1
-
+        
         # Retry loop for repetition penalty
         for idx, penalty in enumerate(attempts):
             is_final = (idx == final_idx)
@@ -264,12 +264,12 @@ class InferenceEngine:
                     "<|eot_id|>",       # Llama 3
                     "<|end_of_text|>",  # Llama 3 Base
                     "\\n\\n\\n"         # Heuristic Safety Net
-                ]
+                ] 
             }
-
+            
             if stream:
                 payload["stream_options"] = {"include_usage": True}
-
+            
             try:
                 if idx > 0:
                     prefix = f"[Block {block_id}] " if block_id is not None else ""
@@ -284,7 +284,7 @@ class InferenceEngine:
                     import sys
                     sys.stdout.write(f"\nJSON_RETRY:{json.dumps(retry_data, ensure_ascii=False)}\n")
                     sys.stdout.flush()
-
+                
                 req_start_time = time.time()
                 response = self.session.post(
                     f"{self.base_url}/v1/chat/completions",
@@ -293,13 +293,13 @@ class InferenceEngine:
                     timeout=(10, 600) # (Connect timeout, Read timeout)
                 )
                 response.raise_for_status()
-
+                
                 full_reasoning = ""
                 full_text = ""
                 loop_detected = False
-
+                
                 if stream:
-
+                    
                     for line in response.iter_lines():
                         if not line: continue
                         line = line.decode('utf-8')
@@ -308,89 +308,89 @@ class InferenceEngine:
                         if data == '[DONE]': break
                         try:
                             chunk = json.loads(data)
-
+                            
                             if 'usage' in chunk:
                                 local_last_usage = chunk['usage']
-
+                            
                             if 'choices' not in chunk or len(chunk['choices']) == 0:
                                 continue
-
+                                
                             delta = chunk['choices'][0]['delta']
-
+                            
                             reasoning = delta.get('reasoning_content', '')
                             content = delta.get('content', '')
-
+                            
                             if reasoning:
                                 full_reasoning += reasoning
                                 # Count reasoning tokens (fallback)
                                 if local_last_usage is None:
                                     local_token_count += 1
-
+                                
                             if content:
                                 full_text += content
                                 # Update real-time stats
                                 self.generated_chars_count += len(content)
                                 self.generated_tokens_count += 1
-
+                                
                                 if stream_callback:
                                     stream_callback(content)
                                 # Count completion tokens (fallback)
                                 if local_last_usage is None:
                                     local_token_count += 1
-
+                                
                                 # Repetition Guard
                                 if len(full_text) > 20:
                                     last_char = full_text[-1]
                                     # Whitelist for stylistic repetition (Light Novel style)
                                     # Allow: Ellipsis, Dash, Tilde, Exclamation, Spaces, 'Ah', 'Ugh', etc.
-                                    SAFE_LOOP_CHARS = {'鈥?, '鈥?, '鈹€', '~', '锝?, '锛?, '!', '锛?, '?', '.', '銆?, ' ', '\n', '銆€', '鍟?, '銉?, '鈥?, '鈥?}
-
+                                    SAFE_LOOP_CHARS = {'…', '—', '─', '~', '～', '！', '!', '？', '?', '.', '。', ' ', '\n', '　', '啊', 'ー', '”', '’'}
+                                    
                                     # Dynamic threshold
                                     loop_threshold = 40
                                     if last_char in SAFE_LOOP_CHARS:
                                         loop_threshold = 80  # Allow much longer stylistic loops
-
+                                    
                                     # 1. Single Char Loop (e.g. ".......")
                                     if len(full_text) >= loop_threshold and full_text[-loop_threshold:] == last_char * loop_threshold:
                                         logger.warning(f"Detected char loop on '{last_char}' (Limit={loop_threshold}). Aborting.")
                                         loop_detected = True
-
+                                    
                                     # 2. Phrase Loop (e.g. "output... output...")
                                     # Optimized: Sample specific lengths instead of O(n) scan
                                     if not loop_detected and len(full_text) > 60:
                                         # Full coverage: step 10 (20-500) + step 50 (500-1000) = ~58 checks
                                         sample_lengths = list(range(20, 500, 10)) + list(range(500, 1001, 50))
                                         max_check = len(full_text) // 2
-                                        # 瑁呴グ鎬х鍙风櫧鍚嶅崟锛堜綔鑰呭父鐢ㄧ殑鍒嗛殧绗︼級
-                                        DECORATIVE_CHARS = set('*=-_~路鈥⑩梿鈼団枲鈻♀柌鈻斥柤鈻解棆鈼忊槄鈽嗏櫔鈾櫋鈾モ湨鉁р€烩啋鈫愨啈鈫?\n\t銆€')
-
+                                        # 装饰性符号白名单（作者常用的分隔符）
+                                        DECORATIVE_CHARS = set('*=-_~·•◆◇■□▲△▼▽○●★☆♪♫♡♥✦✧※→←↑↓ \n\t　')
+                                        
                                         for length in sample_lengths:
                                             if length > max_check:
                                                 break
                                             # Quick exit: last char mismatch means no match
-                                            if full_text[-1] != full_text[-1-length]:
+                                            if full_text[-1] != full_text[-1-length]: 
                                                 continue
                                             # Check if the last 'length' chars are same as previous 'length'
                                             if full_text[-length:] == full_text[-2*length:-length]:
                                                 repeated_phrase = full_text[-length:]
-                                                # 濡傛灉閲嶅鐗囨鍙寘鍚楗版€х鍙凤紝鍒欎笉鎷︽埅
+                                                # 如果重复片段只包含装饰性符号，则不拦截
                                                 if all(c in DECORATIVE_CHARS for c in repeated_phrase):
                                                     continue  # Skip decorative patterns like "***", "===", etc.
-                                                # 鎴彇閲嶅鍐呭鍓?0瀛楃鐢ㄤ簬鏃ュ織锛堥伩鍏嶈繃闀匡級
+                                                # 截取重复内容前50字符用于日志（避免过长）
                                                 preview = repeated_phrase[:50].replace('\n', '\\n')
                                                 if len(repeated_phrase) > 50:
                                                     preview += '...'
                                                 logger.warning(f"Detected phrase loop (len={length}): '{preview}'. Aborting.")
                                                 loop_detected = True
                                                 break
-
+                                    
                                     if loop_detected:
                                         response.close()
                                         break
-
+                                        
                         except Exception as e:
                             logger.debug(f"Failed to parse usage data from streaming response: {e}")
-
+                    
                     # Fallback Usage Construction
                     if local_last_usage is None:
                         # Estimate prompt tokens
@@ -399,8 +399,8 @@ class InferenceEngine:
                         if 'messages' in payload:
                             # Improved estimation for CJK: Chars * 1.3
                             txt_len = sum(len(m['content']) for m in payload['messages'])
-                            prompt_est = int(txt_len * 1.3)
-
+                            prompt_est = int(txt_len * 1.3) 
+                        
                         local_last_usage = {
                             "prompt_tokens": prompt_est,
                             "completion_tokens": local_token_count,
@@ -409,30 +409,30 @@ class InferenceEngine:
                         }
                         if is_final:
                              logger.warning(f"Usage statistics missing from server. Using fallback estimation (Chars*1.3).")
-
+                    
                     # Add duration for TPS calculation
                     req_duration = time.time() - req_start_time
                     local_last_usage["duration"] = max(0.001, req_duration)
-
+                    
                     # Update global last_usage (Thread-Safe update for monitoring)
                     with self._usage_lock:
                         self.last_usage = local_last_usage
-
+                    
                     # Decide what to do
 
                     if loop_detected:
                         if not is_final:
                             # Trigger Retry
-                            continue
+                            continue 
                         else:
                             # Final attempt failed too. Return what we have.
                             logger.error(f"Final attempt also looped. Returning truncated text.")
-
+                    
                     # Success or Final Fail -> Return Result
                     final_text = full_text
                     if full_reasoning:
                         final_text = f"<think>{full_reasoning}</think>\n{full_text}"
-
+                    
                     return final_text, local_last_usage
 
                 else:
@@ -443,17 +443,17 @@ class InferenceEngine:
                         with self._usage_lock:
                             self.last_usage = resp_json['usage']
                         usage = resp_json['usage']
-
+                    
                     msg = resp_json['choices'][0]['message']
                     return msg.get('content', ''), usage
-
+                    
             except Exception as e:
                 logger.error(f"Inference Error: {e}")
                 logger.warning(f"API call failed: {e}")
                 if is_final:
                     logger.error(f"Final attempt failed. Returning empty.")
                     return "", None
-                # If network error, maybe don't retry with higher penalty?
+                # If network error, maybe don't retry with higher penalty? 
                 # But here we stick to the plan.
-
+        
         return "", None

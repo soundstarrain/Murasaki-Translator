@@ -1,6 +1,7 @@
 /**
- * LibraryView - 璁板繂搴?/ 闃熷垪绠＄悊涓績
- * 鎻愪緵: 闃熷垪绠＄悊銆佹嫋鏀惧鍏ャ€佸崟鏂囦欢鑷畾涔夐厤缃€佺洿鎺ヨ烦杞牎瀵? */
+ * LibraryView - 记忆库 / 队列管理中心
+ * 提供: 队列管理、拖放导入、单文件自定义配置、直接跳转校对
+ */
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
@@ -78,88 +79,85 @@ function getCachePath(filePath: string, outputDir?: string): string {
 
 const texts = {
   zh: {
-    title: "缈昏瘧闃熷垪",
-    subtitle: "鎵归噺澶勭悊闃熷垪锛屼负姣忎釜鏂囦欢鎸囧畾鐙珛鍙傛暟",
-    files: "涓枃浠?,
-    dropHint: "鎷栨斁鏂囦欢鎴栨枃浠跺す鍒版澶勬坊鍔犲埌闃熷垪",
-    dropTitle: "鎷栨斁鏂囦欢鍒拌繖閲?,
-    emptyDragHint: "鎴栫偣鍑讳换鎰忓娴忚鏂囦欢",
-    selectFiles: "閫夋嫨鏂囦欢",
-    selectFolder: "閫夋嫨鏂囦欢澶?,
-    scanSubdirs: "鎵弿瀛愮洰褰?,
-    confirmClear: "纭畾瑕佹竻绌虹炕璇戦槦鍒楀悧锛?,
-    supportedTypes: "鏀寔 .txt .epub .srt .ass",
-    queueTitle: "缈昏瘧闃熷垪",
-    emptyQueue: "闃熷垪涓虹┖",
-    emptyHint: "鎷栨斁鏂囦欢鍒颁笂鏂瑰尯鍩燂紝鎴栫偣鍑绘寜閽€夋嫨",
-    startAll: "寮€濮嬬炕璇?,
-    clear: "娓呯┖鍏ㄩ儴",
-    selected: "宸查€?,
-    items: "椤?,
-    remove: "绉婚櫎",
-    selectAll: "鍏ㄩ€?,
-    deselectAll: "鍙栨秷鍏ㄩ€?,
-    default: "榛樿",
-    proofread: "鏍″",
-    config: "閰嶇疆",
-    configTitle: "鏂囦欢缈昏瘧閰嶇疆",
-    batchConfig: "鎵归噺閰嶇疆",
-    configDesc: "瑕嗙洊鍏ㄥ眬璁剧疆锛屼负姝ゆ枃浠舵寚瀹氱嫭绔嬪弬鏁?,
-    useGlobal: "浣跨敤鍏ㄥ眬榛樿閰嶇疆",
-    useGlobalDesc: "鍙栨秷鍕鹃€変互鑷畾涔夋鏂囦欢鐨勭炕璇戝弬鏁?,
-    moveToTop: "缃《",
+    title: "翻译队列",
+    subtitle: "批量处理队列，为每个文件指定独立参数",
+    files: "个文件",
+    dropHint: "拖放文件或文件夹到此处添加到队列",
+    dropTitle: "拖放文件到这里",
+    emptyDragHint: "或点击任意处浏览文件",
+    selectFiles: "选择文件",
+    selectFolder: "选择文件夹",
+    scanSubdirs: "扫描子目录",
+    confirmClear: "确定要清空翻译队列吗？",
+    supportedTypes: "支持 .txt .epub .srt .ass",
+    queueTitle: "翻译队列",
+    emptyQueue: "队列为空",
+    emptyHint: "拖放文件到上方区域，或点击按钮选择",
+    startAll: "开始翻译",
+    clear: "清空全部",
+    selected: "已选",
+    items: "项",
+    remove: "移除",
+    selectAll: "全选",
+    deselectAll: "取消全选",
+    default: "默认",
+    proofread: "校对",
+    config: "配置",
+    configTitle: "文件翻译配置",
+    batchConfig: "批量配置",
+    configDesc: "覆盖全局设置，为此文件指定独立参数",
+    useGlobal: "使用全局默认配置",
+    useGlobalDesc: "取消勾选以自定义此文件的翻译参数",
+    moveToTop: "置顶",
 
     // Params
-    model: "妯″瀷",
-    glossary: "鏈琛?,
-    outputDir: "杈撳嚭鐩綍",
-    contextSize: "涓婁笅鏂囬暱搴?,
-    temperature: "娓╁害",
-    gpuLayers: "GPU灞傛暟",
+    glossary: "术语表",
+    outputDir: "输出目录",
+    contextSize: "上下文长度",
+    temperature: "温度",
+    gpuLayers: "GPU层数",
     preset: "Prompt",
-    concurrency: "骞跺彂鏁?,
-    repPenaltyBase: "閲嶅鎯╃綒 (Base)",
-    repPenaltyMax: "閲嶅鎯╃綒 (Max)",
+    concurrency: "并发数",
+    repPenaltyBase: "重复惩罚 (Base)",
+    repPenaltyMax: "重复惩罚 (Max)",
     flashAttn: "Flash Attention",
-    kvCacheType: "KV Cache 閲忓寲",
-    alignmentMode: "杈呭姪瀵归綈",
-    saveCot: "CoT 瀵煎嚭",
+    kvCacheType: "KV Cache 量化",
+    alignmentMode: "辅助对齐",
+    saveCot: "CoT 导出",
 
-    save: "淇濆瓨閰嶇疆",
-    cancel: "鍙栨秷",
-    browse: "娴忚",
-    reset: "閲嶇疆",
-    notSet: "璺熼殢鍏ㄥ眬璁剧疆",
-    currentGlobal: "褰撳墠鍏ㄥ眬",
-    seed: "闅忔満绉嶅瓙 (Seed)",
+    save: "保存配置",
+    cancel: "取消",
+    browse: "浏览",
+    reset: "重置",
+    notSet: "跟随全局设置",
+    currentGlobal: "当前全局",
+    seed: "随机种子 (Seed)",
 
     presetOptions: {
-      novel: "杞诲皬璇存ā寮?(榛樿)",
-      script: "鍓ф湰妯″紡",
-      short: "鍗曞彞妯″紡",
+      novel: "轻小说模式 (默认)",
+      script: "剧本模式 (Galgame)",
+      short: "单句模式",
     },
     kvOptions: {
-      f16: "F16 (鎺ㄨ崘)",
-      q8_0: "Q8_0 (鍧囪　)",
-      q5_1: "Q5_1 (楂樻晥鍨?",
-      q4_0: "Q4_0 (鐪佹樉瀛?",
+      f16: "F16 (标准)",
+      q8_0: "Q8_0 (推荐)",
+      q5_1: "Q5_1 (高效型)",
+      q4_0: "Q4_0 (省显存)",
     },
     help: {
-      model:
-        "浠呰鐩栨鏂囦欢浣跨敤鐨勬ā鍨嬨€傜暀绌哄垯璺熼殢鍏ㄥ眬妯″瀷閫夋嫨銆?,
       glossary:
-        "鎸囧畾姝ゆ枃浠朵娇鐢ㄧ殑涓撳睘鏈琛ㄣ€傛湳璇〃甯姪妯″瀷鍑嗙‘缈昏瘧浜哄悕銆佸湴鍚嶅拰涓撴湁鍚嶈瘝銆?,
-      outputDir: "璁剧疆缈昏瘧缁撴灉鐨勪繚瀛樼洰褰曘€傜暀绌哄垯涓庢簮鏂囦欢淇濆瓨鍦ㄥ悓涓€鐩綍銆?,
+        "指定此文件使用的专属术语表。术语表帮助模型准确翻译人名、地名和专有名词。",
+      outputDir: "设置翻译结果的保存目录。留空则与源文件保存在同一目录。",
       contextSize:
-        "妯″瀷涓€娆¤兘澶勭悊鐨勬枃鏈噺銆傛暟鍊艰秺楂樻樉瀛樺崰鐢ㄨ秺楂橈紝寤鸿 4096-8192銆?,
-      concurrency: "骞惰缈昏瘧鐨勪换鍔℃暟銆傚鍔犲苟鍙戝彲鎻愬崌閫熷害锛屼絾鏄惧瓨鍗犵敤涔熶細澧炲姞銆?,
+        "模型一次能处理的文本量。数值越高显存占用越高，建议 4096-8192。",
+      concurrency: "并行翻译的任务数。增加并发可提升速度，但显存占用也会增加。",
       temperature:
-        "鎺у埗杈撳嚭闅忔満鎬с€傝緝浣庡€?(0.3-0.6) 鏇寸ǔ瀹氾紝杈冮珮鍊?(0.7-1.0) 鏇存湁鍒涙剰銆?,
-      gpuLayers: "GPU 鍔犻€熷眰鏁般€?1 琛ㄧず鍏ㄩ儴鍔犺浇鍒版樉鍗★紝0 琛ㄧず浠?CPU銆?,
-      repPenaltyBase: "閲嶅鎯╃綒鍒濆鍊笺€傜敤浜庢姂鍒舵ā鍨嬭緭鍑洪噸澶嶅唴瀹广€?,
-      repPenaltyMax: "閲嶅鎯╃綒鏈€澶у€笺€傛娴嬪埌姝诲惊鐜椂鎯╃綒鍊间細閫掑鑷虫銆?,
-      seed: "鍥哄畾闅忔満绉嶅瓙鍙娇杈撳嚭缁撴灉鍙鐜般€傜暀绌鸿〃绀洪殢鏈恒€?,
-      preset: "杞诲皬璇存ā寮忛€傚悎缈昏瘧杞诲皬璇村拰杩炶疮鎬ч暱鏂囨湰锛涘墽鏈ā寮忛€傚悎 Galgame銆佸姩鐢诲瓧骞曘€佹极鐢伙紱鍗曞彞妯″紡閫傚悎瀵归綈瑕佹眰楂樼殑鐭彞锛屼絾鏁堢巼鍜屾晥鏋滀細涓嬮檷锛屼笉寤鸿浣跨敤",
+        "控制输出随机性。较低值 (0.3-0.6) 更稳定，较高值 (0.7-1.0) 更有创意。",
+      gpuLayers: "GPU 加速层数。-1 表示全部加载到显卡，0 表示仅 CPU。",
+      repPenaltyBase: "重复惩罚初始值。用于抑制模型输出重复内容。",
+      repPenaltyMax: "重复惩罚最大值。检测到死循环时惩罚值会递增至此。",
+      seed: "固定随机种子可使输出结果可复现。留空表示随机。",
+      preset: "轻小说模式适合翻译轻小说和连贯性长文本；剧本模式适合 Galgame、动画字幕、漫画；单句模式适合对齐要求高的短句，但效率和效果会下降，不建议使用",
     },
   },
   en: {
@@ -199,7 +197,6 @@ const texts = {
     useGlobalDesc: "Uncheck to customize parameters for this file",
     moveToTop: "Top",
 
-    model: "Model",
     glossary: "Glossary",
     outputDir: "Output Directory",
     contextSize: "Context Size",
@@ -227,14 +224,12 @@ const texts = {
       short: "Short Mode",
     },
     kvOptions: {
-      f16: "F16 (Recommended)",
-      q8_0: "Q8_0 (Balanced)",
+      f16: "F16 (Standard)",
+      q8_0: "Q8_0 (Recommended)",
       q5_1: "Q5_1 (Efficient)",
       q4_0: "Q4_0 (Low VRAM)",
     },
     help: {
-      model:
-        "Override model for this file only. Leave unset to follow global model selection.",
       glossary:
         "Specify glossary for this file. Helps accurate translation of names and terms.",
       outputDir:
@@ -253,90 +248,87 @@ const texts = {
     },
   },
   jp: {
-    title: "銉┿偆銉栥儵銉?,
-    subtitle: "銈儱銉笺倰涓€鎷嚘鐞嗐仐銆併儠銈°偆銉仈銇ㄣ伀鍊嬪垾銇儜銉┿儭銉笺偪銈掓寚瀹?,
+    title: "ライブラリ",
+    subtitle: "キューを一括処理し、ファイルごとに個別のパラメータを指定",
 
-    seed: "銈枫兗銉?(Seed)",
-    currentGlobal: "鐝惧湪銇偘銉兗銉愩儷鍊?,
-    files: "銉曘偂銈ゃ儷",
-    dropHint: "銉曘偂銈ゃ儷銇俱仧銇儠銈┿儷銉€銈掋儔銉儍銉椼仐銇﹁拷鍔?,
-    dropTitle: "銉曘偂銈ゃ儷銈掋亾銇撱伀銉夈儹銉冦儣",
-    emptyDragHint: "銇俱仧銇偗銉儍銈仐銇﹂伕鎶?,
-    selectFiles: "銉曘偂銈ゃ儷閬告姙",
-    selectFolder: "銉曘偐銉儉閬告姙",
-    scanSubdirs: "銈点儢銉囥偅銉偗銉堛儶銈掋偣銈儯銉?,
-    confirmClear: "缈昏ǔ銈儱銉笺倰绌恒伀銇椼仸銈傘倛銈嶃仐銇勩仹銇欍亱锛?,
-    supportedTypes: ".txt .epub .srt .ass 銇蹇?,
-    queueTitle: "缈昏ǔ銈儱銉?,
-    emptyQueue: "銈儱銉笺亴绌恒仹銇?,
-    emptyHint: "涓娿伀銉曘偂銈ゃ儷銈掋儔銉儍銉椼€併伨銇熴伅銉溿偪銉炽仹閬告姙",
-    startAll: "缈昏ǔ闁嬪",
-    clear: "銈儶銈?,
-    selected: "閬告姙涓?,
-    items: "浠?,
-    remove: "鍓婇櫎",
-    selectAll: "銇欍伖銇﹂伕鎶?,
-    deselectAll: "閬告姙瑙ｉ櫎",
-    default: "銉囥儠銈┿儷銉?,
-    custom: "銈偣銈裤儬",
-    proofread: "鏍℃",
-    config: "瑷畾",
-    configTitle: "銉曘偂銈ゃ儷缈昏ǔ瑷畾",
-    batchConfig: "涓€鎷ō瀹?,
-    configDesc: "銈般儹銉笺儛銉ō瀹氥倰涓婃浉銇嶃仐銇﹀€嬪垾銉戙儵銉°兗銈裤倰鎸囧畾",
-    useGlobal: "銈般儹銉笺儛銉儑銉曘偐銉儓銈掍娇鐢?,
-    useGlobalDesc: "銉併偋銉冦偗銈掑銇欍仺銇撱伄銉曘偂銈ゃ儷銇儜銉┿儭銉笺偪銈掋偒銈广偪銉炪偆銈?,
-    moveToTop: "銉堛儍銉?,
+    seed: "シード (Seed)",
+    currentGlobal: "現在のグローバル値",
+    files: "ファイル",
+    dropHint: "ファイルまたはフォルダをドロップして追加",
+    dropTitle: "ファイルをここにドロップ",
+    emptyDragHint: "またはクリックして選択",
+    selectFiles: "ファイル選択",
+    selectFolder: "フォルダ選択",
+    scanSubdirs: "サブディレクトリをスキャン",
+    confirmClear: "翻訳キューを空にしてもよろしいですか？",
+    supportedTypes: ".txt .epub .srt .ass に対応",
+    queueTitle: "翻訳キュー",
+    emptyQueue: "キューが空です",
+    emptyHint: "上にファイルをドロップ、またはボタンで選択",
+    startAll: "翻訳開始",
+    clear: "クリア",
+    selected: "選択中",
+    items: "件",
+    remove: "削除",
+    selectAll: "すべて選択",
+    deselectAll: "選択解除",
+    default: "デフォルト",
+    custom: "カスタム",
+    proofread: "校正",
+    config: "設定",
+    configTitle: "ファイル翻訳設定",
+    batchConfig: "一括設定",
+    configDesc: "グローバル設定を上書きして個別パラメータを指定",
+    useGlobal: "グローバルデフォルトを使用",
+    useGlobalDesc: "チェックを外すとこのファイルのパラメータをカスタマイズ",
+    moveToTop: "トップ",
 
-    model: "銉儑銉?,
-    glossary: "鐢ㄨ獮闆?,
-    outputDir: "鍑哄姏銉囥偅銉偗銉堛儶",
-    contextSize: "銈炽兂銉嗐偔銈广儓銈点偆銈?,
-    temperature: "娓╁害",
-    gpuLayers: "GPU銉偆銉ゃ兗",
-    preset: "銉椼儶銈汇儍銉?,
-    concurrency: "鍚屾檪瀹熻鏁?,
-    repPenaltyBase: "绻般倞杩斻仐銉氥儕銉儐銈?(Base)",
-    repPenaltyMax: "绻般倞杩斻仐銉氥儕銉儐銈?(Max)",
+    glossary: "用語集",
+    outputDir: "出力ディレクトリ",
+    contextSize: "コンテキストサイズ",
+    temperature: "温度",
+    gpuLayers: "GPUレイヤー",
+    preset: "プリセット",
+    concurrency: "同時実行数",
+    repPenaltyBase: "繰り返しペナルティ (Base)",
+    repPenaltyMax: "繰り返しペナルティ (Max)",
     flashAttn: "Flash Attention",
-    kvCacheType: "KV Cache 閲忓瓙鍖?,
-    alignmentMode: "瑁滃姪銈儵銈ゃ兂銉°兂銉?,
-    saveCot: "CoT 銈ㄣ偗銈广儩銉笺儓",
+    kvCacheType: "KV Cache 量子化",
+    alignmentMode: "補助アラインメント",
+    saveCot: "CoT エクスポート",
 
-    save: "瑷畾銈掍繚瀛?,
-    cancel: "銈儯銉炽偦銉?,
-    browse: "鍙傜収",
-    reset: "銉偦銉冦儓",
+    save: "設定を保存",
+    cancel: "キャンセル",
+    browse: "参照",
+    reset: "リセット",
 
-    notSet: "銈般儹銉笺儛銉ō瀹氥伀寰撱亞",
+    notSet: "グローバル設定に従う",
 
     presetOptions: {
-      novel: "灏忚銉兗銉?(銉囥儠銈┿儷銉?",
-      script: "銈广偗銉儣銉堛儮銉笺儔 (銈儯銉偛銉?",
-      short: "鐭枃銉兗銉?,
+      novel: "小説モード (デフォルト)",
+      script: "スクリプトモード (ギャルゲー)",
+      short: "短文モード",
     },
     kvOptions: {
-      f16: "F16 (鎺ㄥエ)",
-      q8_0: "Q8_0 (銉愩儵銉炽偣)",
-      q5_1: "Q5_1 (鍔圭巼鐨?",
-      q4_0: "Q4_0 (浣嶸RAM)",
+      f16: "F16 (高品質)",
+      q8_0: "Q8_0 (バランス)",
+      q5_1: "Q5_1 (効率的)",
+      q4_0: "Q4_0 (低VRAM)",
     },
     help: {
-      model:
-        "銇撱伄銉曘偂銈ゃ儷銇犮亼銉儑銉倰涓婃浉銇嶃仐銇俱仚銆傛湭瑷畾銇倝銈般儹銉笺儛銉儮銉囥儷銈掍娇鐢ㄣ仐銇俱仚銆?,
       glossary:
-        "銇撱伄銉曘偂銈ゃ儷灏傜敤銇敤瑾為泦銈掓寚瀹氥€傚悕鍓嶃仾銇┿伄姝ｇ⒑銇炕瑷炽伀褰圭珛銇°伨銇欍€?,
-      outputDir: "鍑哄姏銉囥偅銉偗銉堛儶銈掕ō瀹氥€傜┖銇牬鍚堛伅銈姐兗銈广仺鍚屻仒鍫存墍銇繚瀛樸€?,
+        "このファイル専用の用語集を指定。名前などの正確な翻訳に役立ちます。",
+      outputDir: "出力ディレクトリを設定。空の場合はソースと同じ場所に保存。",
       contextSize:
-        "銉嗐偔銈广儓鍑︾悊瀹归噺銆傚ぇ銇嶃亜鍊ゃ伅銈堛倞澶氥亸銇甐RAM銈掍娇鐢ㄣ€傛帹濂? 4096-8192銆?,
-      concurrency: "涓﹀垪銈裤偣銈暟銆傚銈勩仚銇ㄩ€熴亸銇倠銇孷RAM浣跨敤閲忋倐澧楀姞銆?,
+        "テキスト処理容量。大きい値はより多くのVRAMを使用。推奨: 4096-8192。",
+      concurrency: "並列タスク数。増やすと速くなるがVRAM使用量も増加。",
       temperature:
-        "鍑哄姏銇儵銉炽儉銉犳€с€備綆銇?(0.3-0.6) = 瀹夊畾銆侀珮銇?(0.7-1.0) = 鍓甸€犵殑銆?,
-      gpuLayers: "GPU鍔犻€熴儸銈ゃ儰銉笺€?1 = 鍏℅PU銆? = CPU銇伩銆?,
-      repPenaltyBase: "绻般倞杩斻仐銉氥儕銉儐銈ｃ伄鍒濇湡鍊ゃ€傞噸瑜囧嚭鍔涖倰鎶戝埗銆?,
-      repPenaltyMax: "銉儓銉┿偆銉兗銉椼伄鏈€澶с儦銉娿儷銉嗐偅鍊ゃ€?,
-      seed: "鍐嶇従鍙兘銇嚭鍔涖伄銇熴倎銇浐瀹氥偡銉笺儔銆傜┖銇牬鍚堛伅銉┿兂銉€銉犮€?,
-      preset: "灏忚銉兗銉夈伅鍏ㄣ仸銇皬瑾仺闀锋枃鍚戙亼銆併偣銈儶銉椼儓銉兗銉夈伅銈儯銉偛銉笺兓銈儖銉″瓧骞曘兓婕敾鍚戙亼銆佺煭鏂囥儮銉笺儔銇偄銉┿偆銉°兂銉堥噸瑕栥伄鐭枃鍚戙亼銇с仚銇屽姽鐜囥仺鍝佽唱銇屼綆涓嬨仚銈嬨仧銈侀潪鎺ㄥエ",
+        "出力のランダム性。低い (0.3-0.6) = 安定、高い (0.7-1.0) = 創造的。",
+      gpuLayers: "GPU加速レイヤー。-1 = 全GPU、0 = CPUのみ。",
+      repPenaltyBase: "繰り返しペナルティの初期値。重複出力を抑制。",
+      repPenaltyMax: "リトライループの最大ペナルティ値。",
+      seed: "再現可能な出力のための固定シード。空の場合はランダム。",
+      preset: "小説モードは全ての小説と長文向け、スクリプトモードはギャルゲー・アニメ字幕・漫画向け、短文モードはアライメント重視の短文向けですが効率と品質が低下するため非推奨",
     },
   },
 };
@@ -350,7 +342,7 @@ interface FileConfigModalProps {
   onClose: () => void;
 }
 
-export function FileConfigModal({
+function FileConfigModal({
   item,
   lang,
   onSave,
@@ -358,35 +350,8 @@ export function FileConfigModal({
 }: FileConfigModalProps) {
   const t = texts[lang];
   const [config, setConfig] = useState<FileConfig>({ ...item.config });
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
-
-  useEffect(() => {
-    let alive = true;
-    const loadModels = async () => {
-      try {
-        const models = await window.api?.getModels();
-        if (alive && Array.isArray(models)) {
-          setAvailableModels(models);
-        }
-      } catch (error) {
-        console.error("[FileConfigModal] Failed to load models:", error);
-      }
-    };
-    loadModels();
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   // Get global defaults for display
-  const globalModel = localStorage.getItem("config_model") || "";
-  const formatModelName = (path: string) =>
-    (path.split(/[/\\]/).pop() || path).replace(/\.gguf$/i, "");
-  const globalModelDisplay = globalModel
-    ? formatModelName(globalModel)
-    : lang === "zh"
-      ? "鏈缃?
-      : "Not set";
   const globalGlossary = localStorage.getItem("config_glossary_path") || "";
   const globalCtx = localStorage.getItem("config_ctx") || "4096";
   const globalConcurrency = localStorage.getItem("config_concurrency") || "1";
@@ -397,7 +362,7 @@ export function FileConfigModal({
     localStorage.getItem("config_rep_penalty_base") || "1.0";
   const globalRepMax = localStorage.getItem("config_rep_penalty_max") || "1.5";
   const globalFlashAttn = localStorage.getItem("config_flash_attn") !== "false";
-  const globalKvCache = localStorage.getItem("config_kv_cache_type") || "f16";
+  const globalKvCache = localStorage.getItem("config_kv_cache_type") || "q8_0";
   const globalSeed = localStorage.getItem("config_seed") || "";
   const globalAlignmentMode =
     localStorage.getItem("config_alignment_mode") === "true";
@@ -460,7 +425,7 @@ export function FileConfigModal({
     const displayGlobalValue =
       globalValue === "" || globalValue === undefined
         ? lang === "zh"
-          ? "鏈缃?
+          ? "未设置"
           : "Not set"
         : globalValue.length > 20
           ? "..." + globalValue.slice(-20)
@@ -494,7 +459,7 @@ export function FileConfigModal({
               config.useGlobalDefaults
                 ? globalValue ||
                 placeholder ||
-                (lang === "zh" ? "鏈缃? : "Not set")
+                (lang === "zh" ? "未设置" : "Not set")
                 : placeholder || t.notSet
             }
             disabled={config.useGlobalDefaults}
@@ -588,65 +553,13 @@ export function FileConfigModal({
               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
               <p className="text-xs text-amber-600 dark:text-amber-400 leading-relaxed">
                 {lang === "zh"
-                  ? "淇敼鍓嶈纭繚鎮ㄤ簡瑙ｆ鍦ㄤ慨鏀圭殑鍐呭锛岄敊璇殑閰嶇疆鍙兘瀵艰嚧缈昏瘧杩囩▼寮傚父鎴栫粨鏋滆川閲忎笅闄嶃€?
+                  ? "修改前请确保您了解正在修改的内容，错误的配置可能导致翻译过程异常或结果质量下降。"
                   : "Please ensure you understand what you are modifying. Incorrect settings may cause translation errors or quality degradation."}
               </p>
             </div>
           )}
 
-          {/* 1. Prompt Preset Section - 鏈€閲嶈锛屾斁绗竴 */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label
-                className={`text-xs font-medium flex items-center gap-1.5 ${config.useGlobalDefaults ? "text-muted-foreground" : "text-foreground"}`}
-              >
-                <Cpu className="w-3.5 h-3.5 shrink-0 opacity-70" />
-                {t.model}
-                <UITooltip
-                  content={
-                    t.help.model
-                  }
-                >
-                  <Info className="w-3 h-3 text-muted-foreground/50 hover:text-primary cursor-help" />
-                </UITooltip>
-              </label>
-              <span className="text-[10px] text-muted-foreground/50 tabular-nums">
-                {t.currentGlobal}: {globalModelDisplay}
-              </span>
-            </div>
-            <select
-              value={
-                !config.useGlobalDefaults && config.model ? config.model : ""
-              }
-              disabled={config.useGlobalDefaults}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  model: e.target.value || undefined,
-                }))
-              }
-              className={`
-                w-full h-8 px-2.5 text-sm rounded-md border transition-all outline-none
-                ${config.useGlobalDefaults
-                  ? "bg-secondary/30 border-transparent text-muted-foreground/50 cursor-not-allowed"
-                  : "bg-background/50 border-border focus:ring-2 focus:ring-primary/20 focus:border-primary/50"
-                }
-              `}
-            >
-              <option
-                value=""
-                disabled={!config.useGlobalDefaults && !config.model}
-              >
-                {config.useGlobalDefaults ? globalModelDisplay : t.notSet}
-              </option>
-              {availableModels.map((path) => (
-                <option key={path} value={path}>
-                  {formatModelName(path)}
-                </option>
-              ))}
-            </select>
-          </div>
-
+          {/* 1. Prompt Preset Section - 最重要，放第一 */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label
@@ -654,7 +567,7 @@ export function FileConfigModal({
               >
                 <Settings className="w-3.5 h-3.5 shrink-0 opacity-70" />
                 {t.preset}
-                <UITooltip content={t.help?.preset || "閫夋嫨缈昏瘧妯″紡锛氳交灏忚閫傚悎闀挎枃鏈紝鍓ф湰閫傚悎瀵硅瘽锛屽崟鍙ラ€傚悎闆舵暎鍐呭"}>
+                <UITooltip content={t.help?.preset || "选择翻译模式：轻小说适合长文本，剧本适合对话，单句适合零散内容"}>
                   <Info className="w-3 h-3 text-muted-foreground/50 hover:text-primary cursor-help" />
                 </UITooltip>
               </label>
@@ -693,20 +606,20 @@ export function FileConfigModal({
               <option value="script">{t.presetOptions.script}</option>
               <option value="short">{t.presetOptions.short}</option>
             </select>
-            {/* 鐭彞妯″紡璀﹀憡 */}
+            {/* 短句模式警告 */}
             {!config.useGlobalDefaults && config.preset === "short" && (
               <div className="flex items-start gap-1.5 p-2 rounded bg-amber-500/10 border border-amber-500/20">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
                 <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">
                   {lang === "zh"
-                    ? "鐭彞妯″紡浼氬鑷寸炕璇戞晥鐜囧拰璐ㄩ噺涓嬮檷锛屽缓璁娇鐢ㄨ交灏忚鎴栧墽鏈ā寮忋€?
+                    ? "短句模式会导致翻译效率和质量下降，建议使用轻小说或剧本模式。"
                     : "Short mode is only for isolated sentences. Use Novel or Script mode for documents."}
                 </p>
               </div>
             )}
           </div>
 
-          {/* 2. Paths Section - 鏈琛ㄥ拰杈撳嚭鐩綍 */}
+          {/* 2. Paths Section - 术语表和输出目录 */}
           <div className="space-y-4">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
               Paths & Directories
@@ -1280,10 +1193,10 @@ export function LibraryView({
       }
 
       showConfirm({
-        title: lang === "zh" ? "纭绉婚櫎" : "Confirm Remove",
+        title: lang === "zh" ? "确认移除" : "Confirm Remove",
         description:
           lang === "zh"
-            ? "纭畾瑕佷粠闃熷垪涓Щ闄ゆ鏂囦欢鍚楋紵"
+            ? "确定要从队列中移除此文件吗？"
             : "Are you sure you want to remove this file from the queue?",
         variant: "destructive",
         onConfirm: () => {
@@ -1321,7 +1234,7 @@ export function LibraryView({
     window.api?.showNotification(
       "Murasaki Translator",
       lang === "zh"
-        ? `宸叉竻鐞?${completedCount} 涓凡瀹屾垚浠诲姟`
+        ? `已清理 ${completedCount} 个已完成任务`
         : `Cleared ${completedCount} completed tasks`,
     );
   }, [queue, isRunning, lang]);
@@ -1330,10 +1243,10 @@ export function LibraryView({
     if (isRunning) return;
     if (selectedItems.size === 0) return;
     showConfirm({
-      title: lang === "zh" ? "纭绉婚櫎宸查€? : "Confirm Remove Selected",
+      title: lang === "zh" ? "确认移除已选" : "Confirm Remove Selected",
       description:
         lang === "zh"
-          ? `纭畾瑕佺Щ闄ら€変腑鐨?${selectedItems.size} 涓枃浠跺悧锛焋
+          ? `确定要移除选中的 ${selectedItems.size} 个文件吗？`
           : `Are you sure you want to remove the ${selectedItems.size} selected files?`,
       variant: "destructive",
       onConfirm: () => {
@@ -1459,7 +1372,7 @@ export function LibraryView({
       id: "batch", // Special ID to indicate batch mode
       fileName:
         lang === "zh"
-          ? `鎵归噺閰嶇疆 (${selectedItems.size} 涓枃浠?`
+          ? `批量配置 (${selectedItems.size} 个文件)`
           : `Batch Config (${selectedItems.size} files)`,
     });
   }, [selectedItems, queue, lang]);
@@ -1564,10 +1477,10 @@ export function LibraryView({
             </div>
             <div className="text-center space-y-2">
               <h3 className="text-2xl font-bold text-foreground">
-                {(t as any).dropTitle || "閲婃斁浠ユ坊鍔犳枃浠?}
+                {(t as any).dropTitle || "释放以添加文件"}
               </h3>
               <p className="text-base text-muted-foreground">
-                {(t as any).dropHint || "鏀寔 .txt .epub .srt .ass 鏍煎紡"}
+                {(t as any).dropHint || "支持 .txt .epub .srt .ass 格式"}
               </p>
             </div>
             <div className="flex gap-2 mt-2">
@@ -1647,7 +1560,7 @@ export function LibraryView({
             <div className="flex items-center gap-1.5 p-1 bg-secondary/5 rounded-lg border border-border/10">
               {selectedItems.size > 0 && (
                 <span className="h-7 px-2.5 flex items-center justify-center text-[11px] text-primary font-bold rounded-md bg-primary/10 border border-primary/20 min-w-[60px] text-center shadow-sm animate-in fade-in zoom-in duration-200">
-                  {selectedItems.size} {lang === "zh" ? "宸查€? : "Selected"}
+                  {selectedItems.size} {lang === "zh" ? "已选" : "Selected"}
                 </span>
               )}
 
@@ -1659,10 +1572,10 @@ export function LibraryView({
               >
                 {selectedItems.size === queue.length
                   ? lang === "zh"
-                    ? "鍙栨秷鍏ㄩ€?
+                    ? "取消全选"
                     : "Deselect All"
                   : lang === "zh"
-                    ? "鍏ㄩ€?
+                    ? "全选"
                     : "Select All"}
               </Button>
 
@@ -1672,7 +1585,7 @@ export function LibraryView({
                 onClick={handleInvertSelection}
                 className="h-7 text-[11px] font-medium text-muted-foreground hover:text-primary hover:bg-primary/5 transition-all rounded-md px-3 border-border/50 hover:border-primary/30"
               >
-                {lang === "zh" ? "鍙嶉€? : "Invert"}
+                {lang === "zh" ? "反选" : "Invert"}
               </Button>
               {selectedItems.size > 0 ? (
                 <Button
@@ -1696,7 +1609,7 @@ export function LibraryView({
                       className={`h-7 text-[10px] font-bold text-green-600/60 hover:text-green-600 hover:bg-green-500/10 transition-all rounded-md px-2 border-none shadow-none ${isRunning ? "opacity-50 cursor-not-allowed" : ""}`}
                     >
                       <Check className="w-3 h-3 mr-1 opacity-50" />
-                      {lang === "zh" ? "娓呴櫎宸插畬鎴? : "Clear Completed"}
+                      {lang === "zh" ? "清除已完成" : "Clear Completed"}
                     </Button>
                   )}
                   <Button
@@ -1745,10 +1658,10 @@ export function LibraryView({
 
                   <div className="text-center space-y-2 relative z-10">
                     <h3 className="text-xl font-bold text-foreground tracking-tight">
-                      {(t as any).dropTitle || "鎷栨斁鏂囦欢鍒拌繖閲?}
+                      {(t as any).dropTitle || "拖放文件到这里"}
                     </h3>
                     <p className="text-sm text-muted-foreground/70">
-                      {(t as any).emptyDragHint || "鎴栫偣鍑讳换鎰忓娴忚鏂囦欢"}
+                      {(t as any).emptyDragHint || "或点击任意处浏览文件"}
                     </p>
                   </div>
 
@@ -1868,7 +1781,7 @@ export function LibraryView({
                         </Button>
                       </UITooltip>
 
-                      <UITooltip content={lang === "zh" ? "绉婚櫎" : "Remove"}>
+                      <UITooltip content={lang === "zh" ? "移除" : "Remove"}>
                         <Button
                           variant="ghost"
                           size="icon"
