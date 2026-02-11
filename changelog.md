@@ -31,12 +31,6 @@
 *   主进程日志序列化加固，避免循环对象导致日志链路崩溃（`GUI/src/main/index.ts`）。
 *   `ServerManager` 日志改为固定上限，Windows 终止流程改为异步，降低主线程阻塞（`GUI/src/main/serverManager.ts`）。
 
-### 维护与验证
-
-*   本轮涉及文件已清理乱码注释/文案，并做 UTF-8 一致性检查。
-*   校验通过：`cd GUI && npx tsc --noEmit`。
-*   校验通过：`python -m py_compile middleware/server/api_server.py middleware/server/translation_worker.py`。
-
 ---
 
 ## [1.6.2] - 2026-02-10
