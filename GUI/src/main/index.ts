@@ -697,9 +697,9 @@ const REMOTE_SYNC_MIRROR_PATH = join(REMOTE_SYNC_ROOT, "sync-mirror.log");
 const REMOTE_EVENT_LOG_PATH = join(REMOTE_SYNC_ROOT, "network-events.log");
 const REMOTE_MAX_EVENTS = 500;
 const REMOTE_EVENT_LOG_BATCH_SIZE = 200;
-const REMOTE_EVENT_LOG_FLUSH_DELAY_MS = 80;
+const REMOTE_EVENT_LOG_FLUSH_DELAY_MS = 2000;
 const REMOTE_MIRROR_LOG_BATCH_SIZE = 200;
-const REMOTE_MIRROR_LOG_FLUSH_DELAY_MS = 80;
+const REMOTE_MIRROR_LOG_FLUSH_DELAY_MS = 2000;
 
 let remoteSession: {
   url: string;
@@ -3731,7 +3731,9 @@ const runTranslationViaRemoteApi = async (
         return;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      // 动态轮询：运行中快速获取进度(200ms)，空闲/排队时节省资源(1000ms)
+      const pollDelay = status.status === "running" ? 200 : 1000;
+      await new Promise((resolve) => setTimeout(resolve, pollDelay));
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

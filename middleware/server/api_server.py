@@ -831,20 +831,21 @@ async def get_task_status(
     if not task:
         raise HTTPException(404, f"Task {task_id} not found")
 
-    logs_snapshot = list(task.logs)
-    log_total = len(logs_snapshot)
+    # 直接对 task.logs 取长度和切片，避免 list() 全量拷贝
+    # Python GIL 保证 len() 和 slice 操作的原子性
+    log_total = len(task.logs)
     logs_truncated = False
 
     if log_from is None:
         # 兼容旧客户端：默认返回最近 50 条
-        logs = logs_snapshot[-50:]
-        start_index = max(0, log_total - len(logs))
+        start_index = max(0, log_total - 50)
+        logs = task.logs[start_index:]
         logs_truncated = start_index > 0
         next_log_index = start_index + len(logs)
     else:
         start_index = min(log_from, log_total)
         end_index = min(log_total, start_index + log_limit)
-        logs = logs_snapshot[start_index:end_index]
+        logs = task.logs[start_index:end_index]
         next_log_index = start_index + len(logs)
 
     return TaskStatusResponse(
