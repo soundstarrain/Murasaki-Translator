@@ -513,7 +513,7 @@ jobs:
           .venv/bin/python -m pip install --upgrade pip
           .venv/bin/python -m pip install -r requirements.txt
           SMOKE_KEY="smoke-test-key"
-          ./start.sh --host 127.0.0.1 --port 18080 --api-key "$SMOKE_KEY" --enable-openai-proxy --openai-port 18081 > smoke.log 2>&1 &
+          OPENAI_PROXY_TIMEOUT=60 ./start.sh --host 127.0.0.1 --port 18080 --api-key "$SMOKE_KEY" --enable-openai-proxy --openai-port 18081 > smoke.log 2>&1 &
           SERVER_PID=$!
           cleanup() {
             kill "$SERVER_PID" >/dev/null 2>&1 || true
@@ -536,6 +536,11 @@ jobs:
           if [ "$READY" -ne 1 ]; then
             echo "Server did not become ready in time"
             tail -n 200 smoke.log || true
+            if [ -f openai-proxy.log ]; then
+              echo "----- openai-proxy.log (tail) -----"
+              tail -n 200 openai-proxy.log || true
+              echo "-----------------------------------"
+            fi
             exit 1
           fi
 
