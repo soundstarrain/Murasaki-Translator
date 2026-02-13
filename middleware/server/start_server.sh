@@ -17,6 +17,17 @@ OPENAI_PROXY_TIMEOUT="${OPENAI_PROXY_TIMEOUT:-30}"
 VENV_DIR=".venv"
 PYTHON_BIN="${MURASAKI_PYTHON_BIN:-python3}"
 
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+  else
+    echo "[ERROR] Python not found. Please install python3 or set MURASAKI_PYTHON_BIN."
+    exit 1
+  fi
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model)
@@ -49,12 +60,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ! -x "${VENV_DIR}/bin/python3" ]]; then
+if [[ ! -x "${VENV_DIR}/bin/python" && ! -x "${VENV_DIR}/bin/python3" ]]; then
   echo "[INFO] Creating virtual environment: ${VENV_DIR}"
   "${PYTHON_BIN}" -m venv "${VENV_DIR}"
 fi
 
-PYTHON="${VENV_DIR}/bin/python3"
+if [[ -x "${VENV_DIR}/bin/python" ]]; then
+  PYTHON="${VENV_DIR}/bin/python"
+elif [[ -x "${VENV_DIR}/bin/python3" ]]; then
+  PYTHON="${VENV_DIR}/bin/python3"
+else
+  echo "[ERROR] Virtualenv python not found under ${VENV_DIR}/bin"
+  exit 1
+fi
 
 if ! "${PYTHON}" -c "import fastapi,uvicorn,httpx,requests" >/dev/null 2>&1; then
   echo "[INFO] Installing dependencies into ${VENV_DIR}..."
@@ -79,7 +97,6 @@ fi
 export MURASAKI_API_KEY="${API_KEY}"
 
 wait_for_openai_proxy() {
-  local url="http://${HOST}:${OPENAI_PORT}/health"
   local deadline=$((SECONDS + OPENAI_PROXY_TIMEOUT))
   while [ $SECONDS -lt $deadline ]; do
     if "$PYTHON" - <<'PY' >/dev/null 2>&1
@@ -134,7 +151,11 @@ if [[ "$ENABLE_OPENAI_PROXY" == "1" ]]; then
   ) >> "${OPENAI_PROXY_LOG}" 2>&1 &
   OPENAI_PROXY_PID=$!
 
-  export OPENAI_PROXY_HEALTH="http://${HOST}:${OPENAI_PORT}/health"
+  HEALTH_HOST="$HOST"
+  if [[ "$HEALTH_HOST" == "0.0.0.0" || "$HEALTH_HOST" == "::" || -z "$HEALTH_HOST" ]]; then
+    HEALTH_HOST="127.0.0.1"
+  fi
+  export OPENAI_PROXY_HEALTH="http://${HEALTH_HOST}:${OPENAI_PORT}/health"
   if ! wait_for_openai_proxy; then
     echo "[ERROR] OpenAI proxy failed to start on ${HOST}:${OPENAI_PORT}"
     if [[ -f "${OPENAI_PROXY_LOG}" ]]; then
