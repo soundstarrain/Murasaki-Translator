@@ -82,7 +82,7 @@ wait_for_openai_proxy() {
   local url="http://${HOST}:${OPENAI_PORT}/health"
   local deadline=$((SECONDS + OPENAI_PROXY_TIMEOUT))
   while [ $SECONDS -lt $deadline ]; do
-    if "$PYTHON" - <<'PY' >/dev/null 2>&1; then
+    if "$PYTHON" - <<'PY' >/dev/null 2>&1
 import os
 import sys
 import urllib.request
