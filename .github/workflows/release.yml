@@ -509,6 +509,9 @@ jobs:
           cd dist-cli
           tar -xzf murasaki-server-linux-x64.tar.gz
           cd murasaki-server
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
           SMOKE_KEY="smoke-test-key"
           ./start.sh --host 127.0.0.1 --port 18080 --api-key "$SMOKE_KEY" --enable-openai-proxy --openai-port 18081 > smoke.log 2>&1 &
           SERVER_PID=$!
@@ -518,7 +521,7 @@ jobs:
           trap cleanup EXIT
 
           READY=0
-          for i in $(seq 1 120); do
+          for i in $(seq 1 300); do
             if curl -fsS http://127.0.0.1:18080/health >/tmp/health.json; then
               API_AUTH_CODE=$(curl -sS -o /tmp/status.json -w "%{http_code}" -H "Authorization: Bearer $SMOKE_KEY" http://127.0.0.1:18080/api/v1/status || true)
               OPENAI_AUTH_CODE=$(curl -sS -o /tmp/models.json -w "%{http_code}" -H "Authorization: Bearer $SMOKE_KEY" http://127.0.0.1:18081/v1/models || true)

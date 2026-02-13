@@ -75,7 +75,7 @@ Murasaki 模型针对术语表进行了特化训练，支持 **Prompt 级术语�
 
 | 平台 | GPU | 下载格式 | 一键运行 |
 |------|-----|----------|----------|
-| **Windows** | NVIDIA / AMD / Intel | `.exe` 安装包 | ✅ |
+| **Windows** | NVIDIA / AMD / Intel | `.zip` 压缩包（内含 `.exe`） | ✅ |
 | **macOS** | Apple Silicon / Intel | `.dmg` | ✅ |
 | **Linux Desktop** | 所有 GPU (Vulkan) | `.AppImage` | ✅ |
 | **Linux Server** | 所有 GPU | CLI `.tar.gz` | ⚠️ 需装依赖 |
@@ -99,21 +99,67 @@ Murasaki 模型针对术语表进行了特化训练，支持 **Prompt 级术语�
 |------|------|------|
 | Windows | `*-win-cuda-x64.zip` 或 `*-win-vulkan-x64.zip` | 解压后运行 `Murasaki Translator.exe` |
 | macOS | `*-arm64.dmg` 或 `*.dmg` | 拖入 Applications 后运行 |
-| Linux | `*.AppImage` | `chmod +x` 后双击运行 |
+| Linux Desktop | `*.AppImage` | `chmod +x` 后双击运行 |
 
-> 更多安装选项（Linux CLI 服务器、CUDA 编译等）请参阅 **[平台兼容性文档](./PLATFORM_COMPATIBILITY.md)**。
+> 更多安装选项请参阅 **[平台兼容性文档](./PLATFORM_COMPATIBILITY.md)**。
 
 *(如需通过源码编译，请参考 [开发指南](./DEVELOPMENT.md)。)*
 
 #### 2. 下载模型
 
-前往 [Hugging Face](https://huggingface.co/Murasaki-Project) 下载 GGUF 格式的模型文件。
+在GUI的模型管理页面在线下载即可，或前往 [Hugging Face](https://huggingface.co/Murasaki-Project) 下载模型文件。
 
 #### 3. 开始翻译
 
-将下载的模型文件放入 `models` 目录中，启动软件并上传需要翻译的文件即可开始工作。
+将下载的模型文件放入 `models` 目录中。(通过模型管理内置下载器下载的可以跳过这一步直接开始翻译)
    - Windows: `解压目录\resources\middleware\models`
    - macOS: `应用程序/Murasaki Translator.app/Contents/Resources/middleware/models`
+
+### Linux Server 远程部署（API）
+
+适用于远程 GPU 服务器或云端平台（如 autodl）。下面是从“下载模型 → 部署服务 → GUI 连接”的完整流程。
+
+#### 1. 下载模型（示例）
+
+```bash
+MODEL_DIR="$HOME/murasaki-models"
+mkdir -p "$MODEL_DIR"
+
+MODEL_PAGE_URL="https://huggingface.co/Murasaki-Project/Murasaki-14B-v0.2-GGUF/blob/main/Murasaki-14B-v0.2-IQ4_XS.gguf"
+MODEL_URL="${MODEL_PAGE_URL}?download=1"
+MODEL_PATH="$MODEL_DIR/Murasaki-14B-v0.2-IQ4_XS.gguf"
+
+curl -L "$MODEL_URL" -o "$MODEL_PATH"
+```
+
+#### 2. 部署并启动服务
+
+```bash
+API_KEY='replace-with-strong-key'
+curl -fsSL https://github.com/soundstarrain/Murasaki-Translator/releases/latest/download/murasaki-server-linux-x64.tar.gz | tar -xz
+cd murasaki-server
+nohup ./start.sh --host 127.0.0.1 --port 8000 --model "$MODEL_PATH" --api-key "$API_KEY" > server.log 2>&1 &
+```
+
+#### 3. 本地建立 SSH 隧道
+
+```bash
+ssh -N -L 8000:127.0.0.1:8000 user@your-server
+```
+
+#### 4. GUI 连接
+
+在服务管理页面填写：
+- `Server URL`: `http://127.0.0.1:8000`
+- `API Key`: 你部署时设置的 `API_KEY`
+
+需要替换的字段：
+- `MODEL_PAGE_URL` / `MODEL_URL`：换成你要下载的模型地址
+- `MODEL_PATH`：模型实际保存路径
+- `API_KEY`：换成强度足够的密钥
+- `user@your-server`：你的 SSH 用户名与服务器地址
+- `--port`：端口冲突时请更换
+- `--host`：需要局域网/公网访问时可改为 `0.0.0.0`
 
 ### 性能参考
 在 **GeForce RTX 4080 Laptop** 环境下，运行 **4-bit 量化模型**，4个并发任务：
