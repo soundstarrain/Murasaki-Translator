@@ -57,8 +57,10 @@ import {
   generateId,
   getFileType,
 } from "../types/common";
+import type { ProcessExitPayload } from "../types/api";
 import { FileConfigModal } from "./LibraryView";
 import { stripSystemMarkersForDisplay } from "../lib/displayText";
+import type { UseRemoteRuntimeResult } from "../hooks/useRemoteRuntime";
 
 // Window.api type is defined in src/types/api.d.ts
 
@@ -66,10 +68,17 @@ interface DashboardProps {
   lang: Language;
   active?: boolean;
   onRunningChange?: (isRunning: boolean) => void;
+  remoteRuntime?: UseRemoteRuntimeResult;
+}
+
+interface RemoteModelInfo {
+  name: string;
+  path: string;
+  sizeGb?: number;
 }
 
 export const Dashboard = forwardRef<any, DashboardProps>(
-  ({ lang, active, onRunningChange }, ref) => {
+  ({ lang, active, onRunningChange, remoteRuntime }, ref) => {
     const t = translations[lang];
 
     // Queue System (Synced with LibraryView)
@@ -96,7 +105,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             status: "pending" as const,
           })) as QueueItem[];
         }
-      } catch (e) {}
+      } catch (e) { }
       return [];
     });
 
@@ -116,7 +125,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             });
             setCompletedFiles(completed);
           }
-        } catch (e) {}
+        } catch (e) { }
       }
     }, [active]);
 
@@ -146,9 +155,18 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     const [modelsInfoMap, setModelsInfoMap] = useState<
       Record<string, { paramsB?: number; sizeGB?: number }>
     >({});
+    const [remoteModels, setRemoteModels] = useState<RemoteModelInfo[]>([]);
+    const [remoteModelPath, setRemoteModelPath] = useState<string>("");
+    const [, setRemoteLoading] = useState(false);
 
     const modelInfoRef = useRef<any>(null); // Added for modelInfoRef.current
     const modelInfo = modelInfoRef.current;
+    const isRemoteMode = Boolean(remoteRuntime?.isRemoteMode);
+    const activeModelPath = isRemoteMode ? remoteModelPath : modelPath;
+    const activeModelsCount = isRemoteMode ? remoteModels.length : models.length;
+    const selectedRemoteInfo = isRemoteMode
+      ? remoteModels.find((model) => model.path === remoteModelPath)
+      : null;
     const { alertProps, showAlert, showConfirm } = useAlertModal();
 
     const fetchData = async () => {
@@ -162,7 +180,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             const info = await window.api?.getModelInfo(model);
             if (info)
               infoMap[model] = { paramsB: info.paramsB, sizeGB: info.sizeGB };
-          } catch (e) {}
+          } catch (e) { }
         }
         setModelsInfoMap(infoMap);
       }
@@ -170,34 +188,69 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       if (g) setGlossaries(g);
     };
 
+    const fetchRemoteModels = async () => {
+      if (!isRemoteMode) {
+        setRemoteModels([]);
+        return;
+      }
+      setRemoteLoading(true);
+      try {
+        // @ts-ignore
+        const result = await window.api?.remoteModels?.();
+        if (result?.ok && Array.isArray(result.data)) {
+          const mapped = result.data
+            .map((item: any) => ({
+              name: item?.name || item?.path?.split(/[/\\]/).pop() || "",
+              path: item?.path || item?.name || "",
+              sizeGb: item?.sizeGb ?? item?.size_gb ?? item?.size,
+            }))
+            .filter((item: RemoteModelInfo) => item.path);
+          setRemoteModels(mapped);
+        } else {
+          setRemoteModels([]);
+        }
+      } catch (e) {
+        setRemoteModels([]);
+      }
+      setRemoteLoading(false);
+    };
+
     // Sync Model on Active - 每次进入页面时主动获取模型信息
     useEffect(() => {
-      if (active) {
-        fetchData();
-        setPromptPreset(localStorage.getItem("config_preset") || "novel");
-        const path = localStorage.getItem("config_model");
-        if (path) {
-          const name = path.split(/[/\\]/).pop() || path;
-          setModelPath(path);
-          // 每次进入时都主动获取模型详细信息
-          window.api
-            ?.getModelInfo(path)
-            .then((info) => {
-              if (info) {
-                modelInfoRef.current = { ...info, name: name, path: path };
-              } else {
-                modelInfoRef.current = { name: name, path: path };
-              }
-            })
-            .catch(() => {
-              modelInfoRef.current = { name: name, path: path };
-            });
-        } else {
-          modelInfoRef.current = null;
-          setModelPath("");
-        }
+      if (!active) return;
+      fetchData();
+      if (isRemoteMode) {
+        fetchRemoteModels();
       }
-    }, [active]);
+      setPromptPreset(localStorage.getItem("config_preset") || "novel");
+      if (isRemoteMode) {
+        const savedRemote = localStorage.getItem("config_remote_model") || "";
+        setRemoteModelPath(savedRemote);
+        modelInfoRef.current = null;
+        return;
+      }
+      const path = localStorage.getItem("config_model");
+      if (path) {
+        const name = path.split(/[/\\]/).pop() || path;
+        setModelPath(path);
+        // 读取模型信息用于展示
+        window.api
+          ?.getModelInfo(path)
+          .then((info) => {
+            if (info) {
+              modelInfoRef.current = { ...info, name: name, path: path };
+            } else {
+              modelInfoRef.current = { name: name, path: path };
+            }
+          })
+          .catch(() => {
+            modelInfoRef.current = { name: name, path: path };
+          });
+      } else {
+        modelInfoRef.current = null;
+        setModelPath("");
+      }
+    }, [active, isRemoteMode]);
     const [glossaries, setGlossaries] = useState<string[]>([]);
 
     // Save Options
@@ -252,6 +305,14 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     const triggersBufferRef = useRef<TriggerEvent[]>([]);
     // Buffer for assembling split log chunks (fixing JSON parse errors)
     const lineBufferRef = useRef("");
+    const remoteInfoRef = useRef<{
+      executionMode?: string;
+      source?: string;
+      serverUrl?: string;
+      taskId?: string;
+      model?: string;
+      serverVersion?: string;
+    } | null>(null);
     const progressDataRef = useRef<{
       total: number;
       current: number;
@@ -299,7 +360,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       speedGen: 0,
       retries: 0,
     });
-    const [displayElapsed, setDisplayElapsed] = useState(0); // 本地平滑计时（基于后端数据）
+    const [displayElapsed, setDisplayElapsed] = useState(0); // 本地平滑计时(基于后端数据)
     const [displayRemaining, setDisplayRemaining] = useState(0); // 本地平滑倒计时
     const [chartData, setChartData] = useState<any[]>([]);
     const [chartMode, setChartMode] = useState<
@@ -374,26 +435,33 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     }, []);
 
     useEffect(() => {
-      const savedModel = localStorage.getItem("config_model");
-      if (savedModel) setModelPath(savedModel);
+      if (isRemoteMode) {
+        const savedRemote = localStorage.getItem("config_remote_model");
+        if (savedRemote) setRemoteModelPath(savedRemote);
+        fetchRemoteModels();
+      } else {
+        const savedModel = localStorage.getItem("config_model");
+        if (savedModel) setModelPath(savedModel);
+      }
       const savedGlossary = localStorage.getItem("config_glossary_path");
       if (savedGlossary) setGlossaryPath(savedGlossary);
       fetchData();
-    }, []);
+    }, [isRemoteMode]);
 
     useEffect(() => {
+      if (isRemoteMode) return;
       if (modelPath) {
         window.api
           ?.getModelInfo(modelPath)
           .then((info) => (modelInfoRef.current = info));
 
-        // 检查是否为官方模型，显示识别信息
+        // 根据模型名称识别预设信息
         const config = identifyModel(modelPath);
         if (config) {
-          console.log(`[Murasaki] 识别到官方模型: ${config.displayName}`);
+          console.log(`[Murasaki] 识别到模型: ${config.displayName}`);
         }
       }
-    }, [modelPath]);
+    }, [modelPath, isRemoteMode]);
 
     // Confirm sync with file_queue for legacy
     useEffect(() => {
@@ -417,15 +485,22 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       }
     }, [currentQueueIndex]);
 
-    const handleProcessExit = useCallback((code: number) => {
+    const handleProcessExit = useCallback((payload: ProcessExitPayload) => {
+      const code = payload?.code ?? null;
+      const signal = payload?.signal ?? null;
+      const stopRequested = payload?.stopRequested === true;
       setIsRunning(false);
       const success = code === 0;
-      setLogs((prev) => [
-        ...prev,
-        success
-          ? "✅ Translation completed successfully!"
-          : `❌ Process exited with code ${code}`,
-      ]); // Keep English for logs for now or add keys later
+      const message = success
+        ? "✅ Translation completed successfully!"
+        : stopRequested
+          ? "⏹️ Translation stopped by user."
+          : code === null && signal
+            ? `❌ Process terminated by signal ${signal}`
+            : code === null
+              ? "❌ Process terminated unexpectedly (no exit code)"
+              : `❌ Process exited with code ${code}`;
+      setLogs((prev) => [...prev, message]); // Keep English for logs for now or add keys later
 
       // Finalize history record
       if (currentRecordIdRef.current) {
@@ -436,13 +511,21 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           finalStatsRef.current?.avgSpeed ??
           (effectiveDuration > 0
             ? Number(
-                (progressDataRef.current.chars / effectiveDuration).toFixed(1),
-              )
+              (progressDataRef.current.chars / effectiveDuration).toFixed(1),
+            )
             : 0);
         updateRecord(currentRecordIdRef.current, {
           endTime: new Date().toISOString(),
           duration: Math.round(effectiveDuration),
           status: success ? "completed" : "interrupted",
+          executionMode: remoteInfoRef.current?.executionMode as any || "local",
+          remoteInfo: remoteInfoRef.current ? {
+            serverUrl: remoteInfoRef.current.serverUrl || "",
+            source: remoteInfoRef.current.source || "",
+            taskId: remoteInfoRef.current.taskId,
+            model: remoteInfoRef.current.model,
+            serverVersion: remoteInfoRef.current.serverVersion,
+          } : undefined,
           totalBlocks: progressDataRef.current.total,
           completedBlocks: progressDataRef.current.current,
           totalLines: progressDataRef.current.lines,
@@ -546,6 +629,16 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           const log = line.trim();
           if (!log) return;
 
+          if (log.startsWith("JSON_REMOTE_INFO:")) {
+            try {
+              const data = JSON.parse(log.substring("JSON_REMOTE_INFO:".length));
+              remoteInfoRef.current = data;
+            } catch (e) {
+              console.error("JSON_REMOTE_INFO Parse Error:", e);
+            }
+            return;
+          }
+
           if (log.startsWith("JSON_MONITOR:")) {
             try {
               const monitorPayload = JSON.parse(
@@ -579,7 +672,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           if (log.startsWith("JSON_PROGRESS:")) {
             try {
               const data = JSON.parse(log.substring("JSON_PROGRESS:".length));
-              // 直接使用后端数据，不保留旧值（避免上一次运行的残留）
+              // 直接使用后端数据，不保留旧值(避免上一次运行的残留)
               setProgress((prev) => ({
                 current: data.current ?? 0,
                 total: data.total ?? 0,
@@ -608,9 +701,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                 speeds:
                   data.speed_chars > 0
                     ? [
-                        ...progressDataRef.current.speeds,
-                        data.speed_chars,
-                      ].slice(-20)
+                      ...progressDataRef.current.speeds,
+                      data.speed_chars,
+                    ].slice(-20)
                     : progressDataRef.current.speeds,
               };
 
@@ -661,7 +754,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             try {
               const jsonStr = log.substring(
                 log.indexOf("JSON_PREVIEW_BLOCK:") +
-                  "JSON_PREVIEW_BLOCK:".length,
+                "JSON_PREVIEW_BLOCK:".length,
               );
               const data = JSON.parse(jsonStr);
               // Update specific block
@@ -678,7 +771,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                     "last_preview_blocks",
                     JSON.stringify(next),
                   );
-                } catch (e) {}
+                } catch (e) { }
                 return next;
               });
             } catch (e) {
@@ -823,7 +916,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         isAutoScrolling.current = true;
         outPreviewRef.current.scrollTop = outPreviewRef.current.scrollHeight;
       }
-      // 重置标志位（稍微延迟以防事件触发）
+      // 重置标志位(稍微延迟以防事件触发)
       setTimeout(() => {
         isAutoScrolling.current = false;
       }, 50);
@@ -877,8 +970,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       return () => clearInterval(timer);
     }, [isRunning, progress.elapsed]);
 
-    // 更新后端时间参考点（每次收到 JSON_PROGRESS 时）
-    // 更新后端时间参考点（每次收到 JSON_PROGRESS 时）
+    // 更新后端时间参考点(每次收到 JSON_PROGRESS 时)
+    // 更新后端时间参考点(每次收到 JSON_PROGRESS 时)
     useEffect(() => {
       if (progress.elapsed > 0) {
         lastBackendElapsedRef.current = progress.elapsed;
@@ -1127,10 +1220,15 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       );
 
       const effectiveModelPath = (
-        customConfig.model ||
-        localStorage.getItem("config_model") ||
-        modelPath ||
-        ""
+        isRemoteMode
+          ? customConfig.remoteModel ||
+          localStorage.getItem("config_remote_model") ||
+          remoteModelPath ||
+          ""
+          : customConfig.model ||
+          localStorage.getItem("config_model") ||
+          modelPath ||
+          ""
       ).trim();
       if (!effectiveModelPath) {
         // Use custom AlertModal
@@ -1155,10 +1253,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             : parseInt(localStorage.getItem("config_gpu") || "-1", 10) || -1,
         ctxSize: ctxValue.toString(),
         chunkSize: calculatedChunkSize.toString(),
-        serverUrl: pickCustom(
-          customConfig.serverUrl,
-          localStorage.getItem("config_server"),
-        ),
         outputDir:
           customConfig.outputDir !== undefined
             ? customConfig.outputDir
@@ -1179,8 +1273,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         deviceMode: pickCustom(
           customConfig.deviceMode,
           (localStorage.getItem("config_device_mode") || "auto") as
-            | "auto"
-            | "cpu",
+          | "auto"
+          | "cpu",
         ),
 
         // Just ensure no style overrides causing issues here, actual display is in the JSX
@@ -1220,9 +1314,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             localStorage.getItem("config_line_check") !== "false",
           )
             ? pickCustom(
-                customConfig.strictMode,
-                localStorage.getItem("config_strict_mode") || "off",
-              )
+              customConfig.strictMode,
+              localStorage.getItem("config_strict_mode") || "off",
+            )
             : "off",
         repPenaltyBase:
           customConfig.repPenaltyBase ??
@@ -1262,9 +1356,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           forceResume !== undefined
             ? forceResume
             : pickCustom(
-                customConfig.resume,
-                localStorage.getItem("config_resume") === "true",
-              ),
+              customConfig.resume,
+              localStorage.getItem("config_resume") === "true",
+            ),
 
         // Dynamic Retry Strategy (动态重试策略)
         retryTempBoost: pickCustom(
@@ -1280,6 +1374,14 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         daemonMode: pickCustom(
           customConfig.daemonMode,
           localStorage.getItem("config_daemon_mode") === "true",
+        ),
+        remoteUrl: pickCustom(
+          (customConfig as any).remoteUrl,
+          localStorage.getItem("config_remote_url") || "",
+        ),
+        apiKey: pickCustom(
+          (customConfig as any).apiKey,
+          localStorage.getItem("config_api_key") || "",
         ),
 
         // Concurrency
@@ -1333,6 +1435,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             ? customConfig.saveCot
             : localStorage.getItem("config_save_cot") === "true",
         modelPath: effectiveModelPath,
+        remoteModel: isRemoteMode ? effectiveModelPath : undefined,
       };
 
       // Create history record
@@ -1340,6 +1443,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       currentRecordIdRef.current = recordId;
       logsBufferRef.current = [];
       triggersBufferRef.current = [];
+
+      // 重置远程信息(新任务开始)
+      remoteInfoRef.current = null;
 
       const newRecord: TranslationRecord = {
         id: recordId,
@@ -1406,10 +1512,15 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           ? queueItem.config
           : undefined;
       const effectiveModelPath = (
-        customConfig?.model ||
-        modelPath ||
-        localStorage.getItem("config_model") ||
-        ""
+        isRemoteMode
+          ? customConfig?.remoteModel ||
+          localStorage.getItem("config_remote_model") ||
+          remoteModelPath ||
+          ""
+          : customConfig?.model ||
+          modelPath ||
+          localStorage.getItem("config_model") ||
+          ""
       ).trim();
 
       const config = {
@@ -1417,6 +1528,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         outputDir:
           customConfig?.outputDir || localStorage.getItem("config_output_dir"),
         modelPath: effectiveModelPath, // 传递模型路径用于生成输出文件名
+        remoteModel: isRemoteMode ? effectiveModelPath : undefined,
       };
 
       // --- Auto-Match Glossary Logic (Refined) ---
@@ -1468,9 +1580,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           onSkip:
             index < queue.length - 1
               ? () => {
-                  setConfirmModal(null);
-                  checkAndStart(queue[index + 1].path, index + 1);
-                }
+                setConfirmModal(null);
+                checkAndStart(queue[index + 1].path, index + 1);
+              }
               : undefined,
           onStopAll: () => {
             setConfirmModal(null);
@@ -1496,7 +1608,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     const handleStop = () => {
       console.log("[Dashboard] User requested stop");
       window.api?.stopTranslation();
-      // 立即更新 UI 状态（后端也会发送 process-exit 事件）
+      // 立即更新 UI 状态(后端也会发送 process-exit 事件)
       setIsRunning(false);
       setCurrentQueueIndex(-1);
     };
@@ -1533,7 +1645,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
 
       const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf]/g;
 
-      // 构建比较字符集（包含异体字）
+      // 构建比较字符集(包含异体字)
       const compareChars = new Set<string>();
       const matches = compareText.match(cjkRegex);
       if (matches) {
@@ -1554,7 +1666,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       let inHighlight = false;
 
       for (const char of text) {
-        // 检查字符是否在比较集中（包含异体字）
+        // 检查字符是否在比较集中(包含异体字)
         const isCJK = cjkRegex.test(char);
         cjkRegex.lastIndex = 0;
 
@@ -1755,8 +1867,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       );
     };
 
-    const needsModel = models.length === 0;
+    const needsModel = activeModelsCount === 0;
     const canStart = queue.length > 0 && !isRunning;
+    const activeConfirmModal = confirmModal;
 
     return (
       <div
@@ -1827,15 +1940,14 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                           i === currentQueueIndex ? activeQueueItemRef : null
                         }
                         className={`flex items-center gap-2 p-2.5 rounded-lg text-xs group transition-all 
-                                                ${
-                                                  i === currentQueueIndex
-                                                    ? "bg-primary/20 text-primary shadow-sm ring-1 ring-primary/20"
-                                                    : completedFiles.has(
-                                                          item.path,
-                                                        )
-                                                      ? "bg-secondary/30 text-muted-foreground opacity-60 hover:opacity-100"
-                                                      : "hover:bg-secondary"
-                                                }`}
+                                                ${i === currentQueueIndex
+                            ? "bg-primary/20 text-primary shadow-sm ring-1 ring-primary/20"
+                            : completedFiles.has(
+                              item.path,
+                            )
+                              ? "bg-secondary/30 text-muted-foreground opacity-60 hover:opacity-100"
+                              : "hover:bg-secondary"
+                          }`}
                         onDragOver={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -1897,8 +2009,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                             {(completedFiles.has(item.path) ||
                               (currentQueueIndex > 0 &&
                                 i < currentQueueIndex)) && (
-                              <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-green-500 rounded-full ring-1 ring-background" />
-                            )}
+                                <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-green-500 rounded-full ring-1 ring-background" />
+                              )}
                           </div>
                         )}
                         <div className="flex-1 min-w-0 flex flex-col gap-0.5">
@@ -1990,7 +2102,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             {/* Config Row - Compact Property Bar Style */}
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-2 shrink-0">
               <div
-                className={`bg-card/80 hover:bg-card px-3 py-2 rounded-lg border flex items-center gap-3 transition-all cursor-pointer ${!modelPath && models.length > 0 ? "border-amber-500/50 ring-1 ring-amber-500/20" : "border-border/50 hover:border-border"}`}
+                className={`bg-card/80 hover:bg-card px-3 py-2 rounded-lg border flex items-center gap-3 transition-all cursor-pointer ${!activeModelPath && activeModelsCount > 0 ? "border-amber-500/50 ring-1 ring-amber-500/20" : "border-border/50 hover:border-border"}`}
               >
                 <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white">
                   <Bot className="w-3.5 h-3.5" />
@@ -2000,7 +2112,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                     <span className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">
                       {t.dashboard.modelLabel}
                     </span>
-                    {modelInfo && (
+                    {!isRemoteMode && modelInfo && (
                       <div className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
                         <span className="bg-secondary/50 px-1 py-0.5 rounded font-mono">
                           {modelInfo.paramsB || "--"}B
@@ -2015,41 +2127,64 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                         </span>
                       </div>
                     )}
+                    {isRemoteMode && selectedRemoteInfo?.sizeGb && (
+                      <div className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                        <span className="bg-secondary/50 px-1 py-0.5 rounded font-mono">
+                          {selectedRemoteInfo.sizeGb.toFixed(2)}GB
+                        </span>
+                      </div>
+                    )}
                   </div>
                   <select
                     className="w-full bg-transparent text-sm font-medium text-foreground outline-none cursor-pointer truncate -ml-0.5"
-                    value={modelPath}
+                    value={activeModelPath}
                     onChange={(e) => {
-                      setModelPath(e.target.value);
-                      localStorage.setItem("config_model", e.target.value);
+                      const nextValue = e.target.value;
+                      if (isRemoteMode) {
+                        setRemoteModelPath(nextValue);
+                        localStorage.setItem("config_remote_model", nextValue);
+                      } else {
+                        setModelPath(nextValue);
+                        localStorage.setItem("config_model", nextValue);
+                      }
                     }}
                   >
                     <option value="">
-                      {models.length > 0
+                      {activeModelsCount > 0
                         ? t.dashboard.selectModel
                         : t.dashboard.noModel}
                     </option>
-                    {[...models]
-                      .sort((a, b) => {
-                        const paramsA = modelsInfoMap[a]?.paramsB ?? Infinity;
-                        const paramsB = modelsInfoMap[b]?.paramsB ?? Infinity;
-                        if (paramsA !== paramsB) return paramsA - paramsB;
-                        const sizeA = modelsInfoMap[a]?.sizeGB ?? Infinity;
-                        const sizeB = modelsInfoMap[b]?.sizeGB ?? Infinity;
-                        return sizeA - sizeB;
-                      })
-                      .map((m) => (
-                        <option key={m} value={m}>
-                          {m.replace(".gguf", "")}
+                    {isRemoteMode
+                      ? remoteModels.map((model) => (
+                        <option key={model.path} value={model.path}>
+                          {model.name}
                         </option>
-                      ))}
+                      ))
+                      : [...models]
+                        .sort((a, b) => {
+                          const paramsA = modelsInfoMap[a]?.paramsB ?? Infinity;
+                          const paramsB = modelsInfoMap[b]?.paramsB ?? Infinity;
+                          if (paramsA !== paramsB) return paramsA - paramsB;
+                          const sizeA = modelsInfoMap[a]?.sizeGB ?? Infinity;
+                          const sizeB = modelsInfoMap[b]?.sizeGB ?? Infinity;
+                          return sizeA - sizeB;
+                        })
+                        .map((m) => (
+                          <option key={m} value={m}>
+                            {m.replace(".gguf", "")}
+                          </option>
+                        ))}
                   </select>
                 </div>
                 <div
                   title={t.modelView.refresh || "Refresh"}
                   onClick={(e) => {
                     e.stopPropagation();
-                    fetchData();
+                    if (isRemoteMode) {
+                      fetchRemoteModels();
+                    } else {
+                      fetchData();
+                    }
                   }}
                   className="p-1 hover:bg-muted rounded-full cursor-pointer transition-colors z-10 mr-1 group/refresh"
                 >
@@ -2432,11 +2567,10 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             <div className="flex items-center gap-2">
               <UITooltip content="TXT文件辅助对齐：适用于漫画和游戏文本，辅助输出按照行进行对齐。小说等连贯性文本不建议开启，会影响翻译效果。">
                 <div
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${
-                    alignmentMode
-                      ? "bg-indigo-500/15 border-indigo-500/40 text-indigo-500 dark:text-indigo-400"
-                      : "bg-secondary/50 border-border/60 text-muted-foreground hover:bg-secondary/80 hover:border-border hover:text-foreground"
-                  }`}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${alignmentMode
+                    ? "bg-indigo-500/15 border-indigo-500/40 text-indigo-500 dark:text-indigo-400"
+                    : "bg-secondary/50 border-border/60 text-muted-foreground hover:bg-secondary/80 hover:border-border hover:text-foreground"
+                    }`}
                   onClick={() => {
                     const nextValue = !alignmentMode;
                     setAlignmentMode(nextValue);
@@ -2456,11 +2590,10 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                 content={<>CoT导出：另外保存一份带思考过程的翻译文本</>}
               >
                 <div
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${
-                    saveCot
-                      ? "bg-amber-500/15 border-amber-500/40 text-amber-500 dark:text-amber-400"
-                      : "bg-secondary/50 border-border/60 text-muted-foreground hover:bg-secondary/80 hover:border-border hover:text-foreground"
-                  }`}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${saveCot
+                    ? "bg-amber-500/15 border-amber-500/40 text-amber-500 dark:text-amber-400"
+                    : "bg-secondary/50 border-border/60 text-muted-foreground hover:bg-secondary/80 hover:border-border hover:text-foreground"
+                    }`}
                   onClick={() => {
                     setSaveCot(!saveCot);
                     localStorage.setItem("config_save_cot", String(!saveCot));
@@ -2520,79 +2653,84 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         </div>
 
         {/* Confirmation Modal for Overwrite/Resume */}
-        {confirmModal && confirmModal.isOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-300">
-            <Card className="w-[420px] max-w-[95vw] overflow-hidden border-border bg-background shadow-2xl animate-in zoom-in-95 duration-300 p-8">
-              <div className="flex items-center gap-4 mb-6">
-                <AlertTriangle className="w-6 h-6 text-amber-500" />
-                <h3 className="text-xl font-bold text-foreground">
-                  {t.dashboard.fileExistTitle}
-                </h3>
-              </div>
+        {
+          activeConfirmModal && activeConfirmModal!.isOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-300">
+              <Card className="w-[420px] max-w-[95vw] overflow-hidden border-border bg-background shadow-2xl animate-in zoom-in-95 duration-300 p-8">
+                <div className="flex items-center gap-4 mb-6">
+                  <AlertTriangle className="w-6 h-6 text-amber-500" />
+                  <h3 className="text-xl font-bold text-foreground">
+                    {t.dashboard.fileExistTitle}
+                  </h3>
+                </div>
 
-              <p className="text-sm text-muted-foreground mb-8">
-                {t.dashboard.fileExistMsg}
-                <span className="block mt-2 font-mono text-[11px] bg-secondary/50 text-foreground px-3 py-2 rounded border border-border break-all">
-                  {confirmModal.file}
-                </span>
-              </p>
+                <p className="text-sm text-muted-foreground mb-8">
+                  {t.dashboard.fileExistMsg}
+                  <span className="block mt-2 font-mono text-[11px] bg-secondary/50 text-foreground px-3 py-2 rounded border border-border break-all">
+                    {activeConfirmModal!.file}
+                  </span>
+                </p>
 
-              <div className="space-y-3">
-                <Button
-                  onClick={confirmModal.onResume}
-                  className="w-full h-12 bg-indigo-600 hover:bg-indigo-500 dark:bg-primary dark:hover:bg-primary/90 text-white font-bold shadow-lg shadow-indigo-200 dark:shadow-primary/20"
-                >
-                  {t.dashboard.resume}
-                </Button>
-
-                <div className="flex flex-col gap-3">
-                  <div
-                    className={
-                      confirmModal.onSkip ? "grid grid-cols-2 gap-3" : "w-full"
-                    }
+                <div className="space-y-3">
+                  <Button
+                    onClick={activeConfirmModal!.onResume}
+                    className="w-full h-12 bg-indigo-600 hover:bg-indigo-500 dark:bg-primary dark:hover:bg-primary/90 text-white font-bold shadow-lg shadow-indigo-200 dark:shadow-primary/20"
                   >
-                    <Button
-                      onClick={confirmModal.onOverwrite}
-                      variant="outline"
-                      className="w-full h-11 border-border bg-background hover:bg-secondary text-foreground font-medium dark:bg-muted/10 dark:border-white/5 dark:hover:bg-muted/30"
-                    >
-                      重新翻译
-                    </Button>
+                    {t.dashboard.resume}
+                  </Button>
 
-                    {confirmModal.onSkip && (
+                  <div className="flex flex-col gap-3">
+                    <div
+                      className={
+                        activeConfirmModal!.onSkip ? "grid grid-cols-2 gap-3" : "w-full"
+                      }
+                    >
                       <Button
-                        onClick={confirmModal.onSkip}
+                        onClick={activeConfirmModal!.onOverwrite}
                         variant="outline"
                         className="w-full h-11 border-border bg-background hover:bg-secondary text-foreground font-medium dark:bg-muted/10 dark:border-white/5 dark:hover:bg-muted/30"
                       >
-                        跳过文件
+                        重新翻译
                       </Button>
-                    )}
+
+                      {activeConfirmModal!.onSkip && (
+                        <Button
+                          onClick={activeConfirmModal!.onSkip}
+                          variant="outline"
+                          className="w-full h-11 border-border bg-background hover:bg-secondary text-foreground font-medium dark:bg-muted/10 dark:border-white/5 dark:hover:bg-muted/30"
+                        >
+                          跳过文件
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pt-4 mt-2 border-t border-border">
+                    <Button
+                      onClick={activeConfirmModal!.onStopAll}
+                      variant="ghost"
+                      className="w-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 text-sm font-medium h-10"
+                    >
+                      停止全部翻译任务
+                    </Button>
                   </div>
                 </div>
+              </Card>
+            </div>
+          )
+        }
 
-                <div className="pt-4 mt-2 border-t border-border">
-                  <Button
-                    onClick={confirmModal.onStopAll}
-                    variant="ghost"
-                    className="w-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 text-sm font-medium h-10"
-                  >
-                    停止全部翻译任务
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          </div>
-        )}
-
-        {configItem && (
-          <FileConfigModal
-            item={configItem}
-            lang={lang}
-            onSave={(config) => handleSaveFileConfig(configItem.id, config)}
-            onClose={() => setConfigItem(null)}
-          />
-        )}
+        {
+          configItem && (
+            <FileConfigModal
+              item={configItem!}
+              lang={lang}
+              onSave={(config) => handleSaveFileConfig(configItem!.id, config)}
+              onClose={() => setConfigItem(null)}
+              remoteRuntime={remoteRuntime}
+            />
+          )
+        }
 
         <AlertModal {...alertProps} />
       </div>

@@ -23,6 +23,7 @@ import { Button } from "./ui/core";
 import { translations, Language } from "../lib/i18n";
 import { APP_CONFIG } from "../lib/config";
 import { HFDownloadModal } from "./HFDownloadModal";
+import type { UseRemoteRuntimeResult } from "../hooks/useRemoteRuntime";
 
 interface ModelInfo {
   sizeGB: number;
@@ -31,7 +32,19 @@ interface ModelInfo {
   quant: string;
 }
 
-export function ModelView({ lang }: { lang: Language }) {
+interface RemoteModelInfo {
+  name: string;
+  path: string;
+  sizeGb?: number;
+}
+
+export function ModelView({
+  lang,
+  remoteRuntime,
+}: {
+  lang: Language;
+  remoteRuntime?: UseRemoteRuntimeResult;
+}) {
   const t = translations[lang];
   const [models, setModels] = useState<string[]>([]);
   const [modelInfoMap, setModelInfoMap] = useState<Record<string, ModelInfo>>(
@@ -42,6 +55,14 @@ export function ModelView({ lang }: { lang: Language }) {
   const [downloadTab, setDownloadTab] = useState<"ms" | "hf" | "bd">("hf");
   const [showGuide, setShowGuide] = useState(false);
   const [showHFModal, setShowHFModal] = useState(false);
+  const [modelScope, setModelScope] = useState<"local" | "remote">("local");
+  const [remoteModels, setRemoteModels] = useState<RemoteModelInfo[]>([]);
+  const [remoteLoading, setRemoteLoading] = useState(false);
+  const [selectedRemoteModel, setSelectedRemoteModel] = useState<string>("");
+  const [showRemoteHFModal, setShowRemoteHFModal] = useState(false);
+
+  const isRemoteConnected = Boolean(remoteRuntime?.runtime?.connected);
+  const isRemoteScope = modelScope === "remote" && isRemoteConnected;
 
   // Model verification state: 'idle' | 'verifying' | 'valid' | 'invalid' | 'unknown'
   type VerifyStatus = "idle" | "verifying" | "valid" | "invalid" | "unknown";
@@ -121,11 +142,49 @@ export function ModelView({ lang }: { lang: Language }) {
     setLoading(false);
   };
 
+  const fetchRemoteModels = async () => {
+    if (!isRemoteConnected) {
+      setRemoteModels([]);
+      return;
+    }
+    setRemoteLoading(true);
+    try {
+      // @ts-ignore
+      const result = await window.api?.remoteModels?.();
+      if (result?.ok && Array.isArray(result.data)) {
+        const mapped = result.data
+          .map((item: any) => ({
+            name: item?.name || item?.path?.split(/[/\\]/).pop() || "",
+            path: item?.path || item?.name || "",
+            sizeGb: item?.sizeGb ?? item?.size_gb ?? item?.size,
+          }))
+          .filter((item: RemoteModelInfo) => item.path);
+        setRemoteModels(mapped);
+      } else {
+        setRemoteModels([]);
+      }
+    } catch (e) {
+      setRemoteModels([]);
+    }
+    setRemoteLoading(false);
+  };
+
   useEffect(() => {
     fetchModels();
     const saved = localStorage.getItem("config_model");
     if (saved) setSelectedModel(saved);
+    const savedRemote = localStorage.getItem("config_remote_model");
+    if (savedRemote) setSelectedRemoteModel(savedRemote);
   }, []);
+
+  useEffect(() => {
+    if (isRemoteConnected) {
+      setModelScope("remote");
+      fetchRemoteModels();
+    } else {
+      setModelScope("local");
+    }
+  }, [isRemoteConnected]);
 
   const handleSelect = (model: string) => {
     if (selectedModel === model) {
@@ -137,10 +196,20 @@ export function ModelView({ lang }: { lang: Language }) {
     }
   };
 
+  const handleSelectRemote = (modelPath: string) => {
+    if (selectedRemoteModel === modelPath) {
+      setSelectedRemoteModel("");
+      localStorage.removeItem("config_remote_model");
+    } else {
+      setSelectedRemoteModel(modelPath);
+      localStorage.setItem("config_remote_model", modelPath);
+    }
+  };
+
   const isMurasakiModel = (name: string) =>
     name.toLowerCase().includes("murasaki");
-  const hasModels = models.length > 0;
-  const isGuideVisible = !hasModels || showGuide;
+  const hasModels = isRemoteScope ? remoteModels.length > 0 : models.length > 0;
+  const isGuideVisible = !isRemoteScope && (!hasModels || showGuide);
 
   // Verify model integrity against HuggingFace
   const verifyModel = async (model: string, sizeGB: number) => {
@@ -228,8 +297,32 @@ export function ModelView({ lang }: { lang: Language }) {
             </p>
           </div>
 
+          {isRemoteConnected && (
+            <div className="flex items-center justify-center gap-3">
+              <div className="flex p-1 rounded-lg bg-secondary/40 border border-border/50">
+                <button
+                  onClick={() => setModelScope("local")}
+                  className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${modelScope === "local" ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  {lang === "en" ? "Local" : lang === "jp" ? "ローカル" : "本地"}
+                </button>
+                <button
+                  onClick={() => setModelScope("remote")}
+                  className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${modelScope === "remote" ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  {lang === "en" ? "Remote" : lang === "jp" ? "リモート" : "远程"}
+                </button>
+              </div>
+              {remoteRuntime?.runtime?.session?.url && (
+                <span className="text-[10px] text-muted-foreground">
+                  {remoteRuntime.runtime.session.url.replace(/^https?:\/\//, "")}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Compact Toggle Banner (Show when hidden) */}
-          {hasModels && !showGuide && (
+          {!isRemoteScope && hasModels && !showGuide && (
             <div
               onClick={() => setShowGuide(true)}
               className="group relative overflow-hidden rounded-xl border border-purple-500/20 bg-gradient-to-r from-purple-500/5 to-indigo-500/5 p-1 cursor-pointer hover:border-purple-500/40 transition-all duration-300"
@@ -447,8 +540,96 @@ export function ModelView({ lang }: { lang: Language }) {
             </div>
           )}
 
+          {isRemoteScope && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between border-b pb-2">
+                <div className="flex items-center gap-4">
+                  <h3 className="font-bold text-lg flex items-center gap-2">
+                    <HardDrive className="w-5 h-5 text-muted-foreground" />
+                    远程模型 ({remoteModels.length})
+                  </h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowRemoteHFModal(true)}
+                    className="h-8 text-xs"
+                  >
+                    远程下载
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={fetchRemoteModels}
+                    disabled={remoteLoading}
+                    className="h-8"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 mr-2 ${remoteLoading ? "animate-spin" : ""}`}
+                    />
+                    {t.modelView.refresh}
+                  </Button>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4 pb-10">
+                {remoteModels.length === 0 ? (
+                  <div className="col-span-full flex flex-col items-center justify-center py-12 border-2 border-dashed border-border/50 rounded-xl bg-secondary/5">
+                    <p className="font-medium text-muted-foreground">暂无远程模型</p>
+                    <p className="text-xs text-muted-foreground/60 mt-1">
+                      请在远程服务器下载或同步模型后刷新列表
+                    </p>
+                    <div className="flex items-center gap-3 mt-4">
+                      <Button variant="outline" size="sm" onClick={fetchRemoteModels}>
+                        {t.modelView.refresh}
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white border-0 shadow-md hover:scale-105 transition-all"
+                        onClick={() => setShowRemoteHFModal(true)}
+                      >
+                        远程下载
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  remoteModels.map((model) => {
+                    const isSelected = selectedRemoteModel === model.path;
+                    return (
+                      <div
+                        key={model.path}
+                        onClick={() => handleSelectRemote(model.path)}
+                        className={`group relative flex flex-col p-4 rounded-xl border cursor-pointer transition-all duration-300 ${isSelected ? "bg-purple-500/5 border-purple-500/50 shadow-[0_0_0_1px_rgba(168,85,247,0.4)]" : "bg-card border-border/60 hover:border-purple-500/30 hover:shadow-lg"}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="font-semibold text-sm truncate">{model.name}</h3>
+                            <p className="text-[10px] text-muted-foreground break-all mt-1">{model.path}</p>
+                          </div>
+                          {isSelected && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-500 text-white">
+                              <Check className="w-3 h-3" />
+                              {t.selected}
+                            </span>
+                          )}
+                        </div>
+                        {model.sizeGb ? (
+                          <div className="mt-3 text-xs text-muted-foreground font-mono">
+                            {model.sizeGb.toFixed(2)}GB
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Installed Models List */}
-          <div className="space-y-4">
+          {!isRemoteScope && (
+            <div className="space-y-4">
             <div className="flex items-center justify-between border-b pb-2">
               <div className="flex items-center gap-4">
                 <h3 className="font-bold text-lg flex items-center gap-2">
@@ -692,7 +873,8 @@ export function ModelView({ lang }: { lang: Language }) {
                   })
               )}
             </div>
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -703,6 +885,15 @@ export function ModelView({ lang }: { lang: Language }) {
         orgName={APP_CONFIG.modelDownload.huggingfaceOrg}
         onDownloadComplete={fetchModels}
         lang={lang}
+        mode="local"
+      />
+      <HFDownloadModal
+        isOpen={showRemoteHFModal}
+        onClose={() => setShowRemoteHFModal(false)}
+        orgName={APP_CONFIG.modelDownload.huggingfaceOrg}
+        onDownloadComplete={fetchRemoteModels}
+        lang={lang}
+        mode="remote"
       />
     </div>
   );

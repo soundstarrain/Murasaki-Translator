@@ -70,7 +70,7 @@ export const translations = {
         gpu: "决定有多少模型层加载到显卡显存中。\n• -1 (推荐): 全部加载到显卡，速度最快。\n• 0: 全部使用 CPU，速度较慢但节省显存。\n• 自定义数值: 显存不足时，可尝试降低此数值（如 20 或 50）。",
         ctx: "模型一次能处理的文本量（包含历史对话）。\n• 建议: 根据任务长度设定。翻译长篇文档建议 8192 或更高。\n• 注意: 数值越高，显存占用越高。设置过高可能导致程序崩溃 (OOM)。",
         server:
-          "高级配置。默认留空，程序会自动启动内置的 llama-server。\n若要连接远程 API 或本地已启动的服务，请填写地址（如 http://127.0.0.1:8080）。",
+          "高级配置。默认留空，程序会自动启动内置的 llama-server。\n若要连接远程 API 或本地已启动的服务，请填写地址（如 http://127.0.0.1:8000）。",
         output:
           "设置结果文件的保存目录。\n• 默认: 与源文件保存在同一目录下。\n• 自定义: 所有翻译文件将集中保存到指定文件夹。",
       },
@@ -182,6 +182,7 @@ export const translations = {
       proofread: "校对",
       advanced: "高级功能",
       glossary: "术语表",
+      service: "服务管理",
       pre: "预处理",
       post: "后处理",
       setting: "设置",
@@ -767,6 +768,7 @@ export const translations = {
       proofread: "Proofread",
       advanced: "Advanced",
       glossary: "Glossary",
+      service: "Service",
       pre: "Pre-proc",
       post: "Post-proc",
       setting: "Settings",
@@ -1369,6 +1371,7 @@ export const translations = {
       proofread: "校正",
       advanced: "高度な設定",
       glossary: "用語集",
+      service: "サービス",
       pre: "前処理",
       post: "後処理",
       setting: "設定",

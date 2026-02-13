@@ -5,7 +5,7 @@ export interface AlertConfig {
   title: string;
   description: string | React.ReactNode;
   variant?: "default" | "destructive" | "info" | "success" | "warning";
-  onConfirm?: () => void;
+  onConfirm?: () => void | Promise<void>;
   confirmText?: string;
   cancelText?: string;
   showCancel?: boolean;
@@ -38,7 +38,7 @@ export function useAlertModal() {
     (config: {
       title: string;
       description: string | React.ReactNode;
-      onConfirm: () => void;
+      onConfirm: () => void | Promise<void>;
       variant?: "destructive" | "default" | "warning";
       confirmText?: string;
       cancelText?: string;

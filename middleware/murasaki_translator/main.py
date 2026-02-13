@@ -39,6 +39,26 @@ def safe_print(msg):
     with stdout_lock:
         print(msg)
 
+def _estimate_cot_ratio_for_ctx(ctx_value: int) -> float:
+    if ctx_value >= 8192:
+        return 3.2
+    if ctx_value <= 1024:
+        return 3.5
+    slope = (3.2 - 3.5) / (8192 - 1024)
+    return 3.5 + slope * (ctx_value - 1024)
+
+def _estimate_max_chunk_chars_for_ctx(ctx_value: int) -> int:
+    cot_ratio = _estimate_cot_ratio_for_ctx(ctx_value)
+    theoretical = round(((ctx_value * 0.9 - 500) / cot_ratio) * 1.3)
+    return max(128, theoretical)
+
+def _estimate_ctx_for_chunk_limit(chunk_chars: int) -> int:
+    target = max(128, int(chunk_chars))
+    for ctx_candidate in range(1024, 20001):
+        if _estimate_max_chunk_chars_for_ctx(ctx_candidate) >= target:
+            return ctx_candidate
+    return 20000
+
 
 from murasaki_translator.core.chunker import Chunker, TextBlock
 from murasaki_translator.core.prompt import PromptBuilder
@@ -835,11 +855,6 @@ def main():
     # The backend simply respects the explicit arguments passed for kv_cache, batch size, etc.
     # if args.high_fidelity: ... (Removed)
     
-    # Concurrency Hard Limit (New requirement: max 16)
-    if args.concurrency > 16:
-        print(f"[Warning] Concurrency {args.concurrency} exceeds system limit of 16. Capping to 16.")
-        args.concurrency = 16
-
     # ========================================
     # Rebuild Mode (Non-translation)
     # ========================================
@@ -979,16 +994,7 @@ def main():
     print(f"[Init] Loaded glossary: {len(glossary)} entries from {glossary_path or 'None'}")
 
     # Initialize Components
-    # Important: total_ctx = per_slot_ctx * concurrency (handled by engine args if needed)
-    # But llama-server -c is total context.
-    # The UI passes "ctx" (per slot). So we must multiply here.
     total_ctx = args.ctx * args.concurrency
-    
-    # Context Hardcap (Llama-3/RoPE limit check)
-    MAX_SYSTEM_CTX = 32768
-    if total_ctx > MAX_SYSTEM_CTX:
-        print(f"[Warning] Requested total context {total_ctx} exceeds safe limit {MAX_SYSTEM_CTX}. Capping.")
-        total_ctx = MAX_SYSTEM_CTX
 
     # Generate Configuration Fingerprint for Resume Integrity
     import hashlib
@@ -1031,7 +1037,7 @@ def main():
         host=args.server_host,
         port=args.server_port,
         n_gpu_layers=args.gpu_layers,
-        n_ctx=total_ctx, 
+        n_ctx=total_ctx,
         n_parallel=args.concurrency,
         no_spawn=args.no_server_spawn,
         flash_attn=args.flash_attn,
@@ -1062,7 +1068,6 @@ def main():
         effective_chunk_size = int(args.chunk_size * 0.5)
         print(f"[Auto-Config] ASS format: chunk_size {args.chunk_size} -> {effective_chunk_size} (pseudo-SRT overhead)")
 
-    
     chunker = Chunker(
         target_chars=effective_chunk_size, 
         max_chars=effective_chunk_size * 2, # Soft limit doubled for buffer

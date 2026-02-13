@@ -1,99 +1,70 @@
-# Murasaki Translator - Linux CLI Server
+# Murasaki Translator - Linux Server Package
 
-> OpenAI 兼容的翻译 API 服务器，用于远程/无头部署
+> Linux remote server package for GUI full-feature remote mode (`/api/v1/*`)  
+> and OpenAI-compatible mode (`/v1/*`).
 
-## 系统要求
+## Requirements
 
-- **操作系统**: Ubuntu 20.04+ / Debian 11+ / CentOS 8+
-- **Python**: 3.10+
-- **显卡**: 
-  - NVIDIA (推荐): 驱动 ≥ 550
-  - AMD/Intel: Vulkan 驱动
+- Linux x64 (Ubuntu 20.04+ / Debian 11+ recommended)
+- Python 3.10+
+- GPU driver:
+  - NVIDIA (recommended): modern driver
+  - AMD/Intel: Vulkan driver
 
-## 安装
-
-```bash
-# 1. 解压
-tar -xzf murasaki-server-linux.tar.gz
-cd murasaki-server
-
-# 2. 安装依赖
-pip3 install -r requirements.txt
-pip3 install fastapi uvicorn httpx python-multipart
-
-# 3. 下载模型
-# 前往 https://huggingface.co/Murasaki-Project 下载 GGUF 模型
-```
-
-## 启动服务器
+## One-Line Production Deploy (Recommended)
 
 ```bash
-# 基本启动
-python3 murasaki_server.py --model /path/to/model.gguf --port 8080
-
-# 指定 GPU 和上下文
-python3 murasaki_server.py \
-  --model /path/to/model.gguf \
-  --gpu-layers -1 \
-  --ctx 8192 \
-  --port 8080
-
-# 后台运行
-nohup python3 murasaki_server.py --model /path/to/model.gguf &
+MODEL='/path/to/model.gguf'; API_KEY='replace-with-strong-key'; curl -fsSL https://github.com/soundstarrain/Murasaki-Translator/releases/latest/download/murasaki-server-linux-x64.tar.gz | tar -xz && cd murasaki-server && nohup ./start.sh --host 0.0.0.0 --port 8000 --model "$MODEL" --api-key "$API_KEY" --enable-openai-proxy --openai-port 8001 > server.log 2>&1 &
 ```
 
-## 🔐 API Key 认证
+After startup:
+- GUI remote URL: `http://<server-ip>:8000`
+- GUI API Key: the same `API_KEY`
+- OpenAI base URL: `http://<server-ip>:8001/v1`
 
-> **安全提示**：服务器启动时会自动生成 API Key 并打印到控制台。如未指定，将自动生成随机 Key。
+## Auth Behavior
+
+- `GET /health`: public (for health probes)
+- `/api/v1/*`: requires `Authorization: Bearer <API_KEY>` when API key is configured
+- `/v1/*`: requires `Authorization: Bearer <API_KEY>` when API key is configured
+
+## GUI Full-Feature Remote Endpoints
+
+- `POST /api/v1/translate`
+- `GET /api/v1/translate/{task_id}`
+- `DELETE /api/v1/translate/{task_id}`
+- `POST /api/v1/upload/file`
+- `GET /api/v1/download/{task_id}`
+- `WS /api/v1/ws/{task_id}`
+
+## Quick Verification
 
 ```bash
-# 使用自定义 API Key
-python3 murasaki_server.py --model /path/to/model.gguf --api-key your-secret-key
-
-# 启动时会显示：
-# ╠══════════════════════════════════════════════════════════════╣
-# ║  🔐 API Key: your-secret-key                                 ║
-# ╚══════════════════════════════════════════════════════════════╝
+curl -fsS http://127.0.0.1:8000/health
+curl -fsS -H "Authorization: Bearer $API_KEY" http://127.0.0.1:8000/api/v1/status
+curl -fsS -H "Authorization: Bearer $API_KEY" http://127.0.0.1:8001/v1/models
 ```
 
-⚠️ **警告**：如在公网部署，请务必：
-1. 使用强 API Key
-2. 配置防火墙限制端口访问
-3. 使用 HTTPS（反向代理）
+`/health` should include capabilities:
+- `api_v1`
+- `api_v1_full_parity`
 
-## API 使用
+## Windows GUI Connection (One Page)
 
-服务器提供 OpenAI 兼容的 `/v1/chat/completions` 接口：
+In Windows GUI remote panel:
+- `Server URL`: `http://<server-ip>:8000`
+- `API Key`: same value as `API_KEY`
 
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-api-key" \
-  -d '{
-    "model": "murasaki",
-    "messages": [{"role": "user", "content": "翻译: こんにちは"}]
-  }'
-```
+Then click connect and run translation normally. The remote flow supports upload / task status / cancel / download / realtime logs.
 
-## 与 GUI 配合使用
+### Common Issues
 
-Windows/macOS GUI 可以连接远程 Linux 服务器：
+- **401/403**: API key mismatch, check `Authorization: Bearer <API_KEY>`.
+- **Connection timeout**: firewall/security group did not open port `8000`.
+- **Realtime log not updating**: reverse proxy is missing WebSocket upgrade headers.
 
-1. 在 Linux 服务器启动 CLI Server
-2. 在 GUI 高级设置中输入服务器地址 `http://server-ip:8080`
-3. 输入 API Key（从服务器控制台复制）
-4. 点击连接
+## Security Notes
 
-## 链接
-
-- **项目主页**: https://github.com/soundstarrain/Murasaki-Translator
-- **模型下载**: https://huggingface.co/Murasaki-Project
-- **问题反馈**: https://github.com/soundstarrain/Murasaki-Translator/issues
-
-## 协议
-
-软件代码采用 Apache-2.0 协议开源，详见 murasaki-translator.LICENSE.txt。
-模型权重采用 CC BY-NC-SA 4.0 协议。
-
----
-Copyright © 2026 Murasaki Translator
+- Use a strong API key in public networks.
+- Restrict incoming ports (`8000`, `8001`) by firewall/security group.
+- Use HTTPS via reverse proxy when exposing service publicly.

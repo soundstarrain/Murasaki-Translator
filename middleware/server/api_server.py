@@ -23,16 +23,18 @@ import asyncio
 import logging
 import secrets
 import threading
+import subprocess
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, BackgroundTasks, Depends, Security
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, BackgroundTasks, Depends, Security, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # 添加父目录到 path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -121,6 +123,85 @@ def _is_path_within(path: Path, base: Path) -> bool:
         return False
 
 
+def _parse_env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning("Invalid env %s=%r, fallback to %s", name, raw, default)
+        return default
+    if minimum is not None and value < minimum:
+        logger.warning(
+            "Invalid env %s=%r (expected >= %s), fallback to %s",
+            name,
+            raw,
+            minimum,
+            default,
+        )
+        return default
+    return value
+
+
+def _parse_env_optional_int(
+    name: str,
+    default: Optional[int] = None,
+    minimum: Optional[int] = None,
+) -> Optional[int]:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = str(raw).strip()
+    if not normalized:
+        return default
+    try:
+        value = int(normalized)
+    except (TypeError, ValueError):
+        logger.warning("Invalid env %s=%r, fallback to %s", name, raw, default)
+        return default
+    if minimum is not None and value < minimum:
+        logger.warning(
+            "Invalid env %s=%r (expected >= %s), fallback to %s",
+            name,
+            raw,
+            minimum,
+            default,
+        )
+        return default
+    return value
+
+
+def _parse_env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    logger.warning("Invalid env %s=%r, fallback to %s", name, raw, default)
+    return default
+
+
+def _parse_env_str(name: str, default: str) -> str:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = str(raw).strip()
+    return normalized if normalized else default
+
+
+def _mask_secret(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return "(not-set)"
+    if len(normalized) <= 8:
+        return "********"
+    return f"{normalized[:4]}...{normalized[-4:]}"
+
+
 async def verify_api_key(api_key: str = Security(api_key_header)):
     """
     验证 API Key
@@ -154,6 +235,10 @@ async def verify_api_key(api_key: str = Security(api_key_header)):
 worker: Optional[TranslationWorker] = None
 tasks: Dict[str, TranslationTask] = {}
 websocket_connections: List[WebSocket] = []
+
+# HuggingFace download tasks (remote server side)
+hf_download_tasks: Dict[str, Dict[str, Any]] = {}
+hf_download_lock = threading.Lock()
 
 # 任务清理配置（防止内存泄漏）
 MAX_COMPLETED_TASKS = 100  # 最多保留 100 个已完成任务
@@ -257,6 +342,140 @@ def cleanup_old_tasks():
             logger.info(f"Cleaned up {len(to_remove)} old tasks (memory + disk)")
 
 # ============================================
+# HuggingFace Download Helpers
+# ============================================
+
+def _hf_script_path() -> Path:
+    return Path(__file__).parent.parent / "hf_downloader.py"
+
+
+def _run_hf_command(args: List[str], timeout: int = 120) -> Dict[str, Any]:
+    """Run hf_downloader.py and return parsed JSON output."""
+    script_path = _hf_script_path()
+    if not script_path.exists():
+        raise RuntimeError("hf_downloader.py not found")
+
+    proc = subprocess.run(
+        [sys.executable, str(script_path), *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    output = "\n".join([proc.stdout or "", proc.stderr or ""]).strip()
+    payload = None
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+
+    if not payload:
+        raise RuntimeError(output or "hf_downloader returned empty output")
+
+    if payload.get("type") == "error":
+        raise RuntimeError(payload.get("message", "hf_downloader error"))
+
+    return payload
+
+
+def _update_hf_task(task_id: str, **updates: Any) -> None:
+    with hf_download_lock:
+        task = hf_download_tasks.get(task_id)
+        if not task:
+            return
+        task.update(updates)
+        task["updated_at"] = time.time()
+
+
+def _start_hf_download_task(repo_id: str, file_name: str, mirror: str) -> str:
+    script_path = _hf_script_path()
+    if not script_path.exists():
+        raise RuntimeError("hf_downloader.py not found")
+
+    task_id = str(uuid.uuid4())[:8]
+    models_dir = Path(__file__).parent.parent / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    proc = subprocess.Popen(
+        [sys.executable, str(script_path), "download", repo_id, file_name, str(models_dir), mirror],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    with hf_download_lock:
+        hf_download_tasks[task_id] = {
+            "id": task_id,
+            "status": "starting",
+            "percent": 0.0,
+            "speed": "",
+            "downloaded": "",
+            "total": "",
+            "file_path": "",
+            "error": "",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "process": proc,
+        }
+
+    def _reader():
+        buffer = ""
+        try:
+            if proc.stdout is None:
+                return
+            for chunk in proc.stdout:
+                buffer += chunk
+                lines = buffer.splitlines()
+                buffer = "" if buffer.endswith("\n") else lines.pop() if lines else buffer
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line)
+                    except Exception:
+                        continue
+                    if msg.get("type") == "progress":
+                        _update_hf_task(
+                            task_id,
+                            status=msg.get("status", "downloading"),
+                            percent=float(msg.get("percent", 0)),
+                            speed=msg.get("speed", ""),
+                            downloaded=msg.get("downloaded", ""),
+                            total=msg.get("total", ""),
+                        )
+                    elif msg.get("type") == "complete":
+                        _update_hf_task(
+                            task_id,
+                            status="complete",
+                            percent=100.0,
+                            file_path=msg.get("file_path", ""),
+                        )
+                    elif msg.get("type") == "error":
+                        _update_hf_task(
+                            task_id,
+                            status="error",
+                            error=msg.get("message", "Download failed"),
+                        )
+        finally:
+            try:
+                code = proc.wait(timeout=1)
+            except Exception:
+                code = None
+            with hf_download_lock:
+                task = hf_download_tasks.get(task_id)
+                if task and task.get("status") not in {"complete", "error", "cancelled"}:
+                    task["status"] = "error"
+                    task["error"] = task.get("error") or f"Download exited (code={code})"
+
+    threading.Thread(target=_reader, daemon=True).start()
+    return task_id
+
+# ============================================
 # Request/Response Models
 # ============================================
 
@@ -271,28 +490,92 @@ class TranslateRequest(BaseModel):
     preset: str = "novel"               # prompt preset
     mode: str = "doc"                   # doc | line
     chunk_size: int = 1000
-    ctx: int = 8192
-    gpu_layers: int = -1
+    ctx: int = Field(
+        default_factory=lambda: _parse_env_int(
+            "MURASAKI_DEFAULT_CTX",
+            8192,
+            minimum=256,
+        )
+    )
+    gpu_layers: int = Field(
+        default_factory=lambda: _parse_env_int("MURASAKI_DEFAULT_GPU_LAYERS", -1)
+    )
     temperature: float = 0.3
     
     # 高级选项
+    line_format: str = "single"
+    strict_mode: str = "off"
     line_check: bool = True
+    line_tolerance_abs: int = 10
+    line_tolerance_pct: float = 0.2
     traditional: bool = False
     save_cot: bool = False
+    save_summary: bool = False
+    alignment_mode: bool = False
+    resume: bool = False
+    save_cache: bool = True
+    cache_path: Optional[str] = None
     rules_pre: Optional[str] = None
     rules_post: Optional[str] = None
+    rules_pre_inline: Optional[Any] = None
+    rules_post_inline: Optional[Any] = None
+    rep_penalty_base: float = 1.0
+    rep_penalty_max: float = 1.5
+    rep_penalty_step: float = 0.1
+    max_retries: int = 3
+    output_hit_threshold: float = 60.0
+    cot_coverage_threshold: float = 80.0
+    coverage_retries: int = 3
+    retry_temp_boost: float = 0.05
+    retry_prompt_feedback: bool = True
+    balance_enable: bool = False
+    balance_threshold: float = 0.6
+    balance_count: int = 3
     
     # 并行配置
-    parallel: int = 1
-    flash_attn: bool = False
-    kv_cache_type: str = "f16"
+    parallel: int = Field(
+        default_factory=lambda: _parse_env_int(
+            "MURASAKI_DEFAULT_CONCURRENCY",
+            1,
+            minimum=1,
+        )
+    )
+    flash_attn: bool = Field(
+        default_factory=lambda: _parse_env_bool("MURASAKI_DEFAULT_FLASH_ATTN", False)
+    )
+    kv_cache_type: str = Field(
+        default_factory=lambda: _parse_env_str("MURASAKI_DEFAULT_KV_CACHE_TYPE", "f16")
+    )
+    use_large_batch: bool = Field(
+        default_factory=lambda: _parse_env_bool("MURASAKI_DEFAULT_USE_LARGE_BATCH", False)
+    )
+    batch_size: Optional[int] = Field(
+        default_factory=lambda: _parse_env_optional_int(
+            "MURASAKI_DEFAULT_BATCH",
+            None,
+            minimum=1,
+        )
+    )
+    seed: Optional[int] = Field(
+        default_factory=lambda: _parse_env_optional_int("MURASAKI_DEFAULT_SEED", None)
+    )
+    text_protect: bool = False
+    protect_patterns: Optional[str] = None
+    fix_ruby: bool = False
+    fix_kana: bool = False
+    fix_punctuation: bool = False
+    gpu_device_id: Optional[str] = None
 
 
 class TranslateResponse(BaseModel):
     """翻译响应"""
     task_id: str
     status: str
-    message: str
+
+class HfDownloadRequest(BaseModel):
+    repo_id: str
+    file_name: str
+    mirror: str = "direct"
 
 
 class TaskStatusResponse(BaseModel):
@@ -303,6 +586,9 @@ class TaskStatusResponse(BaseModel):
     current_block: int
     total_blocks: int
     logs: List[str]
+    next_log_index: int = 0
+    log_total: int = 0
+    logs_truncated: bool = False
     result: Optional[str] = None
     error: Optional[str] = None
 
@@ -330,10 +616,27 @@ class ServerStatus(BaseModel):
 @app.get("/health")
 async def health():
     """健康检查"""
-    return {"status": "ok", "version": "1.0.0"}
+    capabilities = ["api_v1", "api_v1_full_parity"]
+    if os.environ.get("MURASAKI_ENABLE_OPENAI_PROXY", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        capabilities.append("openai_v1")
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "capabilities": capabilities,
+        "auth_required": bool(os.environ.get("MURASAKI_API_KEY")),
+    }
 
 
-@app.get("/api/v1/status", response_model=ServerStatus)
+@app.get(
+    "/api/v1/status",
+    response_model=ServerStatus,
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_status():
     """获取服务器状态"""
     global worker
@@ -346,7 +649,11 @@ async def get_status():
     )
 
 
-@app.get("/api/v1/models", response_model=List[ModelInfo])
+@app.get(
+    "/api/v1/models",
+    response_model=List[ModelInfo],
+    dependencies=[Depends(verify_api_key)],
+)
 async def list_models():
     """列出服务器上可用的模型"""
     models_dir = Path(__file__).parent.parent / "models"
@@ -364,7 +671,93 @@ async def list_models():
     return models
 
 
-@app.get("/api/v1/glossaries")
+@app.get("/api/v1/models/hf/network", dependencies=[Depends(verify_api_key)])
+async def hf_check_network():
+    """检查 HuggingFace 网络连通性"""
+    try:
+        payload = _run_hf_command(["network"], timeout=30)
+        return {
+            "status": payload.get("status", "error"),
+            "message": payload.get("message", "")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/models/hf/repos", dependencies=[Depends(verify_api_key)])
+async def hf_list_repos(org: str):
+    """列出指定组织的仓库"""
+    if not org:
+        raise HTTPException(status_code=400, detail="Missing org parameter")
+    try:
+        payload = _run_hf_command(["repos", org], timeout=60)
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/models/hf/files", dependencies=[Depends(verify_api_key)])
+async def hf_list_files(repo_id: str):
+    """列出仓库中的 GGUF 文件"""
+    if not repo_id:
+        raise HTTPException(status_code=400, detail="Missing repo_id parameter")
+    try:
+        payload = _run_hf_command(["list", repo_id], timeout=60)
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/models/hf/download", dependencies=[Depends(verify_api_key)])
+async def hf_download(request: HfDownloadRequest):
+    """触发远程服务器下载模型"""
+    try:
+        download_id = _start_hf_download_task(request.repo_id, request.file_name, request.mirror)
+        return {"download_id": download_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/models/hf/download/{download_id}", dependencies=[Depends(verify_api_key)])
+async def hf_download_status(download_id: str):
+    """查询下载状态"""
+    with hf_download_lock:
+        task = hf_download_tasks.get(download_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Download task not found")
+        return {
+            "status": task.get("status", "unknown"),
+            "percent": task.get("percent", 0),
+            "speed": task.get("speed", ""),
+            "downloaded": task.get("downloaded", ""),
+            "total": task.get("total", ""),
+            "file_path": task.get("file_path", ""),
+            "error": task.get("error", ""),
+        }
+
+
+@app.delete("/api/v1/models/hf/download/{download_id}", dependencies=[Depends(verify_api_key)])
+async def hf_download_cancel(download_id: str):
+    """取消下载任务"""
+    with hf_download_lock:
+        task = hf_download_tasks.get(download_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Download task not found")
+        proc = task.get("process")
+        task["status"] = "cancelled"
+    try:
+        if proc:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                proc.kill()
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.get("/api/v1/glossaries", dependencies=[Depends(verify_api_key)])
 async def list_glossaries():
     """列出服务器上可用的术语表"""
     glossaries_dir = Path(__file__).parent.parent / "glossaries"
@@ -390,6 +783,22 @@ async def create_translation(request: TranslateRequest, background_tasks: Backgr
     
     if not request.text and not request.file_path:
         raise HTTPException(400, "Must provide either 'text' or 'file_path'")
+
+    if request.file_path:
+        middleware_dir = Path(__file__).parent.parent
+        requested_path = Path(request.file_path).resolve()
+        allowed_dirs = [
+            (middleware_dir / "uploads").resolve(),
+            (middleware_dir / "outputs").resolve(),
+        ]
+        if not any(_is_path_within(requested_path, allowed_dir) for allowed_dir in allowed_dirs):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "file_path must be inside server uploads/ or outputs/ directory "
+                    f"(got: {request.file_path})"
+                ),
+            )
     
     # 创建任务
     task_id = str(uuid.uuid4())[:8]
@@ -412,18 +821,42 @@ async def create_translation(request: TranslateRequest, background_tasks: Backgr
 
 
 @app.get("/api/v1/translate/{task_id}", response_model=TaskStatusResponse, dependencies=[Depends(verify_api_key)])
-async def get_task_status(task_id: str):
+async def get_task_status(
+    task_id: str,
+    log_from: Optional[int] = Query(default=None, ge=0),
+    log_limit: int = Query(default=200, ge=1, le=1000),
+):
     """获取任务状态"""
     task = _get_task(task_id)
     if not task:
         raise HTTPException(404, f"Task {task_id} not found")
+
+    logs_snapshot = list(task.logs)
+    log_total = len(logs_snapshot)
+    logs_truncated = False
+
+    if log_from is None:
+        # 兼容旧客户端：默认返回最近 50 条
+        logs = logs_snapshot[-50:]
+        start_index = max(0, log_total - len(logs))
+        logs_truncated = start_index > 0
+        next_log_index = start_index + len(logs)
+    else:
+        start_index = min(log_from, log_total)
+        end_index = min(log_total, start_index + log_limit)
+        logs = logs_snapshot[start_index:end_index]
+        next_log_index = start_index + len(logs)
+
     return TaskStatusResponse(
         task_id=task_id,
         status=task.status.value,
         progress=task.progress,
         current_block=task.current_block,
         total_blocks=task.total_blocks,
-        logs=task.logs[-50:],  # 最近 50 条日志
+        logs=logs,
+        next_log_index=next_log_index,
+        log_total=log_total,
+        logs_truncated=logs_truncated,
         result=task.result,
         error=task.error
     )
@@ -474,6 +907,22 @@ async def upload_file(file: UploadFile = File(...)):
     }
 
 
+@app.get("/api/v1/download/{task_id}/cache", dependencies=[Depends(verify_api_key)])
+async def download_cache(task_id: str):
+    """下载翻译缓存文件（用于校对）"""
+    task = _get_task(task_id)
+    if not task:
+        raise HTTPException(404, f"Task {task_id} not found")
+    
+    if not task.output_path:
+        raise HTTPException(404, "No output path available")
+    
+    cache_path = task.output_path + ".cache.json"
+    if not os.path.exists(cache_path):
+        raise HTTPException(404, "Cache file not found")
+    
+    return FileResponse(cache_path, filename=os.path.basename(cache_path))
+
 @app.get("/api/v1/download/{task_id}", dependencies=[Depends(verify_api_key)])
 async def download_result(task_id: str):
     """下载翻译结果"""
@@ -484,7 +933,11 @@ async def download_result(task_id: str):
         raise HTTPException(400, f"Task is {task.status.value}, not completed")
     
     if task.output_path and Path(task.output_path).exists():
-        return FileResponse(task.output_path, filename=Path(task.output_path).name)
+        output_file = Path(task.output_path).resolve()
+        outputs_dir = (Path(__file__).parent.parent / "outputs").resolve()
+        if not _is_path_within(output_file, outputs_dir):
+            raise HTTPException(400, "Unsafe output path")
+        return FileResponse(str(output_file), filename=output_file.name)
     else:
         raise HTTPException(404, "Output file not found")
 
@@ -611,6 +1064,14 @@ def main():
     parser.add_argument("--port", type=int, default=8000, help="Port to bind (default: 8000)")
     parser.add_argument("--model", help="Default model path")
     parser.add_argument("--api-key", help="API key for authentication (optional)")
+    parser.add_argument("--ctx", type=int, help="Default context size")
+    parser.add_argument("--gpu-layers", type=int, help="Default GPU layers")
+    parser.add_argument("--batch-size", type=int, help="Default physical batch size")
+    parser.add_argument("--parallel", type=int, help="Default concurrency")
+    parser.add_argument("--flash-attn", action="store_true", help="Enable default flash attention")
+    parser.add_argument("--kv-cache-type", help="Default KV cache type")
+    parser.add_argument("--use-large-batch", action="store_true", help="Enable default large batch")
+    parser.add_argument("--seed", type=int, help="Default seed")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload for development")
     
     args = parser.parse_args()
@@ -618,28 +1079,49 @@ def main():
     # 设置默认模型
     if args.model:
         os.environ["MURASAKI_DEFAULT_MODEL"] = args.model
+    if args.ctx is not None:
+        os.environ["MURASAKI_DEFAULT_CTX"] = str(args.ctx)
+    if args.gpu_layers is not None:
+        os.environ["MURASAKI_DEFAULT_GPU_LAYERS"] = str(args.gpu_layers)
+    if args.batch_size is not None:
+        os.environ["MURASAKI_DEFAULT_BATCH"] = str(args.batch_size)
+    if args.parallel is not None:
+        os.environ["MURASAKI_DEFAULT_CONCURRENCY"] = str(args.parallel)
+    if args.flash_attn:
+        os.environ["MURASAKI_DEFAULT_FLASH_ATTN"] = "1"
+    if args.kv_cache_type:
+        os.environ["MURASAKI_DEFAULT_KV_CACHE_TYPE"] = str(args.kv_cache_type)
+    if args.use_large_batch:
+        os.environ["MURASAKI_DEFAULT_USE_LARGE_BATCH"] = "1"
+    if args.seed is not None:
+        os.environ["MURASAKI_DEFAULT_SEED"] = str(args.seed)
     
+    env_api_key = os.environ.get("MURASAKI_API_KEY", "").strip()
     if args.api_key:
         os.environ["MURASAKI_API_KEY"] = args.api_key
         api_key_display = args.api_key
+    elif env_api_key:
+        os.environ["MURASAKI_API_KEY"] = env_api_key
+        api_key_display = env_api_key
     else:
-        # 安全默认值：无 Key 时自动生成 UUID，禁止无鉴权运行
+        # 安全默认值：无 Key 时自动生成随机 key，禁止无鉴权运行
         generated_key = secrets.token_urlsafe(24)
         os.environ["MURASAKI_API_KEY"] = generated_key
         api_key_display = generated_key
     
-    print(f"""
-╔══════════════════════════════════════════════════════════════╗
-║           Murasaki Translation API Server                    ║
-╠══════════════════════════════════════════════════════════════╣
-║  API:     http://{args.host}:{args.port}/api/v1/translate           ║
-║  Docs:    http://{args.host}:{args.port}/docs                       ║
-║  Health:  http://{args.host}:{args.port}/health                     ║
-╠══════════════════════════════════════════════════════════════╣
-║  🔐 API Key: {api_key_display:<47}║
-║  (Use: Authorization: Bearer <key>)                          ║
-╚══════════════════════════════════════════════════════════════╝
-    """)
+    print(
+        "\n"
+        "==============================================================\n"
+        "Murasaki Translation API Server\n"
+        "--------------------------------------------------------------\n"
+        f"API:    http://{args.host}:{args.port}/api/v1/translate\n"
+        f"Docs:   http://{args.host}:{args.port}/docs\n"
+        f"Health: http://{args.host}:{args.port}/health\n"
+        "--------------------------------------------------------------\n"
+        f"API Key: {_mask_secret(api_key_display)}\n"
+        "Use header: Authorization: Bearer <key>\n"
+        "==============================================================\n"
+    )
     
     uvicorn.run(
         "api_server:app",

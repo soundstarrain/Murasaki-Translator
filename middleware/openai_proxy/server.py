@@ -6,9 +6,10 @@
 #   pip install fastapi uvicorn httpx
 #   LLAMA_SERVER_URL=http://127.0.0.1:8080 uvicorn server:app --host 0.0.0.0 --port 8000
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Security
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
@@ -16,6 +17,7 @@ import json
 import time
 import os
 import uuid
+import secrets
 
 app = FastAPI(title="Murasaki OpenAI Proxy", version="1.0.0")
 
@@ -29,6 +31,37 @@ app.add_middleware(
 )
 
 LLAMA_SERVER_URL = os.environ.get("LLAMA_SERVER_URL", "http://127.0.0.1:8080")
+api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
+
+
+def _normalize_api_key(api_key: Optional[str]) -> str:
+    if not api_key:
+        return ""
+    return api_key.replace("Bearer ", "").strip()
+
+
+def _is_api_key_valid(api_key: Optional[str]) -> bool:
+    server_key = os.environ.get("MURASAKI_API_KEY", "").strip()
+    if not server_key:
+        return True
+    normalized = _normalize_api_key(api_key)
+    if not normalized:
+        return False
+    return secrets.compare_digest(normalized, server_key)
+
+
+async def verify_api_key(api_key: str = Security(api_key_header)):
+    server_key = os.environ.get("MURASAKI_API_KEY", "").strip()
+    if not server_key:
+        return None
+    if not api_key:
+        raise HTTPException(
+            status_code=403,
+            detail="Missing API Key. Please provide 'Authorization: Bearer <your-key>' header."
+        )
+    if not _is_api_key_valid(api_key):
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+    return _normalize_api_key(api_key)
 
 
 class Message(BaseModel):
@@ -58,7 +91,7 @@ def build_prompt(messages: List[Message]) -> str:
     return "".join(parts)
 
 
-@app.get("/v1/models")
+@app.get("/v1/models", dependencies=[Depends(verify_api_key)])
 async def list_models():
     """列出可用模型"""
     return {
@@ -67,7 +100,7 @@ async def list_models():
     }
 
 
-@app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
 async def chat_completions(request: ChatCompletionRequest):
     """OpenAI Chat Completions API"""
     prompt = build_prompt(request.messages)

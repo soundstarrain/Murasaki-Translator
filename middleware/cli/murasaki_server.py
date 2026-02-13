@@ -153,7 +153,7 @@ class MurasakiServer:
     
     def start_openai_proxy(self):
         """启动 OpenAI 代理"""
-        proxy_dir = Path(__file__).parent / 'openai_proxy'
+        proxy_dir = Path(__file__).parent.parent / 'openai_proxy'
         
         env = os.environ.copy()
         env['LLAMA_SERVER_URL'] = f"http://127.0.0.1:{self.args.llama_port}"

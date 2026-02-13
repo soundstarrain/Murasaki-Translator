@@ -38,7 +38,14 @@ export interface ServerStatus {
   running: boolean;
   pid?: number | null;
   port: number;
+  host?: string;
+  endpoint?: string;
+  localEndpoint?: string;
+  lanEndpoints?: string[];
   model?: string;
+  mode?: "api_v1";
+  authEnabled?: boolean;
+  apiKeyHint?: string;
   deviceMode?: string;
   uptime?: number;
   logs?: string[];
@@ -90,6 +97,124 @@ export interface CacheData {
 }
 
 export type Unsubscribe = () => void;
+
+export interface ProcessExitPayload {
+  code: number | null;
+  signal: string | null;
+  stopRequested: boolean;
+}
+
+export type RemoteErrorCode =
+  | "REMOTE_NETWORK"
+  | "REMOTE_TIMEOUT"
+  | "REMOTE_UNAUTHORIZED"
+  | "REMOTE_PROTOCOL"
+  | "REMOTE_NOT_FOUND"
+  | "REMOTE_UNKNOWN";
+
+export interface RemoteApiResponse<T = any> {
+  ok: boolean;
+  code?: RemoteErrorCode;
+  message?: string;
+  technicalMessage?: string;
+  actionHint?: string;
+  retryable?: boolean;
+  statusCode?: number;
+  data?: T;
+}
+
+export interface RemoteSessionInfo {
+  url: string;
+  apiKey?: string;
+  connectedAt: number;
+  source?: "manual" | "local-daemon";
+}
+
+export interface RemoteRuntimeStatus {
+  connected: boolean;
+  executionMode: "local" | "remote";
+  session?: RemoteSessionInfo | null;
+  fileScope?: "shared-local" | "isolated-remote";
+  outputPolicy?: "same-dir" | "scoped-remote-dir";
+  downgraded?: boolean;
+  authRequired?: boolean;
+  capabilities?: string[];
+  status?: string;
+  modelLoaded?: boolean;
+  currentModel?: string;
+  activeTasks?: number;
+  version?: string;
+  lastCheckedAt?: number;
+  notice: string;
+  syncMirrorPath: string;
+  networkEventLogPath: string;
+}
+
+export interface RemoteNetworkEvent {
+  timestamp: number;
+  kind: "connection" | "http" | "upload" | "download" | "retry" | "ws";
+  phase: "start" | "success" | "error" | "open" | "close" | "message";
+  method?: string;
+  path?: string;
+  statusCode?: number;
+  durationMs?: number;
+  attempt?: number;
+  message?: string;
+}
+
+export interface RemoteNetworkStatus {
+  connected: boolean;
+  executionMode: "local" | "remote";
+  session: RemoteSessionInfo | null;
+  fileScope?: "shared-local" | "isolated-remote";
+  outputPolicy?: "same-dir" | "scoped-remote-dir";
+  wsConnected: boolean;
+  inFlightRequests: number;
+  totalEvents: number;
+  successCount: number;
+  errorCount: number;
+  retryCount: number;
+  uploadCount: number;
+  downloadCount: number;
+  lastLatencyMs?: number;
+  avgLatencyMs?: number;
+  lastStatusCode?: number;
+  lastEventAt?: number;
+  lastError?: {
+    at: number;
+    kind: "connection" | "http" | "upload" | "download" | "retry" | "ws";
+    message: string;
+    path?: string;
+    statusCode?: number;
+  };
+  notice: string;
+  syncMirrorPath: string;
+  networkEventLogPath: string;
+  lastSyncAt?: number;
+}
+
+export interface RemoteDiagnostics {
+  executionMode: "local" | "remote";
+  connected: boolean;
+  session: RemoteSessionInfo | null;
+  healthFailures: number;
+  activeTaskId: string | null;
+  syncMirrorPath: string;
+  networkEventLogPath: string;
+  notice: string;
+  network: RemoteNetworkStatus;
+  lastSyncAt?: number | null;
+}
+
+export interface RemoteHfDownloadStatus {
+  status: "starting" | "checking" | "connecting" | "downloading" | "resuming" | "complete" | "skipped" | "error" | "cancelled";
+  percent: number;
+  speed?: string;
+  downloaded?: string;
+  total?: string;
+  filePath?: string;
+  error?: string;
+}
 
 export interface ElectronAPI {
   // Model Management
@@ -149,7 +274,7 @@ export interface ElectronAPI {
     config: any;
   }) => Promise<any>;
   onLogUpdate: (callback: (chunk: string) => void) => Unsubscribe;
-  onProcessExit: (callback: (code: number) => void) => Unsubscribe;
+  onProcessExit: (callback: (payload: ProcessExitPayload) => void) => Unsubscribe;
   removeLogListener: () => void;
   removeProcessExitListener: () => void;
 
@@ -181,6 +306,8 @@ export interface ElectronAPI {
   serverStart: (config: {
     model: string;
     port?: number;
+    host?: string;
+    apiKey?: string;
     gpuLayers?: string | number;
     ctxSize?: string | number;
     concurrency?: number;
@@ -194,7 +321,24 @@ export interface ElectronAPI {
     gpuDeviceId?: number | string;
     preset?: string;
     gpu?: boolean;
-  }) => Promise<{ success: boolean; error?: string }>;
+    autoConnectRemote?: boolean;
+  }) => Promise<{
+    success: boolean;
+    error?: string;
+    selectedPort?: number;
+    requestedPort?: number;
+    portChanged?: boolean;
+    host?: string;
+    endpoint?: string;
+    localEndpoint?: string;
+    lanEndpoints?: string[];
+    apiKey?: string;
+    remoteConnected?: boolean;
+    autoRemoteSkipped?: boolean;
+    source?: "local-daemon";
+    executionMode?: "local" | "remote";
+    remoteError?: RemoteApiResponse;
+  }>;
   serverStop: () => Promise<boolean>;
   serverLogs: () => Promise<string[]>;
   serverWarmup: () => Promise<WarmupResult>;
@@ -291,8 +435,23 @@ export interface ElectronAPI {
   }>;
 
   // Debug Export
-  readServerLog: () => Promise<string>;
+  readServerLog: () => Promise<{
+    exists: boolean;
+    path?: string;
+    lineCount?: number;
+    content?: string;
+    truncated?: boolean;
+    error?: string;
+  }>;
   getMainProcessLogs: () => Promise<string[]>;
+  readTextTail: (path: string, options?: { maxBytes?: number; lineCount?: number }) => Promise<{
+    exists: boolean;
+    path?: string;
+    lineCount?: number;
+    content?: string;
+    truncated?: boolean;
+    error?: string;
+  }>;
 
   // Rule System
   testRules: (
@@ -314,16 +473,44 @@ export interface ElectronAPI {
   removeTermExtractProgressListener: () => void;
 
   // Remote Server
-  remoteConnect: (config: { url: string; apiKey?: string }) => Promise<any>;
-  remoteDisconnect: () => Promise<any>;
-  remoteStatus: () => Promise<any>;
-  remoteModels: () => Promise<any>;
-  remoteGlossaries: () => Promise<any>;
-  remoteTranslate: (options: any) => Promise<any>;
-  remoteTaskStatus: (taskId: string) => Promise<any>;
-  remoteCancel: (taskId: string) => Promise<any>;
-  remoteUpload: (filePath: string) => Promise<any>;
-  remoteDownload: (taskId: string, savePath: string) => Promise<any>;
+  remoteConnect: (config: {
+    url: string;
+    apiKey?: string;
+  }) => Promise<RemoteApiResponse>;
+  remoteDisconnect: () => Promise<RemoteApiResponse>;
+  remoteStatus: () => Promise<RemoteApiResponse<RemoteRuntimeStatus>>;
+  remoteModels: () => Promise<RemoteApiResponse<any[]>>;
+  remoteGlossaries: () => Promise<RemoteApiResponse<any[]>>;
+  remoteTranslate: (options: any) => Promise<RemoteApiResponse<any>>;
+  remoteTaskStatus: (
+    taskId: string,
+    query?: { logFrom?: number; logLimit?: number },
+  ) => Promise<RemoteApiResponse<any>>;
+  remoteCancel: (taskId: string) => Promise<RemoteApiResponse<any>>;
+  remoteUpload: (filePath: string) => Promise<RemoteApiResponse<any>>;
+  remoteDownload: (
+    taskId: string,
+    savePath: string,
+  ) => Promise<RemoteApiResponse<{ success: boolean; path?: string }>>;
+  remoteNetworkStatus: () => Promise<RemoteApiResponse<RemoteNetworkStatus>>;
+  remoteNetworkEvents: (
+    limit?: number,
+  ) => Promise<RemoteApiResponse<RemoteNetworkEvent[]>>;
+  remoteDiagnostics: () => Promise<RemoteApiResponse<RemoteDiagnostics>>;
+  remoteHfCheckNetwork: () => Promise<RemoteApiResponse<{ status: string; message?: string }>>;
+  remoteHfListRepos: (orgName: string) => Promise<RemoteApiResponse<any>>;
+  remoteHfListFiles: (repoId: string) => Promise<RemoteApiResponse<any>>;
+  remoteHfDownloadStart: (
+    repoId: string,
+    fileName: string,
+    mirror?: string,
+  ) => Promise<RemoteApiResponse<{ downloadId: string }>>;
+  remoteHfDownloadStatus: (
+    downloadId: string,
+  ) => Promise<RemoteApiResponse<RemoteHfDownloadStatus>>;
+  remoteHfDownloadCancel: (
+    downloadId: string,
+  ) => Promise<RemoteApiResponse<{ ok: boolean }>>;
 
   // HuggingFace Download
   hfListRepos: (orgName: string) => Promise<any>;

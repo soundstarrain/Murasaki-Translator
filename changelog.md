@@ -1,5 +1,40 @@
 # Murasaki Translator - Changelog
 
+## [1.7.0] - 2026-02-13
+
+### 远程翻译模式 (Remote Translation)
+
+*   新增远程翻译执行模式：支持通过 HTTP API 将翻译任务分发到远程服务器，前端实时显示进度与日志。
+*   远程翻译链路完整实现：文件上传 → 任务创建 → 状态轮询 → 结果下载 → 缓存回传，全流程与本地模式体验一致。
+*   `RemoteClient` 模块新增：封装远程 API 协议，支持 `connect / createTranslation / getStatus / downloadResult` 等操作。
+
+### 服务端架构重构
+
+*   本地 Daemon 模式重构：从直接管理 `llama-server` 二进制改为通过 `api_server.py`（FastAPI）统一管理，支持 API Key 鉴权、端口扫描、健康检查。
+*   `translation_worker.py` 翻译执行器：封装 `main.py` 调用逻辑，支持常驻 `llama-server`（避免冷启动）、进程组销毁（避免僵尸进程）、并发控制、配置热切换。
+*   `ServerManager.ts` 扩展：支持 `api_v1` 模式下的依赖检查（FastAPI/Uvicorn/Pydantic）、端口冲突自动规避、API Key 自动生成。
+
+### 安全性增强
+
+*   API Key 管理：`api_server.py` 支持 `MURASAKI_API_KEY` 环境变量控制访问，使用 `secrets.compare_digest` 防时序攻击。
+*   路径遍历防御：`translation_worker.py` 使用 `pathlib.resolve()` + `relative_to()` 安全校验，限制文件操作在 `uploads/` 和 `outputs/` 目录内。
+*   CORS 安全策略：支持 `MURASAKI_CORS_ORIGINS` 配置白名单，默认开放（本地部署友好）。
+
+### 性能修复
+
+*   **修复本地翻译速度回退**：本地 Daemon `api_v1` 模式下翻译现在直接 spawn `main.py`，不再走 HTTP API 桥接路径，消除轮询延迟和 JSON 序列化开销。
+*   `RemoteClient` 仅在用户明确选择远程执行模式（`executionMode === "remote"`）时创建，避免本地翻译被错误路由到 HTTP API 路径。
+
+### Linux 部署增强
+
+*   `start_server.sh` 支持 `--enable-openai-proxy` 与 `--openai-port`，实现任务型 API（`/api/v1/*`）与 OpenAI 兼容 API（`/v1/*`）并存启动。
+*   健康检查接口增强：`GET /health` 返回 `capabilities` 能力声明，用于 GUI 自动识别协议。
+*   发布文档重写：明确 GUI 使用 `/api/v1/*`，第三方 SDK 使用 `/v1/*`。
+*   GitHub Actions 修复 Linux/Windows 发布文档打包步骤，确保 release 产物内包含对应 readme。
+
+
+---
+
 ## [1.6.3] - 2026-02-11
 
 ### 核心稳定性

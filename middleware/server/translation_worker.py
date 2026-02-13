@@ -18,9 +18,11 @@ import subprocess
 import threading
 import time
 import json
+import logging
+import re
 import requests
 from pathlib import Path
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Any
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
@@ -91,6 +93,7 @@ class TranslationWorker:
         self.start_time = time.time()
         self._lock = threading.Lock()
         self._server_ready = False
+        self._server_log_handle = None
 
         # 并发控制：防止配置变更时杀死正在运行的任务
         self._running_tasks = 0  # 正在运行的任务数
@@ -102,8 +105,14 @@ class TranslationWorker:
             "ctx": None,
             "gpu_layers": None,
             "flash_attn": None,
-            "kv_cache_type": None
+            "kv_cache_type": None,
+            "parallel": None,
+            "use_large_batch": None,
+            "batch_size": None,
+            "seed": None,
         }
+        self._temp_artifact_dir = Path(__file__).parent.parent / "temp"
+        self._cleanup_stale_temp_artifacts()
 
     @staticmethod
     def _is_path_within(path: Path, base: Path) -> bool:
@@ -112,6 +121,33 @@ class TranslationWorker:
             return True
         except ValueError:
             return False
+
+    def _cleanup_stale_temp_artifacts(self):
+        """清理上次异常退出残留的临时规则/保护文件"""
+        middleware_dir = Path(__file__).parent.parent
+        cleanup_roots = [middleware_dir, self._temp_artifact_dir]
+        name_pattern = re.compile(
+            r"^(rules_pre_|rules_post_|protect_patterns_|temp_rules_pre_|temp_rules_post_).*\.(json|txt)$",
+            re.IGNORECASE,
+        )
+
+        for root in cleanup_roots:
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                continue
+            try:
+                for file_path in root.iterdir():
+                    if not file_path.is_file():
+                        continue
+                    if not name_pattern.match(file_path.name):
+                        continue
+                    try:
+                        file_path.unlink()
+                    except OSError:
+                        pass
+            except OSError:
+                continue
 
     def is_ready(self) -> bool:
         """检查服务器是否就绪"""
@@ -200,8 +236,17 @@ class TranslationWorker:
         logging.info("No NVIDIA GPU detected, using Vulkan/Metal fallback")
         return False
 
-    async def start_server(self, gpu_layers: int = -1, ctx: int = 8192,
-                          flash_attn: bool = False, kv_cache_type: str = "f16"):
+    async def start_server(
+        self,
+        gpu_layers: int = -1,
+        ctx: int = 8192,
+        flash_attn: bool = False,
+        kv_cache_type: str = "f16",
+        parallel: int = 1,
+        use_large_batch: bool = False,
+        batch_size: Optional[int] = None,
+        seed: Optional[int] = None,
+    ):
         """启动常驻 llama-server（模型常驻内存）"""
         if self.server_process and self.server_process.poll() is None:
             return  # 已在运行
@@ -215,8 +260,16 @@ class TranslationWorker:
             "ctx": ctx,
             "gpu_layers": gpu_layers,
             "flash_attn": flash_attn,
-            "kv_cache_type": kv_cache_type
+            "kv_cache_type": kv_cache_type,
+            "parallel": parallel,
+            "use_large_batch": use_large_batch,
+            "batch_size": batch_size,
+            "seed": seed,
         }
+
+        parallel = max(1, int(parallel))
+        if batch_size is not None and int(batch_size) <= 0:
+            batch_size = None
 
         server_path = self._find_llama_server()
 
@@ -227,7 +280,8 @@ class TranslationWorker:
             "--port", str(self.server_port),
             "-ngl", str(gpu_layers),
             "-c", str(ctx),
-            "--parallel", "4",  # 支持并发请求
+            "--ctx-size", str(ctx),
+            "--parallel", str(parallel),
             "--reasoning-format", "deepseek-legacy",
             "--metrics"
         ]
@@ -236,21 +290,39 @@ class TranslationWorker:
             cmd.extend(["-fa", "on"])
         if kv_cache_type:
             cmd.extend(["--cache-type-k", kv_cache_type, "--cache-type-v", kv_cache_type])
+        if batch_size:
+            final_batch = min(int(batch_size), int(ctx))
+            cmd.extend(["-b", str(final_batch), "-ub", str(final_batch)])
+        elif use_large_batch:
+            safe_batch = min(1024, int(ctx))
+            cmd.extend(["-b", str(safe_batch), "-ub", str(safe_batch)])
+        if seed is not None:
+            cmd.extend(["-s", str(seed)])
+
+        # 记录 llama-server 输出，便于远程/本机诊断
+        log_path = Path(__file__).parent.parent / "llama-daemon.log"
+        log_target = subprocess.DEVNULL
+        try:
+            self._server_log_handle = open(log_path, "a", encoding="utf-8")
+            log_target = self._server_log_handle
+        except OSError:
+            self._server_log_handle = None
 
         # 使用进程组启动，确保子进程可被一起销毁
+
         if sys.platform != 'win32':
             self.server_process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=log_target,
+                stderr=log_target,
                 start_new_session=True  # 创建新进程组
             )
         else:
             # Windows: 使用 CREATE_NEW_PROCESS_GROUP
             self.server_process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=log_target,
+                stderr=log_target,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
             )
 
@@ -306,6 +378,12 @@ class TranslationWorker:
 
             self.server_process = None
             self._server_ready = False
+        if self._server_log_handle:
+            try:
+                self._server_log_handle.close()
+            except OSError:
+                pass
+            self._server_log_handle = None
 
     async def translate(self, task: TranslationTask) -> str:
         """
@@ -313,6 +391,8 @@ class TranslationWorker:
         """
         request = task.request
         middleware_dir = Path(__file__).parent.parent
+        temp_artifacts: List[str] = []
+        self._temp_artifact_dir.mkdir(parents=True, exist_ok=True)
         requested_model_path = request.model or self.model_path
         if not requested_model_path:
             raise ValueError("Model path is not set")
@@ -323,7 +403,11 @@ class TranslationWorker:
             "ctx": request.ctx,
             "gpu_layers": request.gpu_layers,
             "flash_attn": request.flash_attn,
-            "kv_cache_type": request.kv_cache_type
+            "kv_cache_type": request.kv_cache_type,
+            "parallel": request.parallel,
+            "use_large_batch": request.use_large_batch,
+            "batch_size": request.batch_size,
+            "seed": request.seed,
         }
 
         # 检查配置是否变化（修复服务器参数"锁定"问题）
@@ -332,7 +416,11 @@ class TranslationWorker:
             self._current_config["gpu_layers"] != effective_config["gpu_layers"] or
             self._current_config["model_path"] != effective_config["model_path"] or
             self._current_config["flash_attn"] != effective_config["flash_attn"] or
-            self._current_config["kv_cache_type"] != effective_config["kv_cache_type"]
+            self._current_config["kv_cache_type"] != effective_config["kv_cache_type"] or
+            self._current_config["parallel"] != effective_config["parallel"] or
+            self._current_config["use_large_batch"] != effective_config["use_large_batch"] or
+            self._current_config["batch_size"] != effective_config["batch_size"] or
+            self._current_config["seed"] != effective_config["seed"]
         )
 
         need_restart_server = False
@@ -349,7 +437,11 @@ class TranslationWorker:
                         "ctx": self._current_config["ctx"] if self._current_config["ctx"] is not None else request.ctx,
                         "gpu_layers": self._current_config["gpu_layers"] if self._current_config["gpu_layers"] is not None else request.gpu_layers,
                         "flash_attn": self._current_config["flash_attn"] if self._current_config["flash_attn"] is not None else request.flash_attn,
-                        "kv_cache_type": self._current_config["kv_cache_type"] if self._current_config["kv_cache_type"] is not None else request.kv_cache_type
+                        "kv_cache_type": self._current_config["kv_cache_type"] if self._current_config["kv_cache_type"] is not None else request.kv_cache_type,
+                        "parallel": self._current_config["parallel"] if self._current_config["parallel"] is not None else request.parallel,
+                        "use_large_batch": self._current_config["use_large_batch"] if self._current_config["use_large_batch"] is not None else request.use_large_batch,
+                        "batch_size": self._current_config["batch_size"] if self._current_config["batch_size"] is not None else request.batch_size,
+                        "seed": self._current_config["seed"] if self._current_config["seed"] is not None else request.seed,
                     }
                 else:
                     # 没有任务运行，可以安全重启
@@ -374,7 +466,11 @@ class TranslationWorker:
                     gpu_layers=effective_config["gpu_layers"],
                     ctx=effective_config["ctx"],
                     flash_attn=effective_config["flash_attn"],
-                    kv_cache_type=effective_config["kv_cache_type"]
+                    kv_cache_type=effective_config["kv_cache_type"],
+                    parallel=effective_config["parallel"],
+                    use_large_batch=effective_config["use_large_batch"],
+                    batch_size=effective_config["batch_size"],
+                    seed=effective_config["seed"],
                 )
 
             # 准备输入
@@ -386,6 +482,7 @@ class TranslationWorker:
                 input_file.write(request.text)
                 input_file.close()
                 input_path = input_file.name
+                temp_artifacts.append(input_path)
             else:
                 # 安全验证：file_path 必须在允许的目录内
                 # 防止路径遍历攻击（如 ../../etc/passwd）
@@ -422,6 +519,36 @@ class TranslationWorker:
             output_path = output_dir / f"{task.task_id}_output.txt"
             task.output_path = str(output_path)
 
+            def _write_temp_json(prefix: str, payload: Any) -> str:
+                temp_file = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    suffix=".json",
+                    prefix=f"{prefix}_",
+                    delete=False,
+                    encoding="utf-8",
+                    dir=str(self._temp_artifact_dir),
+                )
+                json.dump(payload, temp_file, ensure_ascii=False, indent=2)
+                temp_file.close()
+                temp_artifacts.append(temp_file.name)
+                return temp_file.name
+
+            def _write_temp_text(prefix: str, payload: str) -> str:
+                temp_file = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    suffix=".txt",
+                    prefix=f"{prefix}_",
+                    delete=False,
+                    encoding="utf-8",
+                    dir=str(self._temp_artifact_dir),
+                )
+                temp_file.write(payload)
+                temp_file.close()
+                temp_artifacts.append(temp_file.name)
+                return temp_file.name
+
+            parallel = max(1, int(request.parallel))
+
             # 构建命令行参数（关键：使用 --no-server-spawn 连接常驻服务器）
             cmd = [
                 sys.executable,
@@ -434,6 +561,17 @@ class TranslationWorker:
                 "--ctx", str(effective_config["ctx"]),
                 "--gpu-layers", str(effective_config["gpu_layers"]),
                 "--temperature", str(request.temperature),
+                "--line-format", request.line_format,
+                "--strict-mode", request.strict_mode,
+                "--concurrency", str(parallel),
+                "--rep-penalty-base", str(request.rep_penalty_base),
+                "--rep-penalty-max", str(request.rep_penalty_max),
+                "--rep-penalty-step", str(request.rep_penalty_step),
+                "--max-retries", str(request.max_retries),
+                "--output-hit-threshold", str(request.output_hit_threshold),
+                "--cot-coverage-threshold", str(request.cot_coverage_threshold),
+                "--coverage-retries", str(request.coverage_retries),
+                "--retry-temp-boost", str(request.retry_temp_boost),
                 # 关键修复：连接常驻服务器，不再每次启动新服务器
                 "--no-server-spawn",
                 "--server-host", self.server_host,
@@ -448,7 +586,18 @@ class TranslationWorker:
                 cmd.extend(["--glossary", request.glossary])
 
             if request.line_check:
-                cmd.append("--line-check")
+                cmd.extend([
+                    "--line-check",
+                    "--line-tolerance-abs", str(request.line_tolerance_abs),
+                    "--line-tolerance-pct", str(request.line_tolerance_pct),
+                ])
+
+            if request.balance_enable:
+                cmd.append("--balance-enable")
+                cmd.extend([
+                    "--balance-threshold", str(request.balance_threshold),
+                    "--balance-count", str(request.balance_count),
+                ])
 
             if request.traditional:
                 cmd.append("--traditional")
@@ -456,20 +605,75 @@ class TranslationWorker:
             if request.save_cot:
                 cmd.append("--save-cot")
 
-            if request.rules_pre:
-                cmd.extend(["--rules-pre", request.rules_pre])
+            if request.save_summary:
+                cmd.append("--save-summary")
 
-            if request.rules_post:
-                cmd.extend(["--rules-post", request.rules_post])
+            if request.alignment_mode:
+                cmd.append("--alignment-mode")
 
-            if request.parallel > 1:
-                cmd.extend(["--parallel", str(request.parallel)])
+            if request.resume:
+                cmd.append("--resume")
+
+            rules_pre_path = request.rules_pre
+            if not rules_pre_path and request.rules_pre_inline is not None:
+                rules_pre_path = _write_temp_json("rules_pre", request.rules_pre_inline)
+            if rules_pre_path:
+                cmd.extend(["--rules-pre", rules_pre_path])
+
+            rules_post_path = request.rules_post
+            if not rules_post_path and request.rules_post_inline is not None:
+                rules_post_path = _write_temp_json("rules_post", request.rules_post_inline)
+            if rules_post_path:
+                cmd.extend(["--rules-post", rules_post_path])
+
+            if request.retry_prompt_feedback:
+                cmd.append("--retry-prompt-feedback")
 
             if effective_config["flash_attn"]:
                 cmd.append("--flash-attn")
 
             if effective_config["kv_cache_type"]:
                 cmd.extend(["--kv-cache-type", effective_config["kv_cache_type"]])
+
+            if request.use_large_batch:
+                cmd.append("--use-large-batch")
+            if request.batch_size:
+                cmd.extend(["--batch-size", str(request.batch_size)])
+            if request.seed is not None:
+                cmd.extend(["--seed", str(request.seed)])
+
+            if request.text_protect:
+                cmd.append("--text-protect")
+            if request.protect_patterns:
+                protect_patterns = str(request.protect_patterns)
+                if os.path.exists(protect_patterns):
+                    protect_path = Path(protect_patterns).resolve()
+                    allowed_dirs = [
+                        self._temp_artifact_dir.resolve(),
+                        (middleware_dir / "uploads").resolve(),
+                        (middleware_dir / "outputs").resolve(),
+                    ]
+                    if any(self._is_path_within(protect_path, base) for base in allowed_dirs):
+                        cmd.extend(["--protect-patterns", str(protect_path)])
+                    else:
+                        task.add_log(
+                            "[WARN] protect_patterns path is outside allowed directories; treating as inline content"
+                        )
+                        cmd.extend(["--protect-patterns", _write_temp_text("protect_patterns", protect_patterns)])
+                else:
+                    cmd.extend(["--protect-patterns", _write_temp_text("protect_patterns", protect_patterns)])
+
+            if request.fix_ruby:
+                cmd.append("--fix-ruby")
+            if request.fix_kana:
+                cmd.append("--fix-kana")
+            if request.fix_punctuation:
+                cmd.append("--fix-punctuation")
+
+            if request.save_cache:
+                cmd.append("--save-cache")
+                if request.cache_path:
+                    cmd.extend(["--cache-path", str(request.cache_path)])
 
             # 执行翻译
             task.add_log(f"[INFO] Running translation (using persistent server on port {self.server_port})...")
@@ -534,12 +738,14 @@ class TranslationWorker:
 
             # 读取结果
             if process.returncode == 0 and output_path.exists():
-                with open(output_path, 'r', encoding='utf-8') as f:
-                    result = f.read()
-
-                # 如果是文本模式，清理临时文件
-                if request.text:
-                    os.unlink(input_path)
+                try:
+                    with open(output_path, 'r', encoding='utf-8') as f:
+                        result = f.read()
+                except UnicodeDecodeError:
+                    # 二进制输出（如 EPUB 重建后的 ZIP），跳过文本读取
+                    # downloadResult 端点通过 FileResponse(task.output_path) 直接发送
+                    result = f"[Binary output: {output_path}]"
+                    task.add_log("[INFO] Output is binary format, skipping text read.")
 
                 return result
             else:
@@ -548,6 +754,12 @@ class TranslationWorker:
             # 减少运行任务计数
             with self._tasks_lock:
                 self._running_tasks -= 1
+            for temp_path in temp_artifacts:
+                try:
+                    if temp_path and os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                except OSError:
+                    pass
 
     async def _kill_process_tree(self, process: asyncio.subprocess.Process):
         """杀死进程树（修复僵尸进程问题）"""
@@ -593,14 +805,45 @@ if __name__ == "__main__":
             ctx = 8192
             gpu_layers = -1
             temperature = 0.3
+            line_format = "single"
+            strict_mode = "off"
             line_check = False
+            line_tolerance_abs = 10
+            line_tolerance_pct = 0.2
             traditional = False
             save_cot = False
+            save_summary = False
+            alignment_mode = False
+            resume = False
+            save_cache = False
+            cache_path = None
             rules_pre = None
             rules_post = None
+            rules_pre_inline = None
+            rules_post_inline = None
+            rep_penalty_base = 1.0
+            rep_penalty_max = 1.5
+            rep_penalty_step = 0.1
+            max_retries = 3
+            output_hit_threshold = 60.0
+            cot_coverage_threshold = 80.0
+            coverage_retries = 3
+            retry_temp_boost = 0.05
+            retry_prompt_feedback = True
+            balance_enable = False
+            balance_threshold = 0.6
+            balance_count = 3
             parallel = 1
             flash_attn = False
             kv_cache_type = "f16"
+            use_large_batch = False
+            batch_size = None
+            seed = None
+            text_protect = False
+            protect_patterns = None
+            fix_ruby = False
+            fix_kana = False
+            fix_punctuation = False
 
         task = TranslationTask(
             task_id="test001",

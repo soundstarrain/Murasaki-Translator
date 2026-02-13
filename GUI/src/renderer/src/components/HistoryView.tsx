@@ -87,6 +87,16 @@ export interface TranslationRecord {
   sourceChars?: number;
   /** Average translation speed (output chars/sec) */
   avgSpeed?: number;
+  /** 执行模式：local（本地直连）/ remote-api（远程链路） */
+  executionMode?: "local" | "remote-api";
+  /** 远程连接信息（仅远程模式） */
+  remoteInfo?: {
+    serverUrl: string;
+    source: string;  // "manual" | "local-daemon"
+    taskId?: string;
+    model?: string;
+    serverVersion?: string;
+  };
   /** Configuration used for this translation */
   config: {
     temperature: number;
@@ -665,6 +675,57 @@ export function HistoryView({ lang }: { lang: Language }) {
       ``,
     ];
 
+    if (fullRecord.executionMode === "remote-api" && fullRecord.remoteInfo) {
+      const remoteTitle =
+        lang === "en"
+          ? "## Remote Info"
+          : lang === "jp"
+            ? "## リモート情報"
+            : "## 远程信息";
+      const sourceLabel =
+        fullRecord.remoteInfo.source === "local-daemon"
+          ? lang === "en"
+            ? "Local daemon"
+            : lang === "jp"
+              ? "ローカル常駐"
+              : "本机常驻"
+          : lang === "en"
+            ? "Remote"
+            : lang === "jp"
+              ? "リモート"
+              : "远程";
+      const serverLabel =
+        lang === "en" ? "- Server:" : lang === "jp" ? "- サーバー:" : "- 服务器:";
+      const sourceTitle =
+        lang === "en" ? "- Source:" : lang === "jp" ? "- ソース:" : "- 来源:";
+      const taskLabel =
+        lang === "en" ? "- Task ID:" : lang === "jp" ? "- タスクID:" : "- 任务ID:";
+      const modelLabel =
+        lang === "en" ? "- Remote Model:" : lang === "jp" ? "- リモートモデル:" : "- 远程模型:";
+      const versionLabel =
+        lang === "en"
+          ? "- Server Version:"
+          : lang === "jp"
+            ? "- サーバーバージョン:"
+            : "- 服务端版本:";
+
+      lines.push(
+        remoteTitle,
+        `${serverLabel} ${fullRecord.remoteInfo.serverUrl}`,
+        `${sourceTitle} ${sourceLabel}`,
+      );
+      if (fullRecord.remoteInfo.taskId) {
+        lines.push(`${taskLabel} ${fullRecord.remoteInfo.taskId}`);
+      }
+      if (fullRecord.remoteInfo.model) {
+        lines.push(`${modelLabel} ${fullRecord.remoteInfo.model}`);
+      }
+      if (fullRecord.remoteInfo.serverVersion) {
+        lines.push(`${versionLabel} ${fullRecord.remoteInfo.serverVersion}`);
+      }
+      lines.push(``);
+    }
+
     if (fullRecord.triggers.length > 0) {
       lines.push(
         e.triggersTitle.replace(
@@ -784,12 +845,20 @@ export function HistoryView({ lang }: { lang: Language }) {
                     <div className="flex items-center gap-3">
                       {getStatusIcon(record.status)}
                       <div>
-                        <CardTitle className="text-base font-medium">
+                        <CardTitle className="text-base font-medium flex items-center gap-2">
                           {record.fileName}
+                          {record.executionMode === "remote-api" && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-normal">
+                              {record.remoteInfo?.source === "local-daemon" ? "本机常驻" : "远程"}
+                            </span>
+                          )}
                         </CardTitle>
                         <p className="text-xs text-muted-foreground mt-0.5">
                           {formatDate(record.startTime)} ·{" "}
                           {formatDuration(record.duration)}
+                          {record.remoteInfo?.serverUrl && (
+                            <span className="ml-1 opacity-60">· {record.remoteInfo.serverUrl.replace(/^https?:\/\//, "")}</span>
+                          )}
                         </p>
                       </div>
                     </div>

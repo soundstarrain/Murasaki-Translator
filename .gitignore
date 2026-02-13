@@ -73,3 +73,8 @@ setup_dev_python.bat
 
 release/
 docs/
+
+AGENT.MD
+middleware/remote-sync
+middleware/uploads
+middleware/outputs

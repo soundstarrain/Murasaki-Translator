@@ -94,6 +94,12 @@ jobs:
         working-directory: GUI
         run: npm install
 
+      - name: Prepare packaged docs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item ".github/release-docs/README-windows-cuda.md" -Destination "release/readme.md" -Force
+
       - name: Build
         working-directory: GUI
         run: npm run build:win
@@ -103,15 +109,11 @@ jobs:
       - name: Rename artifact
         shell: pwsh
         run: |
-          # 将 LICENSE 和 README 复制到 dist 目录（electron-builder 会打包进 zip）
-          Copy-Item "LICENSE" -Destination "GUI/dist/LICENSE.txt"
-          Copy-Item ".github/release-docs/README-windows-cuda.md" -Destination "GUI/dist/README.md"
-          # 重命名 zip 文件
+          # Rename output zip
           Get-ChildItem GUI/dist/*.zip | ForEach-Object {
             $newName = "Murasaki-Translator-${{ github.ref_name }}-win-cuda-x64.zip"
             Rename-Item $_.FullName -NewName $newName
           }
-
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -163,26 +165,30 @@ jobs:
           python_env/python.exe -m pip install -r middleware/requirements.txt --target python_env/Lib/site-packages --no-warn-script-location
           python_env/python.exe -m pip install -r middleware/server/requirements.txt --target python_env/Lib/site-packages --no-warn-script-location
 
-      - name: Install & Build
+      - name: Install Node dependencies
         working-directory: GUI
+        run: npm install
+
+      - name: Prepare packaged docs
+        shell: pwsh
         run: |
-          npm install
-          npm run build:win
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item ".github/release-docs/README-windows-vulkan.md" -Destination "release/readme.md" -Force
+
+      - name: Build
+        working-directory: GUI
+        run: npm run build:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Rename artifact
         shell: pwsh
         run: |
-          # 将 LICENSE 和 README 复制到 dist 目录
-          Copy-Item "LICENSE" -Destination "GUI/dist/LICENSE.txt"
-          Copy-Item ".github/release-docs/README-windows-vulkan.md" -Destination "GUI/dist/README.md"
-          # 重命名 zip 文件
+          # Rename output zip
           Get-ChildItem GUI/dist/*.zip | ForEach-Object {
             $newName = "Murasaki-Translator-${{ github.ref_name }}-win-vulkan-x64.zip"
             Rename-Item $_.FullName -NewName $newName
           }
-
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -304,6 +310,11 @@ jobs:
       - name: Install Node dependencies
         working-directory: GUI
         run: npm install
+
+      - name: Prepare packaged docs
+        run: |
+          mkdir -p release
+          cp .github/release-docs/README-macos.md release/readme.md
 
       - name: Build for ARM64
         working-directory: GUI
@@ -442,6 +453,11 @@ jobs:
         working-directory: GUI
         run: npm install
 
+      - name: Prepare packaged docs
+        run: |
+          mkdir -p release
+          cp .github/release-docs/README-linux-gui.md release/readme.md
+
       - name: Build GUI
         working-directory: GUI
         run: |
@@ -459,75 +475,122 @@ jobs:
           cp -r middleware/server dist-cli/murasaki-server/
           cp middleware/cli/murasaki_server.py dist-cli/murasaki-server/
           cp middleware/requirements.txt dist-cli/murasaki-server/
-          # 添加缺失的依赖文件
           cp middleware/rule_processor.py dist-cli/murasaki-server/
-          # 合并 requirements（确保换行符）
+
+          # Merge requirements
           echo "" >> dist-cli/murasaki-server/requirements.txt
           cat middleware/openai_proxy/requirements.txt >> dist-cli/murasaki-server/requirements.txt
           echo "" >> dist-cli/murasaki-server/requirements.txt
           cat middleware/server/requirements.txt >> dist-cli/murasaki-server/requirements.txt
-          
-          # 创建启动脚本
+
+          # Create startup script
           cat > dist-cli/murasaki-server/start.sh << 'EOF'
           #!/bin/bash
+          set -euo pipefail
           cd "$(dirname "$0")"
-          
-          # 检查 Python 依赖
-          if ! python3 -c "import fastapi" 2>/dev/null; then
-            echo "Installing dependencies..."
-            pip3 install -r requirements.txt
-            pip3 install fastapi uvicorn httpx
-          fi
-          
-          python3 murasaki_server.py "$@"
+          exec bash server/start_server.sh "$@"
           EOF
           chmod +x dist-cli/murasaki-server/start.sh
           chmod +x dist-cli/murasaki-server/bin/linux-vulkan/llama-server
           chmod +x dist-cli/murasaki-server/bin/linux-cpu/llama-server
-          
-          # 创建 README
-          cat > dist-cli/murasaki-server/README.md << 'EOF'
-          # Murasaki Translator CLI Server
-          
-          OpenAI 兼容的翻译 API 服务器。
-          
-          ## 快速开始
-          
-          ```bash
-          # 1. 安装依赖
-          pip3 install -r requirements.txt
-          pip3 install fastapi uvicorn httpx
-          
-          # 2. 运行服务器
-          ./start.sh --model /path/to/model.gguf --port 8000
-          
-          # 或者直接运行
-          python3 murasaki_server.py --model /path/to/model.gguf
-          ```
-          
-          ## API 端点
-          
-          - `POST /v1/chat/completions` - Chat Completions (OpenAI 兼容)
-          - `GET /v1/models` - 模型列表
-          - `GET /health` - 健康检查
-          
-          ## 测试
-          
-          ```bash
-          curl http://localhost:8000/v1/chat/completions \
-            -H "Content-Type: application/json" \
-            -d '{"model":"local","messages":[{"role":"user","content":"翻译：こんにちは"}]}'
-          ```
-          EOF
-          
-          # 添加 README 和 LICENSE
+
+          # Add README and LICENSE
           cp .github/release-docs/README-linux-cli.md dist-cli/murasaki-server/README.md
+          cp .github/release-docs/install-linux-server.sh dist-cli/murasaki-server/install.sh
           cp LICENSE dist-cli/murasaki-server/murasaki-translator.LICENSE.txt
-          
-          # 打包
+          chmod +x dist-cli/murasaki-server/install.sh
+
+          # Package archive
           cd dist-cli
           tar -czvf murasaki-server-linux-x64.tar.gz murasaki-server
 
+      - name: Smoke test Linux server package
+        run: |
+          cd dist-cli
+          tar -xzf murasaki-server-linux-x64.tar.gz
+          cd murasaki-server
+          SMOKE_KEY="smoke-test-key"
+          ./start.sh --host 127.0.0.1 --port 18080 --api-key "$SMOKE_KEY" --enable-openai-proxy --openai-port 18081 > smoke.log 2>&1 &
+          SERVER_PID=$!
+          cleanup() {
+            kill "$SERVER_PID" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          READY=0
+          for i in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:18080/health >/tmp/health.json; then
+              API_AUTH_CODE=$(curl -sS -o /tmp/status.json -w "%{http_code}" -H "Authorization: Bearer $SMOKE_KEY" http://127.0.0.1:18080/api/v1/status || true)
+              OPENAI_AUTH_CODE=$(curl -sS -o /tmp/models.json -w "%{http_code}" -H "Authorization: Bearer $SMOKE_KEY" http://127.0.0.1:18081/v1/models || true)
+              if [ "$API_AUTH_CODE" = "200" ] && [ "$OPENAI_AUTH_CODE" = "200" ]; then
+                READY=1
+                break
+              fi
+            fi
+            sleep 1
+          done
+
+          if [ "$READY" -ne 1 ]; then
+            echo "Server did not become ready in time"
+            tail -n 200 smoke.log || true
+            exit 1
+          fi
+
+          HEALTH_CODE=$(curl -sS -o /tmp/health.json -w "%{http_code}" http://127.0.0.1:18080/health)
+          API_AUTH_CODE=$(curl -sS -o /tmp/status.json -w "%{http_code}" -H "Authorization: Bearer $SMOKE_KEY" http://127.0.0.1:18080/api/v1/status)
+          OPENAI_AUTH_CODE=$(curl -sS -o /tmp/models.json -w "%{http_code}" -H "Authorization: Bearer $SMOKE_KEY" http://127.0.0.1:18081/v1/models)
+          API_NOAUTH_CODE=$(curl -sS -o /tmp/status_noauth.json -w "%{http_code}" http://127.0.0.1:18080/api/v1/status || true)
+          OPENAI_NOAUTH_CODE=$(curl -sS -o /tmp/models_noauth.json -w "%{http_code}" http://127.0.0.1:18081/v1/models || true)
+
+          test "$HEALTH_CODE" = "200"
+          test "$API_AUTH_CODE" = "200"
+          test "$OPENAI_AUTH_CODE" = "200"
+          test "$API_NOAUTH_CODE" = "403"
+          test "$OPENAI_NOAUTH_CODE" = "403"
+
+          grep -q '"auth_required"[[:space:]]*:[[:space:]]*true' /tmp/health.json
+          grep -q "api_v1" /tmp/health.json
+          grep -q "api_v1_full_parity" /tmp/health.json
+          grep -q "openai_v1" /tmp/health.json
+
+          # Upload contract test
+          echo "remote smoke payload" > /tmp/smoke_upload.txt
+          UPLOAD_CODE=$(curl -sS -o /tmp/upload.json -w "%{http_code}" \
+            -H "Authorization: Bearer $SMOKE_KEY" \
+            -F "file=@/tmp/smoke_upload.txt;type=text/plain" \
+            http://127.0.0.1:18080/api/v1/upload/file)
+          test "$UPLOAD_CODE" = "200"
+          python3 -c "import json; payload=json.load(open('/tmp/upload.json', encoding='utf-8')); assert payload.get('file_path'), 'upload file_path missing'"
+
+          # Create/get/cancel task contract test (no model required for endpoint contract)
+          TRANSLATE_CODE=$(curl -sS -o /tmp/translate.json -w "%{http_code}" \
+            -H "Authorization: Bearer $SMOKE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"text":"smoke translate contract"}' \
+            http://127.0.0.1:18080/api/v1/translate)
+          test "$TRANSLATE_CODE" = "200"
+          python3 -c "import json; payload=json.load(open('/tmp/translate.json', encoding='utf-8')); task_id=payload.get('task_id'); assert task_id, 'task_id missing'; open('/tmp/task_id.txt', 'w', encoding='utf-8').write(task_id)"
+          TASK_ID=$(cat /tmp/task_id.txt)
+
+          TASK_STATUS_CODE=$(curl -sS -o /tmp/task_status.json -w "%{http_code}" \
+            -H "Authorization: Bearer $SMOKE_KEY" \
+            "http://127.0.0.1:18080/api/v1/translate/${TASK_ID}?log_from=0&log_limit=5")
+          test "$TASK_STATUS_CODE" = "200"
+          python3 -c "import json; payload=json.load(open('/tmp/task_status.json', encoding='utf-8')); required=['task_id','status','next_log_index','log_total','logs_truncated']; missing=[k for k in required if k not in payload]; assert not missing, f'missing field: {missing}'"
+
+          # WebSocket contract test
+          node -e "const fs=require('fs'); const taskId=fs.readFileSync('/tmp/task_id.txt','utf8').trim(); const ws=new WebSocket(`ws://127.0.0.1:18080/api/v1/ws/${taskId}?token=smoke-test-key`); const timer=setTimeout(()=>{console.error('ws timeout'); process.exit(1);},10000); ws.onmessage=(event)=>{try{const payload=JSON.parse(String(event.data)); if(!payload.type){throw new Error('websocket payload missing type');} clearTimeout(timer); ws.close(); process.exit(0);}catch(err){console.error(err); process.exit(1);}}; ws.onerror=(err)=>{clearTimeout(timer); console.error(err); process.exit(1);};"
+
+          CANCEL_CODE=$(curl -sS -o /tmp/cancel_task.json -w "%{http_code}" \
+            -X DELETE \
+            -H "Authorization: Bearer $SMOKE_KEY" \
+            "http://127.0.0.1:18080/api/v1/translate/${TASK_ID}")
+          test "$CANCEL_CODE" = "200"
+
+          DOWNLOAD_CODE=$(curl -sS -o /tmp/download_pending.bin -w "%{http_code}" \
+            -H "Authorization: Bearer $SMOKE_KEY" \
+            "http://127.0.0.1:18080/api/v1/download/${TASK_ID}" || true)
+          test "$DOWNLOAD_CODE" = "400"
       - name: Upload GUI Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -589,9 +652,7 @@ jobs:
             
             用于无界面服务器部署，提供 OpenAI 兼容 API：
             ```bash
-            tar -xzf murasaki-server-linux-x64.tar.gz
-            cd murasaki-server
-            ./start.sh --model /path/to/model.gguf --port 8000
+            MODEL='/path/to/model.gguf'; API_KEY='replace-with-strong-key'; curl -fsSL https://github.com/soundstarrain/Murasaki-Translator/releases/latest/download/murasaki-server-linux-x64.tar.gz | tar -xz && cd murasaki-server && nohup ./start.sh --host 0.0.0.0 --port 8000 --model "$MODEL" --api-key "$API_KEY" --enable-openai-proxy --openai-port 8001 > server.log 2>&1 &
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

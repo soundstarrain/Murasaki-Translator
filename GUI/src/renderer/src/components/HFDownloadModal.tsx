@@ -41,6 +41,7 @@ interface HFDownloadModalProps {
   orgName: string; // Organization name instead of repo ID
   onDownloadComplete: () => void;
   lang: "zh" | "en" | "jp";
+  mode?: "local" | "remote";
 }
 
 const t = {
@@ -58,17 +59,25 @@ const t = {
     resuming: "续传中...",
     checking: "检查文件...",
     skipped: "文件已存在，跳过",
+    downloadsLabel: "下载量",
     complete: "下载完成！",
     error: "下载失败",
+    retry: "重试",
+    done: "完成",
     networkError: "网络错误，请检查代理设置",
     checkNetwork: "测试连接",
     networkOk: "连接正常",
     networkFailed: "无法连接",
+    networkIdle: "等待测速...",
     direct: "直连",
     mirror: "镜像",
     mirrorDesc: "国内用户如果直连较慢，可尝试切换到镜像源",
+    sourceLabel: "下载源:",
     downloadTip: "提示：模型文件较大，请耐心等待。支持断点续传。",
+    tipTitle: "下载提示",
     vramTitle: "显存需求",
+    vram8b: "6G 最低 / 8G+ 推荐",
+    vram14b: "10G 最低 / 12G+ 推荐",
     model: "模型",
     minVram: "最低显存",
     recVram: "推荐显存",
@@ -87,17 +96,25 @@ const t = {
     resuming: "Resuming...",
     checking: "Checking file...",
     skipped: "File exists, skipped",
+    downloadsLabel: "downloads",
     complete: "Download Complete!",
     error: "Download Failed",
+    retry: "Retry",
+    done: "Done",
     networkError: "Network error, check proxy settings",
     checkNetwork: "Test Connection",
     networkOk: "Connected",
     networkFailed: "Connection Failed",
+    networkIdle: "Waiting for check...",
     direct: "Direct",
     mirror: "Mirror",
     mirrorDesc: "Switch to mirror if direct connection is slow",
+    sourceLabel: "Source:",
     downloadTip: "Tip: Model files are large . Resume download supported.",
+    tipTitle: "Download Tip",
     vramTitle: "VRAM Requirements",
+    vram8b: "6G min / 8G+ rec",
+    vram14b: "10G min / 12G+ rec",
     model: "Model",
     minVram: "Min VRAM",
     recVram: "Rec. VRAM",
@@ -116,17 +133,25 @@ const t = {
     resuming: "再開中...",
     checking: "ファイル確認中...",
     skipped: "ファイル存在、スキップ",
+    downloadsLabel: "ダウンロード",
     complete: "ダウンロード完了！",
     error: "ダウンロード失敗",
+    retry: "再試行",
+    done: "完了",
     networkError: "ネットワークエラー、プロキシ設定を確認してください",
     checkNetwork: "接続テスト",
     networkOk: "接続成功",
     networkFailed: "接続失敗",
+    networkIdle: "測定待ち...",
     direct: "直接",
     mirror: "ミラー",
     mirrorDesc: "直接接続が遅い場合はミラーに切り替え",
+    sourceLabel: "ダウンロード元:",
     downloadTip: "モデルファイルは大きい。レジュームダウンロード対応。",
+    tipTitle: "ダウンロードのヒント",
     vramTitle: "VRAM 要件",
+    vram8b: "6GB 最低 / 8GB+ 推奨",
+    vram14b: "10GB 最低 / 12GB+ 推奨",
     model: "モデル",
     minVram: "最低 VRAM",
     recVram: "推奨 VRAM",
@@ -145,8 +170,10 @@ export function HFDownloadModal({
   orgName,
   onDownloadComplete,
   lang,
+  mode = "local",
 }: HFDownloadModalProps) {
   const text = t[lang] || t.zh;
+  const isRemote = mode === "remote";
 
   // Step management: 'repos' -> 'files' -> 'downloading' -> 'complete'
   const [step, setStep] = useState<
@@ -162,6 +189,7 @@ export function HFDownloadModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
+  const [remoteDownloadId, setRemoteDownloadId] = useState<string | null>(null);
 
   // Network check state
   const [networkStatus, setNetworkStatus] = useState<
@@ -185,15 +213,28 @@ export function HFDownloadModal({
     const checkNetworkInternal = async () => {
       const startTime = Date.now();
       try {
-        // @ts-ignore
-        const result = await window.api?.hfCheckNetwork?.();
-        const latency = Date.now() - startTime;
-        if (result?.status === "ok") {
-          setNetworkStatus("ok");
-          setNetworkMessage(`${latency}ms`);
+        if (isRemote) {
+          // @ts-ignore
+          const result = await window.api?.remoteHfCheckNetwork?.();
+          const latency = Date.now() - startTime;
+          if (result?.ok && result.data?.status === "ok") {
+            setNetworkStatus("ok");
+            setNetworkMessage(`${latency}ms`);
+          } else {
+            setNetworkStatus("error");
+            setNetworkMessage(result?.message || result?.data?.message || text.networkFailed);
+          }
         } else {
-          setNetworkStatus("error");
-          setNetworkMessage(result?.message || text.networkFailed);
+          // @ts-ignore
+          const result = await window.api?.hfCheckNetwork?.();
+          const latency = Date.now() - startTime;
+          if (result?.status === "ok") {
+            setNetworkStatus("ok");
+            setNetworkMessage(`${latency}ms`);
+          } else {
+            setNetworkStatus("error");
+            setNetworkMessage(result?.message || text.networkFailed);
+          }
         }
       } catch (e) {
         setNetworkStatus("error");
@@ -207,18 +248,32 @@ export function HFDownloadModal({
     return () => {
       clearInterval(intervalId);
     };
-  }, [isOpen, mirrorSource]);
+  }, [isOpen, mirrorSource, isRemote]);
 
   // Fetch repos when modal opens
   useEffect(() => {
     if (isOpen && repos.length === 0) {
       fetchRepos();
     }
-  }, [isOpen]);
+  }, [isOpen, isRemote]);
+
+  // Reset state when switching mode while open
+  useEffect(() => {
+    if (!isOpen) return;
+    setRepos([]);
+    setSelectedRepo(null);
+    setFiles([]);
+    setSelectedFile(null);
+    setStep("repos");
+    setProgress(null);
+    setError(null);
+    setRemoteDownloadId(null);
+  }, [isOpen, isRemote]);
 
   // Listen for download progress
   useEffect(() => {
     if (step !== "downloading") return;
+    if (isRemote) return;
 
     const handleProgress = (data: DownloadProgress) => {
       if (!data) return; // Guard against undefined
@@ -245,18 +300,79 @@ export function HFDownloadModal({
       unsubscribeProgress?.();
       unsubscribeError?.();
     };
-  }, [step, onDownloadComplete]);
+  }, [step, onDownloadComplete, isRemote]);
+
+  // Poll remote download status
+  useEffect(() => {
+    if (!isRemote || step !== "downloading" || !remoteDownloadId) return;
+    let cancelled = false;
+
+    const pollStatus = async () => {
+      try {
+        // @ts-ignore
+        const result = await window.api?.remoteHfDownloadStatus?.(remoteDownloadId);
+        if (!result?.ok) {
+          setError(result?.message || text.error);
+          setStep("files");
+          return;
+        }
+        const status = result.data;
+        if (!status) return;
+        setProgress({
+          percent: status.percent ?? 0,
+          speed: status.speed || "",
+          downloaded: status.downloaded || "",
+          total: status.total || "",
+          status: status.status || "downloading",
+        });
+        if (status.status === "complete") {
+          setStep("complete");
+          onDownloadComplete();
+        } else if (status.status === "error") {
+          setError(status.error || text.error);
+          setStep("files");
+        } else if (status.status === "cancelled") {
+          setStep("files");
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(String(e));
+          setStep("files");
+        }
+      }
+    };
+
+    pollStatus();
+    const intervalId = setInterval(pollStatus, 1000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [isRemote, step, remoteDownloadId, onDownloadComplete, text.error]);
 
   const fetchRepos = async () => {
     setLoading(true);
     setError(null);
     try {
-      // @ts-ignore
-      const result = await window.api?.hfListRepos?.(orgName);
-      if (result?.repos) {
-        setRepos(result.repos);
-      } else if (result?.error) {
-        setError(result.error);
+      let payload: any = null;
+      if (isRemote) {
+        // @ts-ignore
+        const result = await window.api?.remoteHfListRepos?.(orgName);
+        if (!result?.ok) {
+          setError(result?.message || text.networkError);
+          setLoading(false);
+          return;
+        }
+        payload = result?.data;
+      } else {
+        // @ts-ignore
+        payload = await window.api?.hfListRepos?.(orgName);
+      }
+      if (payload?.repos) {
+        setRepos(payload.repos);
+      } else if (payload?.error) {
+        setError(payload.error);
       }
     } catch (e) {
       setError(text.networkError);
@@ -268,13 +384,25 @@ export function HFDownloadModal({
     setLoading(true);
     setError(null);
     try {
-      // @ts-ignore
-      const result = await window.api?.hfListFiles?.(repoId);
-      if (result?.files) {
-        setFiles(result.files);
+      let payload: any = null;
+      if (isRemote) {
+        // @ts-ignore
+        const result = await window.api?.remoteHfListFiles?.(repoId);
+        if (!result?.ok) {
+          setError(result?.message || text.networkError);
+          setLoading(false);
+          return;
+        }
+        payload = result?.data;
+      } else {
+        // @ts-ignore
+        payload = await window.api?.hfListFiles?.(repoId);
+      }
+      if (payload?.files) {
+        setFiles(payload.files);
         setStep("files");
-      } else if (result?.error) {
-        setError(result.error);
+      } else if (payload?.error) {
+        setError(payload.error);
       }
     } catch (e) {
       setError(text.networkError);
@@ -308,14 +436,30 @@ export function HFDownloadModal({
       status: "starting",
     });
     setError(null);
+    setRemoteDownloadId(null);
 
     try {
-      // @ts-ignore
-      await window.api?.hfDownloadStart?.(
-        selectedRepo.id,
-        selectedFile,
-        mirrorSource,
-      );
+      if (isRemote) {
+        // @ts-ignore
+        const result = await window.api?.remoteHfDownloadStart?.(
+          selectedRepo.id,
+          selectedFile,
+          mirrorSource,
+        );
+        if (!result?.ok || !result?.data?.downloadId) {
+          setError(result?.message || text.error);
+          setStep("files");
+          return;
+        }
+        setRemoteDownloadId(result.data.downloadId);
+      } else {
+        // @ts-ignore
+        await window.api?.hfDownloadStart?.(
+          selectedRepo.id,
+          selectedFile,
+          mirrorSource,
+        );
+      }
     } catch (e) {
       setError(String(e));
       setStep("files");
@@ -324,13 +468,21 @@ export function HFDownloadModal({
 
   const cancelDownload = async () => {
     try {
-      // @ts-ignore
-      await window.api?.hfDownloadCancel?.();
+      if (isRemote) {
+        if (remoteDownloadId) {
+          // @ts-ignore
+          await window.api?.remoteHfDownloadCancel?.(remoteDownloadId);
+        }
+      } else {
+        // @ts-ignore
+        await window.api?.hfDownloadCancel?.();
+      }
     } catch (e) {
       console.error("Failed to cancel download:", e);
     }
     setStep("files");
     setProgress(null);
+    setRemoteDownloadId(null);
   };
 
   const handleClose = () => {
@@ -347,6 +499,7 @@ export function HFDownloadModal({
     setError(null);
     setNetworkStatus("idle");
     setNetworkMessage("");
+    setRemoteDownloadId(null);
     onClose();
   };
 
@@ -397,7 +550,9 @@ export function HFDownloadModal({
         <div className="flex items-center justify-between px-5 py-3 bg-secondary/10 border-b border-border/50">
           {/* Mirror Source Switch */}
           <div className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground">下载源:</span>
+            <span className="text-xs text-muted-foreground">
+              {text.sourceLabel}
+            </span>
             <div className="flex items-center bg-secondary/50 rounded-lg p-0.5">
               <button
                 onClick={() => setMirrorSource("direct")}
@@ -447,7 +602,7 @@ export function HFDownloadModal({
             )}
             <span>
               {networkStatus === "idle"
-                ? "等待测速..."
+                ? text.networkIdle
                 : networkStatus === "checking"
                   ? text.loading
                   : networkStatus === "ok"
@@ -463,30 +618,29 @@ export function HFDownloadModal({
             {/* Tips Line */}
             <div className="flex items-center gap-3 text-[11px] sm:text-xs">
               <span className="bg-yellow-500/10 text-yellow-700 px-2 py-0.5 rounded font-medium flex-shrink-0">
-                下载提示
+                {text.tipTitle}
               </span>
               <span className="text-muted-foreground truncate">
-                模型文件较大，请耐心等待下载完成。支持断点续传。国内用户若无法访问
-                HuggingFace，可以切换到镜像源进行下载。
+                {text.downloadTip}
               </span>
             </div>
             {/* VRAM Line */}
             <div className="flex items-center gap-3 text-[11px] sm:text-xs">
               <span className="bg-indigo-500/10 text-indigo-700 px-2 py-0.5 rounded font-medium flex-shrink-0">
-                显存需求
+                {text.vramTitle}
               </span>
               <div className="flex items-center gap-4 text-muted-foreground">
                 <span className="flex items-center gap-1.5">
                   Murasaki-8B:{" "}
                   <span className="text-foreground font-semibold">
-                    6G 最低 / 8G+ 推荐
+                    {text.vram8b}
                   </span>
                 </span>
                 <span className="w-px h-3 bg-border" />
                 <span className="flex items-center gap-1.5">
                   Murasaki-14B:{" "}
                   <span className="text-foreground font-semibold">
-                    10G 最低 / 12G+ 推荐
+                    {text.vram14b}
                   </span>
                 </span>
               </div>
@@ -518,7 +672,7 @@ export function HFDownloadModal({
                     : () => fetchFiles(selectedRepo!.id)
                 }
               >
-                重试
+                {text.retry}
               </Button>
             </div>
           ) : step === "complete" ? (
@@ -586,7 +740,7 @@ export function HFDownloadModal({
                       </span>
                     </div>
                     <span className="text-xs text-muted-foreground shrink-0">
-                      {repo.downloads.toLocaleString()} downloads
+                      {repo.downloads.toLocaleString()} {text.downloadsLabel}
                     </span>
                   </div>
                 ))}
@@ -673,7 +827,7 @@ export function HFDownloadModal({
         {step === "complete" && (
           <div className="flex gap-3 p-4 border-t bg-secondary/20">
             <Button className="w-full" onClick={handleClose}>
-              完成
+              {text.done}
             </Button>
           </div>
         )}

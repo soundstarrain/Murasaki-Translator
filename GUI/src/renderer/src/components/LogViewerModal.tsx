@@ -6,38 +6,77 @@ import {
   RefreshCw,
   Terminal,
   Activity,
+  FileText,
   ChevronDown,
 } from "lucide-react";
 import { Button, Card, CardHeader, CardTitle } from "./ui/core";
 
 interface LogViewerModalProps {
-  mode: "server" | "terminal";
+  mode: "server" | "terminal" | "file";
   onClose: () => void;
+  filePath?: string;
+  title?: string;
+  subtitle?: string;
 }
 
-export function LogViewerModal({ mode, onClose }: LogViewerModalProps) {
+export function LogViewerModal({
+  mode,
+  onClose,
+  filePath,
+  title: customTitle,
+  subtitle: customSubtitle,
+}: LogViewerModalProps) {
   const [logs, setLogs] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
   const logContainerRef = useRef<HTMLPreElement>(null);
 
-  const title = mode === "server" ? "运行日志" : "主进程日志";
-  const Icon = mode === "server" ? Activity : Terminal;
+  const title =
+    customTitle ||
+    (mode === "server"
+      ? "服务器日志"
+      : mode === "terminal"
+        ? "主进程日志"
+        : "日志文件");
+  const subtitle =
+    customSubtitle ||
+    (mode === "server"
+      ? "llama-server 输出日志"
+      : mode === "terminal"
+        ? "Electron 主进程输出"
+        : filePath || "未指定文件");
+  const Icon = mode === "server" ? Activity : mode === "terminal" ? Terminal : FileText;
 
   const fetchLogs = async () => {
     setLoading(true);
     try {
       if (mode === "server") {
         // @ts-ignore
-        const result = await window.api?.getServerLog?.();
-        setLogs(result || "后端服务器尚未产生运行日志");
-      } else {
+        const result = await window.api?.readServerLog?.();
+        if (result?.exists) {
+          setLogs(result.content || "日志为空");
+        } else {
+          setLogs(result?.error || "未找到日志文件");
+        }
+      } else if (mode === "terminal") {
         // @ts-ignore
         const result = await window.api?.getMainProcessLogs?.();
         setLogs(result?.length ? result.join("\n") : "暂无主进程日志");
+      } else {
+        if (!filePath) {
+          setLogs("未指定日志文件");
+        } else {
+          // @ts-ignore
+          const result = await window.api?.readTextTail?.(filePath, { lineCount: 500 });
+          if (result?.exists) {
+            setLogs(result.content || "日志为空");
+          } else {
+            setLogs(result?.error || "未找到日志文件");
+          }
+        }
       }
     } catch (e) {
-      setLogs(`获取日志失败: ${e}`);
+      setLogs(`读取日志失败: ${e}`);
     }
     setLoading(false);
   };
@@ -47,7 +86,7 @@ export function LogViewerModal({ mode, onClose }: LogViewerModalProps) {
     // 自动刷新日志
     const interval = setInterval(fetchLogs, 3000);
     return () => clearInterval(interval);
-  }, [mode]);
+  }, [mode, filePath]);
 
   useEffect(() => {
     if (autoScroll && logContainerRef.current) {
@@ -86,11 +125,7 @@ export function LogViewerModal({ mode, onClose }: LogViewerModalProps) {
             </div>
             <div>
               <CardTitle className="text-base font-bold">{title}</CardTitle>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                {mode === "server"
-                  ? "llama-server 后端输出"
-                  : "Electron 主进程控制台"}
-              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{subtitle}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">

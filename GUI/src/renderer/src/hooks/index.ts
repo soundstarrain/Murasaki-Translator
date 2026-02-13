@@ -8,3 +8,9 @@ export type { UseFileQueueReturn } from "./useFileQueue";
 
 export { useConfig, CONFIG_KEYS } from "./useConfig";
 export type { UseConfigReturn, ConfigKey } from "./useConfig";
+
+export { useRemoteRuntime, mapRemoteApiError } from "./useRemoteRuntime";
+export type {
+  RemoteErrorUi,
+  UseRemoteRuntimeResult,
+} from "./useRemoteRuntime";

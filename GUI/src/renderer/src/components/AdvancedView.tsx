@@ -21,10 +21,14 @@ import { translations, Language } from "../lib/i18n";
 import { AlertModal } from "./ui/AlertModal";
 import { useAlertModal } from "../hooks/useAlertModal";
 
-export function AdvancedView({ lang }: { lang: Language }) {
+interface AdvancedViewProps {
+  lang: Language;
+}
+
+export function AdvancedView({ lang }: AdvancedViewProps) {
   const t = translations[lang];
   const [saved, setSaved] = useState(false);
-  const { alertProps, showAlert } = useAlertModal();
+  const { alertProps } = useAlertModal();
 
   // Model Config State
   const [gpuLayers, setGpuLayers] = useState("-1");
@@ -42,13 +46,6 @@ export function AdvancedView({ lang }: { lang: Language }) {
   // Flag to prevent auto-switch from overriding saved values during initial load
   const [isLoaded, setIsLoaded] = useState(false);
 
-  const [serverUrl, setServerUrl] = useState("");
-
-  // Remote Server Config (修复：添加 state 避免直接读取 localStorage 导致重渲染)
-  const [apiKey, setApiKey] = useState(
-    () => localStorage.getItem("config_api_key") || "",
-  );
-
   // Device Config
   const [deviceMode, setDeviceMode] = useState<"auto" | "cpu">("auto");
   const [gpuDeviceId, setGpuDeviceId] = useState("");
@@ -58,7 +55,6 @@ export function AdvancedView({ lang }: { lang: Language }) {
   const [loadingSpecs, setLoadingSpecs] = useState(false);
 
   // Active Model Info
-  const [activeModel, setActiveModel] = useState<string>("");
   const [modelInfo, setModelInfo] = useState<any>(null);
 
   // Text Processing State
@@ -94,43 +90,6 @@ export function AdvancedView({ lang }: { lang: Language }) {
   const [balanceThreshold, setBalanceThreshold] = useState(0.6);
   const [balanceCount, setBalanceCount] = useState(3);
 
-  // Server Daemon State (moved from Dashboard)
-  const [daemonMode, setDaemonMode] = useState(
-    () => localStorage.getItem("config_daemon_mode") === "true",
-  );
-  const [localPort, setLocalPort] = useState(
-    () => localStorage.getItem("config_local_port") || "8080",
-  );
-  const [localHost, setLocalHost] = useState(
-    () => localStorage.getItem("config_local_host") || "127.0.0.1",
-  );
-  const [serverStatus, setServerStatus] = useState<any>(null);
-  const [isStartingServer, setIsStartingServer] = useState(false);
-  const [isWarming, setIsWarming] = useState(false);
-  const [isTestingRemote, setIsTestingRemote] = useState(false);
-  const [warmupTime, setWarmupTime] = useState<number | null>(null);
-
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    const checkStatus = async () => {
-      if (daemonMode && (window as any).api?.serverStatus) {
-        try {
-          const s = await (window as any).api.serverStatus();
-          setServerStatus(s);
-        } catch (e) {
-          console.error("Server status check failed", e);
-        }
-      }
-    };
-    if (daemonMode) {
-      checkStatus();
-      timer = setInterval(checkStatus, 2000);
-    } else {
-      setServerStatus(null);
-    }
-    return () => clearInterval(timer);
-  }, [daemonMode]);
-
   useEffect(() => {
     // Load Model Config
     setGpuLayers(localStorage.getItem("config_gpu") || "-1");
@@ -151,8 +110,6 @@ export function AdvancedView({ lang }: { lang: Language }) {
     );
     setSeed(localStorage.getItem("config_seed") || "");
 
-    setServerUrl(localStorage.getItem("config_server") || "");
-
     // Load Device Config
     setDeviceMode(
       (localStorage.getItem("config_device_mode") as "auto" | "cpu") || "auto",
@@ -162,7 +119,6 @@ export function AdvancedView({ lang }: { lang: Language }) {
     // Load Active Model
     const savedModel = localStorage.getItem("config_model");
     if (savedModel) {
-      setActiveModel(savedModel);
       loadModelInfo(savedModel);
     }
 
@@ -241,7 +197,7 @@ export function AdvancedView({ lang }: { lang: Language }) {
     if (autoBatchSwitch) {
       const ctxValue = parseInt(ctxSize);
       if (concurrency === 1) {
-        // Fixed 2048 for np=1 to ensure zero truncation error for the entire sequence (Input+CoT+Output)
+        // Fixed 2048 for single slot to ensure zero truncation error for the entire sequence (Input+CoT+Output)
         setPhysicalBatchSize(Math.min(2048, ctxValue));
       } else {
         // Parallel stable limit
@@ -306,9 +262,6 @@ export function AdvancedView({ lang }: { lang: Language }) {
     localStorage.setItem("config_auto_batch_switch", String(autoBatchSwitch));
     localStorage.setItem("config_seed", seed);
 
-    localStorage.setItem("config_server", serverUrl);
-    localStorage.setItem("config_api_key", apiKey); // Save from state
-
     // Save Device Config
     localStorage.setItem("config_device_mode", deviceMode);
     localStorage.setItem("config_gpu_device_id", gpuDeviceId);
@@ -346,60 +299,6 @@ export function AdvancedView({ lang }: { lang: Language }) {
 
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-  };
-
-  const toggleDaemonMode = (_e: boolean) => {
-    setDaemonMode(_e);
-    localStorage.setItem("config_daemon_mode", _e.toString());
-  };
-
-  const handleStartServer = async () => {
-    if (!activeModel) {
-      // alert? or just return
-      return;
-    }
-    setIsStartingServer(true);
-    const config = {
-      model: activeModel,
-      port: parseInt(localStorage.getItem("config_local_port") || "8080"),
-      gpuLayers: gpuLayers,
-      ctxSize: ctxSize,
-      concurrency: concurrency,
-      flashAttn,
-      kvCacheType,
-      autoKvSwitch,
-      useLargeBatch,
-      physicalBatchSize,
-      seed: seed ? parseInt(seed) : undefined,
-      deviceMode: deviceMode,
-      gpuDeviceId: gpuDeviceId,
-    };
-    await (window as any).api?.serverStart(config);
-    setIsStartingServer(false);
-    // Force immediate check
-    if ((window as any).api?.serverStatus) {
-      const s = await (window as any).api.serverStatus();
-      setServerStatus(s);
-    }
-  };
-
-  const handleStopServer = async () => {
-    await (window as any).api?.serverStop();
-    setServerStatus(null);
-  };
-
-  const handleWarmup = async (_e?: React.MouseEvent) => {
-    setIsWarming(true);
-    setWarmupTime(null);
-    try {
-      const result = await (window as any).api?.serverWarmup();
-      if (result?.success) {
-        setWarmupTime(result.durationMs ?? null);
-      }
-    } catch (e) {
-      console.error("Warmup failed", e);
-    }
-    setIsWarming(false);
   };
 
   return (
@@ -628,17 +527,27 @@ export function AdvancedView({ lang }: { lang: Language }) {
                     <div className="flex flex-col">
                       <span
                         className={`text-3xl font-bold font-mono tracking-tight transition-colors duration-500 ${
-                          parseInt(ctxSize) * concurrency > 32768
-                            ? "text-red-500"
-                            : parseInt(ctxSize) * concurrency > 16384
-                              ? "text-amber-500"
-                              : "text-emerald-500"
+                          (() => {
+                            const ctxInt = parseInt(ctxSize);
+                            let cotRatio = 3.5;
+                            if (ctxInt >= 8192) cotRatio = 3.2;
+                            else if (ctxInt > 1024) {
+                              const slope = (3.2 - 3.5) / (8192 - 1024);
+                              cotRatio = 3.5 + slope * (ctxInt - 1024);
+                            }
+                            const theoretical = Math.round(
+                              ((ctxInt * 0.9 - 500) / cotRatio) * 1.3,
+                            );
+                            if (theoretical > 4096) return "text-red-500";
+                            if (theoretical >= 3072) return "text-amber-500";
+                            return "text-black dark:text-foreground";
+                          })()
                         }`}
                       >
                         {ctxSize}
                       </span>
                       <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mt-1">
-                        Total Capacity
+                        Per-Slot Context
                       </span>
                     </div>
 
@@ -665,7 +574,7 @@ export function AdvancedView({ lang }: { lang: Language }) {
                       );
 
                       // Limits:
-                      // - Warning Threshold: 3072
+                      // - Risk Zone: 3072-4096
                       // - Hard Limit: 4096
                       const isHardLimited = theoretical > 4096;
                       const isNearLimit =
@@ -679,55 +588,45 @@ export function AdvancedView({ lang }: { lang: Language }) {
                         "text-emerald-600 bg-emerald-500/10 border-emerald-500/20";
                       let icon = <Sparkles className="w-3 h-3" />;
 
-                      const totalLoad = ctxInt * concurrency;
-                      const isTotalSafe = totalLoad <= 16384;
-                      const isTotalCritical = totalLoad > 32768;
-
-                      if (isTotalCritical) {
-                        labelText = `超限截断 (Truncated)`;
-                        subText = `总负荷 > 32k | 架构上限导致的上下文截断`;
-                        badgeStyle =
-                          "text-red-600 bg-red-500/10 border-red-500/20";
-                        icon = <AlertTriangle className="w-3 h-3" />;
-                      } else if (!isTotalSafe) {
-                        labelText = `高负载 (High Load)`;
-                        subText = `总负荷 > 16k | 建议降低上下文或并发`;
-                        badgeStyle =
-                          "text-amber-600 bg-amber-500/10 border-amber-500/20";
-                        icon = <Zap className="w-3 h-3" />;
-                      } else if (isHardLimited) {
+                      if (isHardLimited) {
                         labelText = `单块超限 (Capped)`;
-                        subText = `实际生效: 4096 字 | 建议调大并发`;
+                        subText = `理论单块 > 4096 字 | 实际将截断至 4096 字`;
                         badgeStyle =
                           "text-red-600 bg-red-500/10 border-red-500/20";
                         icon = <Zap className="w-3 h-3" />;
                       } else if (isNearLimit) {
-                        labelText = `效果不佳 (Poor Effect)`;
-                        subText = `单块 > 3072 字 | 上下文过大，模型注意力可能分散，导致翻译质量下降`;
+                        labelText = `接近上限 (Near Limit)`;
+                        subText = `单块 3072-4096 字 | 已进入硬上限前风险区，请降低上下文`;
                         badgeStyle =
-                          "text-red-600 bg-red-500/10 border-red-500/20";
+                          "text-amber-600 bg-amber-500/10 border-amber-500/20";
                         icon = <Info className="w-3 h-3" />;
                       } else if (effective > 2048) {
-                        labelText = `负荷略重 (Heavy Load)`;
-                        subText = `单块 ≈ ${effective} 字 | 上下文过大，模型注意力可能分散，导致翻译质量下降`;
+                        labelText = `偏大 (Large)`;
+                        subText = `单块 ≈ ${effective} 字 | 可翻译更长片段，但翻译效果会大幅下降`;
                         badgeStyle =
                           "text-orange-600 bg-orange-500/10 border-orange-500/20";
                         icon = <Info className="w-3 h-3" />;
-                      } else if (effective >= 1024 && effective <= 2048) {
-                        labelText = `最佳区间 (Best)`;
-                        subText = `单块 ≈ ${effective} 字 | 质量与效率的平衡点`;
+                      } else if (effective >= 1024 && effective <= 1536) {
+                        labelText = `推荐区间 (Recommended)`;
+                        subText = `单块 ≈ ${effective} 字 | 质量与效率最佳平衡`;
                         badgeStyle =
                           "text-emerald-600 bg-emerald-500/10 border-emerald-500/20";
                         icon = <Sparkles className="w-3 h-3" />;
+                      } else if (effective > 1536 && effective <= 2048) {
+                        labelText = `可用区间 (Usable)`;
+                        subText = `单块 ≈ ${effective} 字 | 可用，建议优先控制在 1024-1536`;
+                        badgeStyle =
+                          "text-teal-600 bg-teal-500/10 border-teal-500/20";
+                        icon = <Info className="w-3 h-3" />;
                       } else if (effective >= 512 && effective < 1024) {
                         labelText = `偏小 (Small)`;
-                        subText = `单块 ≈ ${effective} 字 | 对上下文的利用降低，翻译质量可能略有下降`;
+                        subText = `单块 ≈ ${effective} 字 | 可用，但上下文利用率偏低`;
                         badgeStyle =
                           "text-blue-600 bg-blue-500/10 border-blue-500/20";
                         icon = <Info className="w-3 h-3" />;
                       } else {
                         labelText = `过小 (Too Small)`;
-                        subText = `单块 < 512 字 | 对上下文的利用降低，翻译质量可能略有下降`;
+                        subText = `单块 < 512 字 | 分块过碎，建议适度增大上下文`;
                         badgeStyle =
                           "text-amber-600 bg-amber-500/10 border-amber-500/20";
                         icon = <Zap className="w-3 h-3" />;
@@ -743,7 +642,7 @@ export function AdvancedView({ lang }: { lang: Language }) {
                               {labelText}
                             </span>
                           </div>
-                          <span className="text-[11px] text-muted-foreground/80 font-medium text-right max-w-[200px] italic">
+                          <span className="text-[11px] text-muted-foreground/80 font-medium text-right italic whitespace-nowrap">
                             {subText}
                           </span>
                         </div>
@@ -770,30 +669,28 @@ export function AdvancedView({ lang }: { lang: Language }) {
                               Math.min(100, ((v - sMin) / (sMax - sMin)) * 100),
                             );
 
-                          // Quality Factors (Per-Slot)
-                          const qGreenStart = getPct(3200); // ~1k chars
-                          const qAmberStart = getPct(6500); // ~2k chars
-                          const qRedStart = getPct(10500); // ~4k chars (Capped)
-
-                          // Safety Factors (Total Load)
-                          const sAmberStart = getPct(16384 / concurrency);
-                          const sRedStart = getPct(32768 / concurrency);
-
-                          // Composite stops (Safety takes priority)
-                          const amberStop = Math.min(qAmberStart, sAmberStart);
-                          const redStop = Math.min(qRedStart, sRedStart);
+                          // Quality Factors (Per-Slot, aligned with chunk conversion)
+                          // chunk >= 1024 -> ctx ~= 3526 (blue -> green)
+                          // chunk >= 2048 -> ctx ~= 6295 (green -> light amber)
+                          // chunk >= 3072 -> ctx ~= 8957 (light amber -> amber)
+                          // chunk >  4096 -> ctx ~= 11757 (amber -> red)
+                          const qGreenStart = getPct(3526);
+                          const qAmberStart = getPct(6295);
+                          const qDeepAmberStart = getPct(8957);
+                          const qRedStart = getPct(11757);
 
                           return `linear-gradient(to right, 
                                                         #3b82f6 0%, #3b82f6 ${qGreenStart}%, 
-                                                        #10b981 ${qGreenStart}%, #10b981 ${amberStop}%, 
-                                                        #f59e0b ${amberStop}%, #f59e0b ${redStop}%, 
-                                                        #ef4444 ${redStop}%, #ef4444 100%)`;
+                                                        #10b981 ${qGreenStart}%, #10b981 ${qAmberStart}%, 
+                                                        #fbbf24 ${qAmberStart}%, #fbbf24 ${qDeepAmberStart}%,
+                                                        #f59e0b ${qDeepAmberStart}%, #f59e0b ${qRedStart}%, 
+                                                        #ef4444 ${qRedStart}%, #ef4444 100%)`;
                         })(),
                       }}
                     />
 
                     {/* Milestone Markers - Precise Alignment */}
-                    <div className="absolute inset-x-1 bottom-0 flex justify-between pointer-events-none h-6">
+                    <div className="absolute inset-x-0 bottom-0 flex justify-between pointer-events-none h-6">
                       {[1024, 2048, 4096, 6144, 8192, 12288, 16384].map((v) => {
                         const sMin = 1024;
                         const sMax = 16384;
@@ -818,7 +715,7 @@ export function AdvancedView({ lang }: { lang: Language }) {
                   </div>
                   <div className="flex justify-between text-[10px] text-muted-foreground font-mono px-1">
                     <span>1024</span>
-                    <span>16384 (16k)</span>
+                    <span>16384</span>
                   </div>
                   {(() => {
                     const ctxInt = parseInt(ctxSize);
@@ -833,17 +730,29 @@ export function AdvancedView({ lang }: { lang: Language }) {
                       ((ctxInt * 0.9 - 500) / cotRatio) * 1.3,
                     );
                     const isHardLimited = theoretical > 4096;
+                    const isNearLimit =
+                      theoretical > 3072 && theoretical <= 4096;
+                    const effective = Math.min(4096, theoretical);
 
                     return (
-                      isHardLimited && (
-                        <p className="mt-3 text-[10px] text-amber-600 dark:text-amber-400 bg-amber-500/10 p-3 rounded-lg border border-amber-500/20 leading-relaxed flex gap-2">
+                      (isHardLimited || isNearLimit) && (
+                        <p
+                          className={`mt-3 text-[10px] p-3 rounded-lg border leading-relaxed flex gap-2 ${
+                            isHardLimited
+                              ? "text-red-600 dark:text-red-400 bg-red-500/10 border-red-500/20"
+                              : "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20"
+                          }`}
+                        >
                           <Info className="w-3 h-3 shrink-0 mt-0.5" />
                           <span>
-                            <strong>Context 过大警告：</strong>{" "}
-                            单词分块受限于注意力硬上限 (4096字)。
-                            为避免显存空置浪费，建议{" "}
-                            <b>调大并发数 (Increase Threads)</b>{" "}
-                            以充分利用显存。
+                            <strong>
+                              {isHardLimited
+                                ? "Context 硬上限告警："
+                                : "Context 风险区提示："}
+                            </strong>{" "}
+                            {isHardLimited
+                              ? `理论单块约 ${theoretical} 字，已超过 4096 硬上限，实际将按 4096 字处理。`
+                              : `理论单块约 ${effective} 字，位于 3072-4096 风险区，建议回调上下文以提升稳定性。`}
                           </span>
                         </p>
                       )
@@ -960,7 +869,7 @@ export function AdvancedView({ lang }: { lang: Language }) {
                                       </span>
                                     </td>
                                     <td className="p-2 text-center font-bold">
-                                      4
+                                      6
                                     </td>
                                   </tr>
                                   <tr className="hover:bg-muted/20">
@@ -974,7 +883,7 @@ export function AdvancedView({ lang }: { lang: Language }) {
                                       </span>
                                     </td>
                                     <td className="p-2 text-center font-bold">
-                                      6
+                                      8
                                     </td>
                                   </tr>
                                 </tbody>
@@ -1049,47 +958,47 @@ export function AdvancedView({ lang }: { lang: Language }) {
                         {/* Card 1: Token Throughput Stats */}
                         <div
                           className={`relative overflow-hidden rounded-xl border p-3 flex flex-col justify-between h-full transition-all duration-300 ${
-                            parseInt(ctxSize) * concurrency > 32768
+                            parseInt(ctxSize) * concurrency > 16384 * 16 * 0.75
                               ? "bg-red-500/5 border-red-500/20"
-                              : parseInt(ctxSize) * concurrency > 16384
+                              : parseInt(ctxSize) * concurrency > 16384 * 16 * 0.45
                                 ? "bg-amber-500/5 border-amber-500/20"
                                 : "bg-secondary/30 border-border/40 hover:border-primary/30"
                           }`}
                         >
                           <div className="flex flex-col">
                             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
-                              数据吞吐能力 (Throughput)
+                              并发总吞吐估算 (Total Throughput)
                             </span>
                             <div className="flex items-baseline gap-1.5 mt-1">
                               <span
                                 className={`text-xl font-mono font-bold tracking-tight ${
-                                  parseInt(ctxSize) * concurrency > 32768
+                                  parseInt(ctxSize) * concurrency > 16384 * 16 * 0.75
                                     ? "text-red-600"
-                                    : parseInt(ctxSize) * concurrency > 16384
+                                    : parseInt(ctxSize) * concurrency >
+                                        16384 * 16 * 0.45
                                       ? "text-amber-600"
                                       : "text-primary"
                                 }`}
                               >
-                                {(
-                                  parseInt(ctxSize) * concurrency
-                                ).toLocaleString()}
+                                {(parseInt(ctxSize) * concurrency).toLocaleString()}
                               </span>
                               <span className="text-[10px] text-muted-foreground/60">
-                                Tokens
+                                token-slots
                               </span>
                             </div>
                           </div>
                           <div className="w-full h-1 mt-3 bg-foreground/5 rounded-full overflow-hidden">
                             <div
                               className={`h-full rounded-full transition-all duration-500 ${
-                                parseInt(ctxSize) * concurrency > 32768
+                                parseInt(ctxSize) * concurrency > 16384 * 16 * 0.75
                                   ? "bg-red-500 w-full animate-pulse"
-                                  : parseInt(ctxSize) * concurrency > 16384
+                                  : parseInt(ctxSize) * concurrency >
+                                      16384 * 16 * 0.45
                                     ? "bg-amber-500"
                                     : "bg-emerald-500"
                               }`}
                               style={{
-                                width: `${Math.min(100, ((parseInt(ctxSize) * concurrency) / 32768) * 100)}%`,
+                                width: `${Math.min(100, ((parseInt(ctxSize) * concurrency) / (16384 * 16)) * 100)}%`,
                               }}
                             />
                           </div>
@@ -1098,9 +1007,12 @@ export function AdvancedView({ lang }: { lang: Language }) {
                               Per Slot: {parseInt(ctxSize).toLocaleString()}
                             </span>
                             <span>
-                              {parseInt(ctxSize) * concurrency > 32768
-                                ? "OVERLOAD"
-                                : "Capacity"}
+                              {parseInt(ctxSize) * concurrency > 16384 * 16 * 0.75
+                                ? "High Throughput"
+                                : parseInt(ctxSize) * concurrency >
+                                    16384 * 16 * 0.45
+                                  ? "Medium Throughput"
+                                  : "Balanced"}
                             </span>
                           </div>
                         </div>
@@ -1197,15 +1109,12 @@ export function AdvancedView({ lang }: { lang: Language }) {
                       </div>
 
                       {/* --- Consolidated System Advisory --- */}
-                      {(concurrency > 1 ||
-                        parseInt(ctxSize) * concurrency > 16384) && (
+                      {concurrency > 1 && (
                         <div
                           className={`rounded-xl border p-3 flex gap-3 items-start backdrop-blur-sm ${
-                            parseInt(ctxSize) * concurrency > 32768
-                              ? "bg-red-500/10 border-red-500/20 text-red-700 dark:text-red-400"
-                              : concurrency > 8
-                                ? "bg-orange-500/10 border-orange-500/20 text-orange-700 dark:text-orange-400"
-                                : "bg-secondary/40 border-border/50 text-foreground/80"
+                            concurrency > 8
+                              ? "bg-orange-500/10 border-orange-500/20 text-orange-700 dark:text-orange-400"
+                              : "bg-secondary/40 border-border/50 text-foreground/80"
                           }`}
                         >
                           <Info className="w-4 h-4 shrink-0 mt-0.5 opacity-80" />
@@ -1214,39 +1123,12 @@ export function AdvancedView({ lang }: { lang: Language }) {
                               系统细节与建议 (System Advisory)
                             </span>
                             <ul className="text-[10px] space-y-1 leading-relaxed opacity-80 list-disc pl-3">
-                              {/* 32k Limit Warning */}
-                              {parseInt(ctxSize) * concurrency > 32768 && (
-                                <li className="font-bold">
-                                  总吞吐量已突破 32k
-                                  架构上限，超出部分将被截断，请务必降低 Context
-                                  或并发。
-                                </li>
-                              )}
-                              {/* High Concurrency Warning */}
-                              {concurrency > 8 &&
-                                parseInt(ctxSize) * concurrency <= 32768 && (
-                                  <li>
-                                    并发数过高 ({concurrency})
-                                    可能导致系统不稳定或显存带宽瓶颈以及翻译质量下降，建议仅在高端显卡
-                                    (24G+) 上使用
-                                  </li>
-                                )}
-                              {/* 16k Advisory */}
-                              {parseInt(ctxSize) * concurrency > 16384 &&
-                                parseInt(ctxSize) * concurrency <= 32768 && (
-                                  <li>
-                                    总负载处于高位
-                                    (&gt;16k)，为保证最佳推理稳定性，建议适当控制负载。
-                                  </li>
-                                )}
-                              {/* Quality Note - Standard (x2-x4) */}
                               {concurrency > 1 && concurrency <= 4 && (
                                 <li className="text-primary font-medium italic">
                                   并发模式已开启 (x{concurrency}
                                   )。相比单线程模式，吞吐量将大幅提升，但翻译质量会稍微下降。对翻译质量要求高的文本建议保持单线程模式
                                 </li>
                               )}
-                              {/* Quality Note - High (x5+) */}
                               {concurrency > 4 && (
                                 <li className="text-orange-600 dark:text-orange-400 font-bold italic">
                                   高并发模式 (x{concurrency}
@@ -1259,248 +1141,6 @@ export function AdvancedView({ lang }: { lang: Language }) {
                       )}
                     </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* ===== 推理后端卡片 ===== */}
-            <Card>
-              <CardContent className="pt-6 space-y-6">
-                {/* --- 本地服务器 --- */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-sm font-semibold">
-                        本地推理服务 (Local Inference Service)
-                      </span>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        在本机启动 llama-server 提供 API 服务
-                      </p>
-                    </div>
-                    {/* 模式选择器 */}
-                    <div className="flex bg-secondary rounded-lg p-0.5 border">
-                      <button
-                        onClick={() => toggleDaemonMode(false)}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                          !daemonMode
-                            ? "bg-background text-foreground shadow-sm"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        自动模式
-                      </button>
-                      <button
-                        onClick={() => toggleDaemonMode(true)}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                          daemonMode
-                            ? "bg-background text-foreground shadow-sm"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        常驻模式
-                      </button>
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-muted-foreground">
-                    {daemonMode
-                      ? "推理服务持续运行，翻译响应更快，但会持续占用显存。"
-                      : "翻译时自动启动推理服务，闲置时自动关闭以释放显存。"}
-                  </p>
-
-                  {daemonMode && (
-                    <div className="space-y-3 border-l-2 border-primary/30 pl-4">
-                      <div className="p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200 dark:border-blue-900/50">
-                        <p className="text-xs text-blue-700 dark:text-blue-300">
-                          <strong>常驻模式 (Daemon Mode)：</strong>
-                          推理服务持续运行，翻译响应更快，但会持续占用显存。适合需要频繁翻译或对外提供
-                          API 服务的场景。
-                        </p>
-                      </div>
-
-                      {/* 本地服务器配置 */}
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-muted-foreground">
-                            监听端口 (Port)
-                          </label>
-                          <input
-                            type="number"
-                            className="w-full border p-2 rounded text-sm bg-secondary font-mono"
-                            value={localPort}
-                            onChange={(e) => {
-                              setLocalPort(e.target.value);
-                              localStorage.setItem(
-                                "config_local_port",
-                                e.target.value,
-                              );
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-xs font-medium text-muted-foreground">
-                            绑定地址 (Host)
-                          </label>
-                          <select
-                            className="w-full border border-border p-2 rounded bg-secondary text-foreground text-sm"
-                            value={localHost}
-                            onChange={(e) => {
-                              setLocalHost(e.target.value);
-                              localStorage.setItem(
-                                "config_local_host",
-                                e.target.value,
-                              );
-                            }}
-                          >
-                            <option value="127.0.0.1">
-                              127.0.0.1 (仅本机)
-                            </option>
-                            <option value="0.0.0.0">
-                              0.0.0.0 (局域网可访问)
-                            </option>
-                          </select>
-                        </div>
-                      </div>
-
-                      {/* 服务器状态面板 */}
-                      <div className="p-3 bg-secondary/50 rounded-lg border border-border space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <div
-                              className={`w-2 h-2 rounded-full ${serverStatus?.running ? "bg-green-500 animate-pulse" : "bg-red-500"}`}
-                            />
-                            <span className="text-xs font-bold">
-                              {serverStatus?.running ? "运行中" : "已停止"}
-                            </span>
-                            {serverStatus?.running && (
-                              <span className="text-[10px] bg-secondary px-1 rounded border font-mono text-muted-foreground">
-                                监听端口:{serverStatus.port} (PID:{" "}
-                                {serverStatus.pid})
-                              </span>
-                            )}
-                          </div>
-                          {warmupTime && (
-                            <span className="text-[10px] text-green-600">
-                              预热耗时: {(warmupTime / 500).toFixed(1)}s
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex gap-2">
-                          {serverStatus?.running ? (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={handleWarmup}
-                                disabled={isWarming}
-                                className="flex-1 h-8 text-xs gap-2"
-                              >
-                                <Sparkles className="w-3 h-3" />
-                                {isWarming ? "预热中..." : "预热模型"}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={handleStopServer}
-                                className="flex-1 h-8 text-xs"
-                              >
-                                停止服务
-                              </Button>
-                            </>
-                          ) : (
-                            <Button
-                              size="sm"
-                              onClick={handleStartServer}
-                              disabled={isStartingServer}
-                              className="flex-1 h-8 text-xs bg-green-600 hover:bg-green-700 text-white"
-                            >
-                              {isStartingServer ? "启动中..." : "启动服务"}
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* --- 远程服务器 --- */}
-                <div className="space-y-3 border-t pt-4">
-                  <div>
-                    <span className="text-sm font-semibold">
-                      远程 API 服务器 (Remote API Server)
-                    </span>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">
-                      连接远程部署的推理服务或第三方 API（如 OpenAI 兼容接口）
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">
-                        API 地址 (Endpoint)
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="http://127.0.0.1:8080"
-                        className="w-full border p-2 rounded text-sm bg-secondary"
-                        value={serverUrl}
-                        onChange={(e) => setServerUrl(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">
-                        API Key (可选)
-                      </label>
-                      <input
-                        type="password"
-                        className="w-full border p-2 rounded text-sm bg-secondary"
-                        placeholder="sk-..."
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-xs"
-                    disabled={isTestingRemote}
-                    onClick={async () => {
-                      setIsTestingRemote(true);
-                      try {
-                        const url = serverUrl || "http://127.0.0.1:8080";
-                        const result = await (window as any).api?.remoteConnect({
-                          url,
-                          apiKey: apiKey.trim() || undefined,
-                        });
-                        if (result?.ok)
-                          showAlert({
-                            title: "连接成功",
-                            description: `✓ 已成功建立与后端的连接${result.version ? ` (v${result.version})` : ""}`,
-                            variant: "success",
-                          });
-                        else
-                          showAlert({
-                            title: "连接失败",
-                            description:
-                              "✗ 无法建立连接: " +
-                              (result?.message || "请检查服务地址/API Key"),
-                            variant: "destructive",
-                          });
-                      } catch (e) {
-                        showAlert({
-                          title: "连接错误",
-                          description: "✗ 无法连接至服务器: " + e,
-                          variant: "destructive",
-                        });
-                      } finally {
-                        setIsTestingRemote(false);
-                        await (window as any).api?.remoteDisconnect?.();
-                      }
-                    }}
-                  >
-                    {isTestingRemote ? "测试中..." : "测试连接"}
-                  </Button>
                 </div>
               </CardContent>
             </Card>

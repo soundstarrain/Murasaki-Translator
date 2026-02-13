@@ -1,6 +1,7 @@
 export interface FileConfig {
   // Model & Hardware
   model?: string;
+  remoteModel?: string;
   gpuLayers?: number;
   ctxSize?: number;
   contextSize?: number; // Compatibility alias
@@ -41,7 +42,13 @@ export interface FileConfig {
   preset?: string;
 
   // System
-  serverUrl?: string;
+  executionMode?: "local" | "remote";
+  remoteSession?: {
+    url: string;
+    apiKey?: string;
+    connectedAt: number;
+    source?: "manual" | "local-daemon";
+  };
   cacheDir?: string;
   outputDir?: string;
   glossaryPath?: string;

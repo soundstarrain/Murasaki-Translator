@@ -12,6 +12,7 @@ import {
   Clock,
   ClipboardCheck,
   Layers,
+  Server,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { Tooltip } from "./ui/core";
@@ -48,7 +49,7 @@ export function Sidebar({ lang, setLang, view, setView }: SidebarProps) {
     (window as any).api?.setTheme?.(isDark ? "dark" : "light");
   }, [isDark]);
 
-  // Navigation order: Main → Config → Processing → Advanced → Utility
+  // Navigation order: Main → Config → Processing → Service → Advanced → Utility
   const menuItems = [
     // 主功能
     { icon: Play, label: t.nav.start, id: "dashboard" },
@@ -71,6 +72,7 @@ export function Sidebar({ lang, setLang, view, setView }: SidebarProps) {
     { icon: FileInput, label: t.nav.pre, id: "pre" },
     { icon: FileOutput, label: t.nav.post, id: "post" },
     // 高级与设置
+    { icon: Server, label: t.nav.service || "服务管理", id: "service" },
     { icon: Sparkles, label: t.nav.advanced, id: "advanced" },
     { icon: Settings, label: t.nav.setting, id: "settings" },
   ];

@@ -36,6 +36,7 @@ import { FileIcon } from "./ui/FileIcon";
 import { AlertModal } from "./ui/AlertModal";
 import { useAlertModal } from "../hooks/useAlertModal";
 import { Language } from "../lib/i18n";
+import type { UseRemoteRuntimeResult } from "../hooks/useRemoteRuntime";
 import {
   QueueItem,
   FileConfig,
@@ -50,6 +51,7 @@ interface LibraryViewProps {
   onNavigate?: (view: string) => void;
   onProofreadFile?: (cachePath: string) => void;
   isRunning?: boolean;
+  remoteRuntime?: UseRemoteRuntimeResult;
 }
 
 // ============ Constants ============
@@ -84,31 +86,46 @@ const texts = {
     files: "个文件",
     dropHint: "拖放文件或文件夹到此处添加到队列",
     dropTitle: "拖放文件到这里",
+    dropReleaseTitle: "释放以添加文件",
     emptyDragHint: "或点击任意处浏览文件",
     selectFiles: "选择文件",
     selectFolder: "选择文件夹",
     scanSubdirs: "扫描子目录",
     confirmClear: "确定要清空翻译队列吗？",
+    confirmRemoveTitle: "确认移除",
+    confirmRemoveDesc: "确定要从队列中移除此文件吗？",
+    confirmRemoveSelectedTitle: "确认移除已选",
+    confirmRemoveSelectedDesc: "确定要移除选中的 {count} 个文件吗？",
     supportedTypes: "支持 .txt .epub .srt .ass",
     queueTitle: "翻译队列",
     emptyQueue: "队列为空",
     emptyHint: "拖放文件到上方区域，或点击按钮选择",
+    readyToTranslate: "准备翻译",
     startAll: "开始翻译",
     clear: "清空全部",
+    clearCompleted: "清除已完成",
+    clearedCompletedNotice: "已清理 {count} 个已完成任务",
     selected: "已选",
     items: "项",
     remove: "移除",
     selectAll: "全选",
     deselectAll: "取消全选",
+    invertSelection: "反选",
     default: "默认",
+    custom: "自定义",
     proofread: "校对",
     config: "配置",
     configTitle: "文件翻译配置",
     batchConfig: "批量配置",
+    batchConfigTitle: "批量配置 ({count} 个文件)",
     configDesc: "覆盖全局设置，为此文件指定独立参数",
+    configWarning: "修改前请确保您了解正在修改的内容，错误的配置可能导致翻译过程异常或结果质量下降。",
     useGlobal: "使用全局默认配置",
     useGlobalDesc: "取消勾选以自定义此文件的翻译参数",
+    followGlobal: "跟随全局",
+    modelOverride: "模型选择",
     moveToTop: "置顶",
+    dragToReorder: "拖拽调整顺序",
 
     // Params
     glossary: "术语表",
@@ -124,12 +141,14 @@ const texts = {
     kvCacheType: "KV Cache 量化",
     alignmentMode: "辅助对齐",
     saveCot: "CoT 导出",
+    on: "开",
+    off: "关",
 
     save: "保存配置",
     cancel: "取消",
     browse: "浏览",
     reset: "重置",
-    notSet: "跟随全局设置",
+    notSet: "未设置",
     currentGlobal: "当前全局",
     seed: "随机种子 (Seed)",
 
@@ -138,6 +157,7 @@ const texts = {
       script: "剧本模式 (Galgame)",
       short: "单句模式",
     },
+    shortModeWarning: "短句模式会导致翻译效率和质量下降，建议使用轻小说或剧本模式。",
     kvOptions: {
       f16: "F16 (原生质量)",
       q8_0: "Q8_0 (节约显存)",
@@ -171,32 +191,46 @@ const texts = {
     files: "files",
     dropHint: "Drop files or folders here to add to queue",
     dropTitle: "Drag & Drop Files Here",
+    dropReleaseTitle: "Release to add files",
     emptyDragHint: "Or click anywhere to browse",
     selectFiles: "Select Files",
     selectFolder: "Select Folder",
     scanSubdirs: "Scan Subdirs",
     confirmClear: "Are you sure you want to clear the translation queue?",
+    confirmRemoveTitle: "Confirm Remove",
+    confirmRemoveDesc: "Are you sure you want to remove this file from the queue?",
+    confirmRemoveSelectedTitle: "Confirm Remove Selected",
+    confirmRemoveSelectedDesc: "Are you sure you want to remove the {count} selected files?",
     supportedTypes: "Supports .txt .epub .srt .ass",
     queueTitle: "Translation Queue",
     emptyQueue: "Queue is empty",
     emptyHint: "Drop files above, or click buttons to select",
+    readyToTranslate: "Ready to Translate",
     startAll: "Start All",
     clear: "Clear",
+    clearCompleted: "Clear Completed",
+    clearedCompletedNotice: "Cleared {count} completed tasks",
     selected: "Selected",
     items: "items",
     remove: "Remove",
     selectAll: "Select All",
     deselectAll: "Deselect All",
+    invertSelection: "Invert",
     default: "Default",
     custom: "Custom",
     proofread: "Proofread",
     config: "Config",
     configTitle: "File Translation Config",
     batchConfig: "Batch Config",
+    batchConfigTitle: "Batch Config ({count} files)",
     configDesc: "Override global settings with file-specific parameters",
+    configWarning: "Please ensure you understand what you are modifying. Incorrect settings may cause translation errors or quality degradation.",
     useGlobal: "Use Global Defaults",
     useGlobalDesc: "Uncheck to customize parameters for this file",
+    followGlobal: "Use Global",
+    modelOverride: "Model Override",
     moveToTop: "Top",
+    dragToReorder: "Drag to reorder",
 
     glossary: "Glossary",
     outputDir: "Output Directory",
@@ -211,19 +245,22 @@ const texts = {
     kvCacheType: "KV Cache Quant",
     alignmentMode: "Auxiliary Alignment",
     saveCot: "CoT Export",
+    on: "On",
+    off: "Off",
 
     save: "Save Config",
     cancel: "Cancel",
     browse: "Browse",
     reset: "Reset",
 
-    notSet: "Follow global setting",
+    notSet: "Not set",
 
     presetOptions: {
       novel: "Novel Mode (Default)",
       script: "Script Mode (Galgame)",
       short: "Short Mode",
     },
+    shortModeWarning: "Short mode is only for isolated sentences. Use Novel or Script mode for documents.",
     kvOptions: {
       f16: "F16 (Native Quality)",
       q8_0: "Q8_0 (VRAM Saver)",
@@ -258,32 +295,46 @@ const texts = {
     files: "ファイル",
     dropHint: "ファイルまたはフォルダをドロップして追加",
     dropTitle: "ファイルをここにドロップ",
+    dropReleaseTitle: "ドロップして追加",
     emptyDragHint: "またはクリックして選択",
     selectFiles: "ファイル選択",
     selectFolder: "フォルダ選択",
     scanSubdirs: "サブディレクトリをスキャン",
     confirmClear: "翻訳キューを空にしてもよろしいですか？",
+    confirmRemoveTitle: "削除確認",
+    confirmRemoveDesc: "このファイルをキューから削除しますか？",
+    confirmRemoveSelectedTitle: "選択削除の確認",
+    confirmRemoveSelectedDesc: "選択した {count} 件のファイルを削除しますか？",
     supportedTypes: ".txt .epub .srt .ass に対応",
     queueTitle: "翻訳キュー",
     emptyQueue: "キューが空です",
     emptyHint: "上にファイルをドロップ、またはボタンで選択",
+    readyToTranslate: "翻訳準備完了",
     startAll: "翻訳開始",
     clear: "クリア",
+    clearCompleted: "完了をクリア",
+    clearedCompletedNotice: "完了タスク {count} 件をクリアしました",
     selected: "選択中",
     items: "件",
     remove: "削除",
     selectAll: "すべて選択",
     deselectAll: "選択解除",
+    invertSelection: "反転",
     default: "デフォルト",
     custom: "カスタム",
     proofread: "校正",
     config: "設定",
     configTitle: "ファイル翻訳設定",
     batchConfig: "一括設定",
+    batchConfigTitle: "一括設定 ({count} 件)",
     configDesc: "グローバル設定を上書きして個別パラメータを指定",
+    configWarning: "変更前に内容を理解していることを確認してください。誤った設定は翻訳の異常や品質低下につながる可能性があります。",
     useGlobal: "グローバルデフォルトを使用",
     useGlobalDesc: "チェックを外すとこのファイルのパラメータをカスタマイズ",
+    followGlobal: "グローバルに従う",
+    modelOverride: "モデル上書き",
     moveToTop: "トップ",
+    dragToReorder: "ドラッグして並べ替え",
 
     glossary: "用語集",
     outputDir: "出力ディレクトリ",
@@ -298,19 +349,22 @@ const texts = {
     kvCacheType: "KV Cache 量子化",
     alignmentMode: "補助アラインメント",
     saveCot: "CoT エクスポート",
+    on: "オン",
+    off: "オフ",
 
     save: "設定を保存",
     cancel: "キャンセル",
     browse: "参照",
     reset: "リセット",
 
-    notSet: "グローバル設定に従う",
+    notSet: "未設定",
 
     presetOptions: {
       novel: "小説モード (デフォルト)",
       script: "スクリプトモード (ギャルゲー)",
       short: "短文モード",
     },
+    shortModeWarning: "短文モードは単文向けです。ドキュメントには小説またはスクリプトモードを推奨します。",
     kvOptions: {
       f16: "F16 (ネイティブ品質)",
       q8_0: "Q8_0 (VRAM節約)",
@@ -343,6 +397,13 @@ interface FileConfigModalProps {
   lang: Language;
   onSave: (config: FileConfig) => void;
   onClose: () => void;
+  remoteRuntime?: UseRemoteRuntimeResult;
+}
+
+interface RemoteModelInfo {
+  name: string;
+  path: string;
+  sizeGb?: number;
 }
 
 export function FileConfigModal({
@@ -350,10 +411,13 @@ export function FileConfigModal({
   lang,
   onSave,
   onClose,
+  remoteRuntime,
 }: FileConfigModalProps) {
   const t = texts[lang];
   const [config, setConfig] = useState<FileConfig>({ ...item.config });
+  const isRemoteMode = Boolean(remoteRuntime?.isRemoteMode);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [availableRemoteModels, setAvailableRemoteModels] = useState<RemoteModelInfo[]>([]);
 
   // Get global defaults for display
   const globalGlossary = localStorage.getItem("config_glossary_path") || "";
@@ -362,7 +426,9 @@ export function FileConfigModal({
   const globalTemp = localStorage.getItem("config_temperature") || "0.7";
   const globalGpu = localStorage.getItem("config_gpu") || "-1";
   const globalPreset = localStorage.getItem("config_preset") || "novel";
-  const globalModel = localStorage.getItem("config_model") || "";
+  const globalModel = isRemoteMode
+    ? localStorage.getItem("config_remote_model") || ""
+    : localStorage.getItem("config_model") || "";
   const globalRepBase =
     localStorage.getItem("config_rep_penalty_base") || "1.0";
   const globalRepMax = localStorage.getItem("config_rep_penalty_max") || "1.5";
@@ -375,20 +441,48 @@ export function FileConfigModal({
 
   useEffect(() => {
     let alive = true;
-    window.api
-      ?.getModels?.()
-      .then((models) => {
-        if (!alive || !Array.isArray(models)) return;
-        setAvailableModels(models);
-      })
-      .catch(() => {
-        if (!alive) return;
+    const loadModels = async () => {
+      if (isRemoteMode) {
+        try {
+          // @ts-ignore
+          const result = await window.api?.remoteModels?.();
+          if (!alive) return;
+          if (result?.ok && Array.isArray(result.data)) {
+            const mapped = result.data
+              .map((item: any) => ({
+                name: item?.name || item?.path?.split(/[/\\]/).pop() || "",
+                path: item?.path || item?.name || "",
+                sizeGb: item?.sizeGb ?? item?.size_gb ?? item?.size,
+              }))
+              .filter((item: RemoteModelInfo) => item.path);
+            setAvailableRemoteModels(mapped);
+          } else {
+            setAvailableRemoteModels([]);
+          }
+        } catch {
+          if (!alive) return;
+          setAvailableRemoteModels([]);
+        }
         setAvailableModels([]);
-      });
+      } else {
+        window.api
+          ?.getModels?.()
+          .then((models) => {
+            if (!alive || !Array.isArray(models)) return;
+            setAvailableModels(models);
+          })
+          .catch(() => {
+            if (!alive) return;
+            setAvailableModels([]);
+          });
+        setAvailableRemoteModels([]);
+      }
+    };
+    loadModels();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [isRemoteMode]);
 
   const handleSelectGlossary = async () => {
     if (config.useGlobalDefaults) return;
@@ -446,9 +540,7 @@ export function FileConfigModal({
     // Display logic for empty global values
     const displayGlobalValue =
       globalValue === "" || globalValue === undefined
-        ? lang === "zh"
-          ? "未设置"
-          : "Not set"
+        ? t.notSet
         : globalValue.length > 20
           ? "..." + globalValue.slice(-20)
           : globalValue;
@@ -479,9 +571,7 @@ export function FileConfigModal({
             onChange={(e) => onChange(e.target.value)}
             placeholder={
               config.useGlobalDefaults
-                ? globalValue ||
-                  placeholder ||
-                  (lang === "zh" ? "未设置" : "Not set")
+                ? globalValue || placeholder || t.notSet
                 : placeholder || t.notSet
             }
             disabled={config.useGlobalDefaults}
@@ -575,9 +665,7 @@ export function FileConfigModal({
             <div className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
               <p className="text-xs text-amber-600 dark:text-amber-400 leading-relaxed">
-                {lang === "zh"
-                  ? "修改前请确保您了解正在修改的内容，错误的配置可能导致翻译过程异常或结果质量下降。"
-                  : "Please ensure you understand what you are modifying. Incorrect settings may cause translation errors or quality degradation."}
+                {t.configWarning}
               </p>
             </div>
           )}
@@ -591,10 +679,7 @@ export function FileConfigModal({
                 <Settings className="w-3.5 h-3.5 shrink-0 opacity-70" />
                 {t.preset}
                 <UITooltip
-                  content={
-                    t.help?.preset ||
-                    "选择翻译模式：轻小说适合长文本，剧本适合对话，单句适合零散内容"
-                  }
+                  content={t.help?.preset}
                 >
                   <Info className="w-3 h-3 text-muted-foreground/50 hover:text-primary cursor-help" />
                 </UITooltip>
@@ -639,11 +724,7 @@ export function FileConfigModal({
                   className={`text-xs font-medium flex items-center gap-1.5 ${config.useGlobalDefaults ? "text-muted-foreground" : "text-foreground"}`}
                 >
                   <Cpu className="w-3.5 h-3.5 shrink-0 opacity-70" />
-                  {lang === "zh"
-                    ? "模型选择"
-                    : lang === "jp"
-                      ? "モデル上書き"
-                      : "Model Override"}
+                  {t.modelOverride}
                 </label>
                 <span className="text-[10px] text-muted-foreground/50 tabular-nums">
                   {t.currentGlobal}:{" "}
@@ -652,13 +733,17 @@ export function FileConfigModal({
               </div>
               <select
                 value={
-                  !config.useGlobalDefaults && config.model ? config.model : ""
+                  config.useGlobalDefaults
+                    ? ""
+                    : (isRemoteMode ? config.remoteModel : config.model) || ""
                 }
                 disabled={config.useGlobalDefaults}
                 onChange={(e) =>
                   setConfig((prev) => ({
                     ...prev,
-                    model: e.target.value || undefined,
+                    ...(isRemoteMode
+                      ? { remoteModel: e.target.value || undefined }
+                      : { model: e.target.value || undefined }),
                   }))
                 }
                 className={`
@@ -675,17 +760,19 @@ export function FileConfigModal({
                     ? globalModel
                       ? globalModel.split(/[/\\]/).pop()
                       : t.notSet
-                    : lang === "zh"
-                      ? "跟随全局"
-                      : lang === "jp"
-                        ? "グローバルに従う"
-                        : "Use Global"}
+                    : t.followGlobal}
                 </option>
-                {availableModels.map((model) => (
-                  <option key={model} value={model}>
-                    {model.replace(".gguf", "")}
-                  </option>
-                ))}
+                {isRemoteMode
+                  ? availableRemoteModels.map((model) => (
+                    <option key={model.path} value={model.path}>
+                      {model.name || model.path}
+                    </option>
+                  ))
+                  : availableModels.map((model) => (
+                    <option key={model} value={model}>
+                      {model.replace(".gguf", "")}
+                    </option>
+                  ))}
               </select>
             </div>
             {/* 短句模式警告 */}
@@ -693,9 +780,7 @@ export function FileConfigModal({
               <div className="flex items-start gap-1.5 p-2 rounded bg-amber-500/10 border border-amber-500/20">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
                 <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">
-                  {lang === "zh"
-                    ? "短句模式会导致翻译效率和质量下降，建议使用轻小说或剧本模式。"
-                    : "Short mode is only for isolated sentences. Use Novel or Script mode for documents."}
+                  {t.shortModeWarning}
                 </p>
               </div>
             )}
@@ -936,7 +1021,7 @@ export function FileConfigModal({
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-[10px] text-muted-foreground">
-                    {t.currentGlobal}: {globalAlignmentMode ? "On" : "Off"}
+                    {t.currentGlobal}: {globalAlignmentMode ? t.on : t.off}
                   </span>
                   <Switch
                     checked={
@@ -971,7 +1056,7 @@ export function FileConfigModal({
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-[10px] text-muted-foreground">
-                    {t.currentGlobal}: {globalSaveCot ? "On" : "Off"}
+                    {t.currentGlobal}: {globalSaveCot ? t.on : t.off}
                   </span>
                   <Switch
                     checked={
@@ -1012,7 +1097,7 @@ export function FileConfigModal({
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-[10px] text-muted-foreground">
-                  {t.currentGlobal}: {globalFlashAttn ? "On" : "Off"}
+                  {t.currentGlobal}: {globalFlashAttn ? t.on : t.off}
                 </span>
                 <select
                   className={`
@@ -1046,8 +1131,8 @@ export function FileConfigModal({
                   <option value="default" disabled>
                     {t.notSet}
                   </option>
-                  <option value="true">On</option>
-                  <option value="false">Off</option>
+                  <option value="true">{t.on}</option>
+                  <option value="false">{t.off}</option>
                 </select>
               </div>
             </div>
@@ -1089,6 +1174,7 @@ export function LibraryView({
   onNavigate,
   onProofreadFile,
   isRunning = false,
+  remoteRuntime,
 }: LibraryViewProps) {
   const t = texts[lang];
   const { alertProps, showConfirm } = useAlertModal();
@@ -1277,11 +1363,8 @@ export function LibraryView({
       }
 
       showConfirm({
-        title: lang === "zh" ? "确认移除" : "Confirm Remove",
-        description:
-          lang === "zh"
-            ? "确定要从队列中移除此文件吗？"
-            : "Are you sure you want to remove this file from the queue?",
+        title: t.confirmRemoveTitle,
+        description: t.confirmRemoveDesc,
         variant: "destructive",
         onConfirm: () => {
           setQueue((prev) => prev.filter((q) => q.id !== id));
@@ -1317,9 +1400,7 @@ export function LibraryView({
 
     window.api?.showNotification(
       "Murasaki Translator",
-      lang === "zh"
-        ? `已清理 ${completedCount} 个已完成任务`
-        : `Cleared ${completedCount} completed tasks`,
+      t.clearedCompletedNotice.replace("{count}", String(completedCount)),
     );
   }, [queue, isRunning, lang]);
 
@@ -1327,11 +1408,11 @@ export function LibraryView({
     if (isRunning) return;
     if (selectedItems.size === 0) return;
     showConfirm({
-      title: lang === "zh" ? "确认移除已选" : "Confirm Remove Selected",
-      description:
-        lang === "zh"
-          ? `确定要移除选中的 ${selectedItems.size} 个文件吗？`
-          : `Are you sure you want to remove the ${selectedItems.size} selected files?`,
+      title: t.confirmRemoveSelectedTitle,
+      description: t.confirmRemoveSelectedDesc.replace(
+        "{count}",
+        String(selectedItems.size),
+      ),
       variant: "destructive",
       onConfirm: () => {
         setQueue((prev) => prev.filter((q) => !selectedItems.has(q.id)));
@@ -1358,7 +1439,7 @@ export function LibraryView({
     if (isRunning) return;
     showConfirm({
       title: t.clear,
-      description: (t as any).confirmClear || "Confirm Clear Queue?",
+      description: t.confirmClear,
       variant: "destructive",
       onConfirm: () => {
         setQueue([]);
@@ -1454,10 +1535,10 @@ export function LibraryView({
     setConfigItem({
       ...baseItem,
       id: "batch", // Special ID to indicate batch mode
-      fileName:
-        lang === "zh"
-          ? `批量配置 (${selectedItems.size} 个文件)`
-          : `Batch Config (${selectedItems.size} files)`,
+      fileName: t.batchConfigTitle.replace(
+        "{count}",
+        String(selectedItems.size),
+      ),
     });
   }, [selectedItems, queue, lang]);
 
@@ -1564,10 +1645,10 @@ export function LibraryView({
             </div>
             <div className="text-center space-y-2">
               <h3 className="text-2xl font-bold text-foreground">
-                {(t as any).dropTitle || "释放以添加文件"}
+                {t.dropReleaseTitle}
               </h3>
               <p className="text-base text-muted-foreground">
-                {(t as any).dropHint || "支持 .txt .epub .srt .ass 格式"}
+                {t.dropHint}
               </p>
             </div>
             <div className="flex gap-2 mt-2">
@@ -1623,7 +1704,7 @@ export function LibraryView({
                 htmlFor="scan-subdirs"
                 className="text-xs text-muted-foreground/80 hover:text-foreground cursor-pointer select-none whitespace-nowrap -ml-1 transition-colors"
               >
-                {(t as any).scanSubdirs || "Scan Subdirs"}
+                {t.scanSubdirs}
               </label>
             </div>
             <div className="w-px h-4 bg-border/40 mx-1" />
@@ -1647,7 +1728,7 @@ export function LibraryView({
             <div className="flex items-center gap-1.5 p-1 bg-secondary/5 rounded-lg border border-border/10">
               {selectedItems.size > 0 && (
                 <span className="h-7 px-2.5 flex items-center justify-center text-[11px] text-primary font-bold rounded-md bg-primary/10 border border-primary/20 min-w-[60px] text-center shadow-sm animate-in fade-in zoom-in duration-200">
-                  {selectedItems.size} {lang === "zh" ? "已选" : "Selected"}
+                  {selectedItems.size} {t.selected}
                 </span>
               )}
 
@@ -1658,12 +1739,8 @@ export function LibraryView({
                 className="h-7 text-[11px] font-medium text-muted-foreground hover:text-primary hover:bg-primary/5 transition-all rounded-md px-3 border-border/50 hover:border-primary/30"
               >
                 {selectedItems.size === queue.length
-                  ? lang === "zh"
-                    ? "取消全选"
-                    : "Deselect All"
-                  : lang === "zh"
-                    ? "全选"
-                    : "Select All"}
+                  ? t.deselectAll
+                  : t.selectAll}
               </Button>
 
               <Button
@@ -1672,7 +1749,7 @@ export function LibraryView({
                 onClick={handleInvertSelection}
                 className="h-7 text-[11px] font-medium text-muted-foreground hover:text-primary hover:bg-primary/5 transition-all rounded-md px-3 border-border/50 hover:border-primary/30"
               >
-                {lang === "zh" ? "反选" : "Invert"}
+                {t.invertSelection}
               </Button>
               {selectedItems.size > 0 ? (
                 <Button
@@ -1696,7 +1773,7 @@ export function LibraryView({
                       className={`h-7 text-[10px] font-bold text-green-600/60 hover:text-green-600 hover:bg-green-500/10 transition-all rounded-md px-2 border-none shadow-none ${isRunning ? "opacity-50 cursor-not-allowed" : ""}`}
                     >
                       <Check className="w-3 h-3 mr-1 opacity-50" />
-                      {lang === "zh" ? "清除已完成" : "Clear Completed"}
+                      {t.clearCompleted}
                     </Button>
                   )}
                   <Button
@@ -1745,10 +1822,10 @@ export function LibraryView({
 
                   <div className="text-center space-y-2 relative z-10">
                     <h3 className="text-xl font-bold text-foreground tracking-tight">
-                      {(t as any).dropTitle || "拖放文件到这里"}
+                      {t.dropTitle}
                     </h3>
                     <p className="text-sm text-muted-foreground/70">
-                      {(t as any).emptyDragHint || "或点击任意处浏览文件"}
+                      {t.emptyDragHint}
                     </p>
                   </div>
 
@@ -1766,7 +1843,7 @@ export function LibraryView({
                   {/* Hover hint */}
                   <div className="absolute bottom-4 opacity-0 group-hover:opacity-100 transition-opacity duration-500 flex items-center gap-2 text-[10px] font-bold text-primary uppercase tracking-widest">
                     <Sparkles className="w-3 h-3" />
-                    Ready to Translate
+                    {t.readyToTranslate}
                   </div>
                 </div>
               </div>
@@ -1803,7 +1880,7 @@ export function LibraryView({
                       draggable={!isRunning}
                       onDragStart={(e) => handleDragStart(e, index)}
                       onDragEnd={handleDragEnd}
-                      title="Drag to reorder"
+                      title={t.dragToReorder}
                     >
                       <GripVertical className="w-5 h-5" />
                     </div>
@@ -1826,7 +1903,7 @@ export function LibraryView({
                         {/* Status Badges */}
                         {item.config?.useGlobalDefaults === false && (
                           <span className="text-[9px] px-1.5 py-px rounded bg-purple-500/10 text-purple-500 font-medium">
-                            Custom
+                            {t.custom}
                           </span>
                         )}
                       </div>
@@ -1869,7 +1946,7 @@ export function LibraryView({
                         </Button>
                       </UITooltip>
 
-                      <UITooltip content={lang === "zh" ? "移除" : "Remove"}>
+                      <UITooltip content={t.remove}>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -1898,6 +1975,7 @@ export function LibraryView({
                 : handleSaveConfig(configItem.id, config)
             }
             onClose={() => setConfigItem(null)}
+            remoteRuntime={remoteRuntime}
           />
         )}
         <AlertModal {...alertProps} />

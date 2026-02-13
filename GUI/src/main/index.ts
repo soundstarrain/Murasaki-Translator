@@ -17,7 +17,32 @@ import { getLlamaServerPath, detectPlatform, clearGpuCache } from "./platform";
 import { TranslateOptions } from "./remoteClient";
 
 let pythonProcess: ChildProcess | null = null;
+let translationStopRequested = false;
+let remoteTranslationBridge: {
+  client: any;
+  taskId: string;
+  cancelRequested: boolean;
+} | null = null;
 let mainWindow: BrowserWindow | null = null;
+let hardwareSpecsInFlight: Promise<any> | null = null;
+let hardwareSpecsCache:
+  | {
+    at: number;
+    data: any;
+  }
+  | null = null;
+const HARDWARE_SPECS_CACHE_TTL_MS = 12000;
+let envCheckInFlight: Promise<
+  | { ok: true; report: any }
+  | { ok: false; error: string; output?: string; errorOutput?: string }
+> | null = null;
+let envCheckCache:
+  | {
+    at: number;
+    report: any;
+  }
+  | null = null;
+const ENV_CHECK_CACHE_TTL_MS = 12000;
 
 // 主进程日志缓冲区 - 用于调试工具箱查看完整终端日志
 const mainProcessLogs: string[] = [];
@@ -160,6 +185,12 @@ function cleanupProcesses(): void {
   } catch (e) {
     console.error("[App] Error stopping server:", e);
   }
+
+  if (remoteTranslationBridge) {
+    const bridge = remoteTranslationBridge;
+    remoteTranslationBridge = null;
+    void bridge.client.cancelTask(bridge.taskId).catch(() => undefined);
+  }
 }
 
 /**
@@ -173,12 +204,27 @@ function cleanupTempDirectory(): void {
       for (const file of files) {
         try {
           fs.unlinkSync(join(tempDir, file));
-        } catch (_) {}
+        } catch (_) { }
       }
       console.log(`[App] Cleaned ${files.length} temp files`);
     }
   } catch (e) {
     console.error("[App] Temp cleanup error:", e);
+  }
+
+  try {
+    const middlewareDir = getMiddlewarePath();
+    if (fs.existsSync(middlewareDir)) {
+      const files = fs.readdirSync(middlewareDir);
+      for (const file of files) {
+        if (!/^temp_rules_(pre|post)_[\w-]+\.json$/i.test(file)) continue;
+        try {
+          fs.unlinkSync(join(middlewareDir, file));
+        } catch { }
+      }
+    }
+  } catch (e) {
+    console.error("[App] Legacy temp rule cleanup error:", e);
   }
 }
 
@@ -240,16 +286,17 @@ const getPythonPath = (): { type: "python" | "bundle"; path: string } => {
   if (is.dev) {
     return {
       type: "python",
-      path: process.env.ELECTRON_PYTHON_PATH || "python",
+      path: process.env.ELECTRON_PYTHON_PATH || getScriptPythonPath(),
     };
   }
 
   // In prod: platform-specific Python path
   if (process.platform === "win32") {
     // Windows: resources/python_env/python.exe (Embeddable)
+    const embeddedPath = join(process.resourcesPath, "python_env", "python.exe");
     return {
       type: "python",
-      path: join(process.resourcesPath, "python_env", "python.exe"),
+      path: fs.existsSync(embeddedPath) ? embeddedPath : getScriptPythonPath(),
     };
   } else {
     // macOS/Linux: Check for PyInstaller bundle first
@@ -263,8 +310,8 @@ const getPythonPath = (): { type: "python" | "bundle"; path: string } => {
     if (fs.existsSync(bundlePath)) {
       return { type: "bundle", path: bundlePath };
     }
-    // Fallback to system Python
-    return { type: "python", path: "python3" };
+    // Fallback to script-capable Python resolver
+    return { type: "python", path: getScriptPythonPath() };
   }
 };
 
@@ -274,17 +321,17 @@ const getScriptPythonPath = (): string => {
   const middlewarePythonCandidates =
     process.platform === "win32"
       ? [
-          join(middlewarePath, ".venv", "Scripts", "python.exe"),
-          join(middlewarePath, "python_env", "python.exe"),
-        ]
+        join(middlewarePath, ".venv", "Scripts", "python.exe"),
+        join(middlewarePath, "python_env", "python.exe"),
+      ]
       : [
-          join(middlewarePath, ".venv", "bin", "python3"),
-          join(middlewarePath, ".venv", "bin", "python"),
-          join(middlewarePath, "python_env", "bin", "python3"),
-          join(middlewarePath, "python_env", "bin", "python"),
-          join(middlewarePath, "python_env", "python3"),
-          join(middlewarePath, "python_env", "python"),
-        ];
+        join(middlewarePath, ".venv", "bin", "python3"),
+        join(middlewarePath, ".venv", "bin", "python"),
+        join(middlewarePath, "python_env", "bin", "python3"),
+        join(middlewarePath, "python_env", "bin", "python"),
+        join(middlewarePath, "python_env", "python3"),
+        join(middlewarePath, "python_env", "python"),
+      ];
 
   if (is.dev) {
     if (process.env.ELECTRON_PYTHON_PATH)
@@ -418,10 +465,10 @@ const spawnPythonProcess = (
     cwd: string;
     env?: NodeJS.ProcessEnv;
     stdio?:
-      | "pipe"
-      | "inherit"
-      | "ignore"
-      | Array<"pipe" | "inherit" | "ignore" | "ipc" | null>;
+    | "pipe"
+    | "inherit"
+    | "ignore"
+    | Array<"pipe" | "inherit" | "ignore" | "ipc" | null>;
   },
 ) => {
   // 1. Base Environment
@@ -635,9 +682,277 @@ ipcMain.handle("server-warmup", async () => {
 // --------------------------
 
 // --- Remote Server IPC ---
-import { RemoteClient, clearRemoteClient } from "./remoteClient";
+import {
+  RemoteClient,
+  clearRemoteClient,
+  RemoteClientObserver,
+  RemoteNetworkEvent,
+} from "./remoteClient";
 
 let remoteClient: RemoteClient | null = null;
+const REMOTE_NOTICE =
+  "远程模式已启用：所有交互都会直接发送到服务器，并同步镜像保存到本地。";
+const REMOTE_SYNC_ROOT = join(getUserDataPath(), "remote-sync");
+const REMOTE_SYNC_MIRROR_PATH = join(REMOTE_SYNC_ROOT, "sync-mirror.log");
+const REMOTE_EVENT_LOG_PATH = join(REMOTE_SYNC_ROOT, "network-events.log");
+const REMOTE_MAX_EVENTS = 500;
+const REMOTE_EVENT_LOG_BATCH_SIZE = 200;
+const REMOTE_EVENT_LOG_FLUSH_DELAY_MS = 80;
+const REMOTE_MIRROR_LOG_BATCH_SIZE = 200;
+const REMOTE_MIRROR_LOG_FLUSH_DELAY_MS = 80;
+
+let remoteSession: {
+  url: string;
+  apiKey?: string;
+  connectedAt: number;
+  source: "manual" | "local-daemon";
+} | null = null;
+let remoteCapabilities: string[] = [];
+let remoteAuthRequired: boolean | undefined = undefined;
+let remoteVersion: string | undefined = undefined;
+let remoteStatusCache: {
+  status?: string;
+  modelLoaded?: boolean;
+  currentModel?: string;
+  activeTasks?: number;
+  lastCheckedAt?: number;
+} = {};
+let remoteHealthFailures = 0;
+let remoteActiveTaskId: string | null = null;
+let remoteNetworkEvents: RemoteNetworkEvent[] = [];
+let remoteEventLogQueue: string[] = [];
+let remoteEventLogFlushTimer: NodeJS.Timeout | null = null;
+let remoteEventLogFlushing = false;
+let remoteMirrorLogQueue: string[] = [];
+let remoteMirrorLogFlushTimer: NodeJS.Timeout | null = null;
+let remoteMirrorLogFlushing = false;
+let remoteNetworkStats = {
+  wsConnected: false,
+  inFlightRequests: 0,
+  totalEvents: 0,
+  successCount: 0,
+  errorCount: 0,
+  retryCount: 0,
+  uploadCount: 0,
+  downloadCount: 0,
+  lastLatencyMs: undefined as number | undefined,
+  avgLatencyMs: undefined as number | undefined,
+  latencyTotalMs: 0,
+  latencyCount: 0,
+  lastStatusCode: undefined as number | undefined,
+  lastEventAt: undefined as number | undefined,
+  lastError: undefined as
+    | {
+      at: number;
+      kind: "connection" | "http" | "upload" | "download" | "retry" | "ws";
+      message: string;
+      path?: string;
+      statusCode?: number;
+    }
+    | undefined,
+  lastSyncAt: undefined as number | undefined,
+};
+
+const ensureRemoteStorage = () => {
+  try {
+    fs.mkdirSync(REMOTE_SYNC_ROOT, { recursive: true });
+  } catch (error) {
+    console.warn("[Remote] Failed to ensure storage directory:", error);
+  }
+};
+
+const flushRemoteEventLog = async () => {
+  if (remoteEventLogFlushing) return;
+  if (remoteEventLogQueue.length === 0) return;
+
+  remoteEventLogFlushing = true;
+  try {
+    ensureRemoteStorage();
+    while (remoteEventLogQueue.length > 0) {
+      const chunk = remoteEventLogQueue
+        .splice(0, REMOTE_EVENT_LOG_BATCH_SIZE)
+        .join("");
+      await fs.promises.appendFile(REMOTE_EVENT_LOG_PATH, chunk, "utf-8");
+    }
+  } catch {
+    // Ignore local log write failures
+  } finally {
+    remoteEventLogFlushing = false;
+    if (remoteEventLogQueue.length > 0) {
+      void flushRemoteEventLog();
+    }
+  }
+};
+
+const enqueueRemoteEventLog = (event: RemoteNetworkEvent) => {
+  remoteEventLogQueue.push(`${JSON.stringify(event)}\n`);
+  if (remoteEventLogQueue.length > REMOTE_MAX_EVENTS * 4) {
+    remoteEventLogQueue = remoteEventLogQueue.slice(-REMOTE_MAX_EVENTS * 2);
+  }
+  if (remoteEventLogFlushTimer) return;
+
+  remoteEventLogFlushTimer = setTimeout(() => {
+    remoteEventLogFlushTimer = null;
+    void flushRemoteEventLog();
+  }, REMOTE_EVENT_LOG_FLUSH_DELAY_MS);
+};
+
+const flushRemoteMirrorLog = async () => {
+  if (remoteMirrorLogFlushing) return;
+  if (remoteMirrorLogQueue.length === 0) return;
+
+  remoteMirrorLogFlushing = true;
+  try {
+    ensureRemoteStorage();
+    while (remoteMirrorLogQueue.length > 0) {
+      const chunk = remoteMirrorLogQueue
+        .splice(0, REMOTE_MIRROR_LOG_BATCH_SIZE)
+        .join("");
+      await fs.promises.appendFile(REMOTE_SYNC_MIRROR_PATH, chunk, "utf-8");
+    }
+  } catch {
+    // Ignore local log write failures
+  } finally {
+    remoteMirrorLogFlushing = false;
+    if (remoteMirrorLogQueue.length > 0) {
+      void flushRemoteMirrorLog();
+    }
+  }
+};
+
+const enqueueRemoteMirrorLog = (entry: {
+  timestamp: number;
+  taskId?: string;
+  serverUrl?: string;
+  model?: string;
+  level?: string;
+  message: string;
+}) => {
+  remoteMirrorLogQueue.push(`${JSON.stringify(entry)}\n`);
+  if (remoteMirrorLogQueue.length > REMOTE_MAX_EVENTS * 4) {
+    remoteMirrorLogQueue = remoteMirrorLogQueue.slice(-REMOTE_MAX_EVENTS * 2);
+  }
+  if (remoteMirrorLogFlushTimer) return;
+
+  remoteMirrorLogFlushTimer = setTimeout(() => {
+    remoteMirrorLogFlushTimer = null;
+    void flushRemoteMirrorLog();
+  }, REMOTE_MIRROR_LOG_FLUSH_DELAY_MS);
+};
+
+const getExecutionMode = (): "local" | "remote" =>
+  remoteClient && remoteSession ? "remote" : "local";
+
+const getFileScope = (): "shared-local" | "isolated-remote" =>
+  remoteSession?.source === "local-daemon" ? "shared-local" : "isolated-remote";
+
+const getOutputPolicy = (): "same-dir" | "scoped-remote-dir" =>
+  remoteSession?.source === "local-daemon" ? "same-dir" : "scoped-remote-dir";
+
+const detectRemoteSessionSource = (
+  url: string,
+): "manual" | "local-daemon" => {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (host !== "127.0.0.1" && host !== "localhost") {
+      return "manual";
+    }
+    const serverStatus = ServerManager.getInstance().getStatus();
+    if (!serverStatus.running) return "manual";
+    const parsedPort = Number.parseInt(parsed.port || "80", 10);
+    if (parsedPort === serverStatus.port) {
+      return "local-daemon";
+    }
+  } catch {
+    return "manual";
+  }
+  return "manual";
+};
+
+const appendRemoteEvent = (event: RemoteNetworkEvent) => {
+  const sanitizedEvent: RemoteNetworkEvent = {
+    ...event,
+    path: event.path
+      ? event.path.replace(/([?&]token=)[^&]+/gi, "$1***")
+      : event.path,
+  };
+  ensureRemoteStorage();
+  remoteNetworkEvents.push(sanitizedEvent);
+  if (remoteNetworkEvents.length > REMOTE_MAX_EVENTS) {
+    remoteNetworkEvents = remoteNetworkEvents.slice(-REMOTE_MAX_EVENTS);
+  }
+  enqueueRemoteEventLog(sanitizedEvent);
+
+  const isHttpKind =
+    sanitizedEvent.kind === "http" ||
+    sanitizedEvent.kind === "upload" ||
+    sanitizedEvent.kind === "download";
+  if (isHttpKind && sanitizedEvent.phase === "start") {
+    remoteNetworkStats.inFlightRequests += 1;
+  } else if (
+    isHttpKind &&
+    (sanitizedEvent.phase === "success" || sanitizedEvent.phase === "error")
+  ) {
+    remoteNetworkStats.inFlightRequests = Math.max(
+      0,
+      remoteNetworkStats.inFlightRequests - 1,
+    );
+  }
+
+  if (sanitizedEvent.kind === "ws") {
+    if (sanitizedEvent.phase === "open") remoteNetworkStats.wsConnected = true;
+    if (sanitizedEvent.phase === "close" || sanitizedEvent.phase === "error") {
+      remoteNetworkStats.wsConnected = false;
+    }
+  }
+
+  remoteNetworkStats.totalEvents += 1;
+  if (sanitizedEvent.phase === "success" || sanitizedEvent.phase === "open") {
+    remoteNetworkStats.successCount += 1;
+  }
+  if (sanitizedEvent.phase === "error") {
+    remoteNetworkStats.errorCount += 1;
+    remoteNetworkStats.lastError = {
+      at: sanitizedEvent.timestamp,
+      kind: sanitizedEvent.kind,
+      message: sanitizedEvent.message || "Unknown remote error",
+      path: sanitizedEvent.path,
+      statusCode: sanitizedEvent.statusCode,
+    };
+  }
+  if (sanitizedEvent.kind === "retry" && sanitizedEvent.phase === "start") {
+    remoteNetworkStats.retryCount += 1;
+  }
+  if (sanitizedEvent.kind === "upload" && sanitizedEvent.phase === "success") {
+    remoteNetworkStats.uploadCount += 1;
+  }
+  if (sanitizedEvent.kind === "download" && sanitizedEvent.phase === "success") {
+    remoteNetworkStats.downloadCount += 1;
+  }
+
+  if (
+    typeof sanitizedEvent.durationMs === "number" &&
+    Number.isFinite(sanitizedEvent.durationMs)
+  ) {
+    remoteNetworkStats.lastLatencyMs = sanitizedEvent.durationMs;
+    remoteNetworkStats.latencyTotalMs += sanitizedEvent.durationMs;
+    remoteNetworkStats.latencyCount += 1;
+    remoteNetworkStats.avgLatencyMs = Math.round(
+      remoteNetworkStats.latencyTotalMs / Math.max(1, remoteNetworkStats.latencyCount),
+    );
+  }
+
+  if (typeof sanitizedEvent.statusCode === "number") {
+    remoteNetworkStats.lastStatusCode = sanitizedEvent.statusCode;
+  }
+  remoteNetworkStats.lastEventAt = sanitizedEvent.timestamp;
+  remoteNetworkStats.lastSyncAt = sanitizedEvent.timestamp;
+};
+
+const remoteObserver: RemoteClientObserver = {
+  onNetworkEvent: (event) => appendRemoteEvent(event),
+};
 
 const formatRemoteError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -663,58 +978,237 @@ const formatRemoteError = (error: unknown) => {
   };
 };
 
+const buildRemoteErrorResponse = (
+  error: unknown,
+  fallbackMessage?: string,
+) => {
+  const formatted = formatRemoteError(error);
+  return {
+    ok: false,
+    code: formatted.errorCode,
+    message: fallbackMessage || formatted.error,
+    technicalMessage: formatted.error,
+    retryable: formatted.retryable,
+  };
+};
+
+const getSanitizedRemoteSession = () =>
+  remoteSession
+    ? {
+      url: remoteSession.url,
+      connectedAt: remoteSession.connectedAt,
+      source: remoteSession.source,
+    }
+    : null;
+
+const buildRemoteNetworkStatus = () => ({
+  connected: Boolean(remoteClient && remoteSession),
+  executionMode: getExecutionMode(),
+  session: getSanitizedRemoteSession(),
+  fileScope: getFileScope(),
+  outputPolicy: getOutputPolicy(),
+  wsConnected: remoteNetworkStats.wsConnected,
+  inFlightRequests: remoteNetworkStats.inFlightRequests,
+  totalEvents: remoteNetworkStats.totalEvents,
+  successCount: remoteNetworkStats.successCount,
+  errorCount: remoteNetworkStats.errorCount,
+  retryCount: remoteNetworkStats.retryCount,
+  uploadCount: remoteNetworkStats.uploadCount,
+  downloadCount: remoteNetworkStats.downloadCount,
+  lastLatencyMs: remoteNetworkStats.lastLatencyMs,
+  avgLatencyMs: remoteNetworkStats.avgLatencyMs,
+  lastStatusCode: remoteNetworkStats.lastStatusCode,
+  lastEventAt: remoteNetworkStats.lastEventAt,
+  lastError: remoteNetworkStats.lastError,
+  notice: REMOTE_NOTICE,
+  syncMirrorPath: REMOTE_SYNC_MIRROR_PATH,
+  networkEventLogPath: REMOTE_EVENT_LOG_PATH,
+  lastSyncAt: remoteNetworkStats.lastSyncAt,
+});
+
+const buildRemoteRuntimeStatus = () => ({
+  connected: Boolean(remoteClient && remoteSession),
+  executionMode: getExecutionMode(),
+  session: getSanitizedRemoteSession(),
+  fileScope: getFileScope(),
+  outputPolicy: getOutputPolicy(),
+  authRequired: remoteAuthRequired,
+  capabilities: remoteCapabilities,
+  status: remoteStatusCache.status || "unknown",
+  modelLoaded: remoteStatusCache.modelLoaded ?? false,
+  currentModel: remoteStatusCache.currentModel,
+  activeTasks: remoteStatusCache.activeTasks ?? 0,
+  version: remoteVersion,
+  lastCheckedAt: remoteStatusCache.lastCheckedAt,
+  notice: REMOTE_NOTICE,
+  syncMirrorPath: REMOTE_SYNC_MIRROR_PATH,
+  networkEventLogPath: REMOTE_EVENT_LOG_PATH,
+});
+
+const buildRemoteDiagnostics = () => ({
+  executionMode: getExecutionMode(),
+  connected: Boolean(remoteClient && remoteSession),
+  session: getSanitizedRemoteSession(),
+  healthFailures: remoteHealthFailures,
+  activeTaskId: remoteActiveTaskId,
+  syncMirrorPath: REMOTE_SYNC_MIRROR_PATH,
+  networkEventLogPath: REMOTE_EVENT_LOG_PATH,
+  notice: REMOTE_NOTICE,
+  network: buildRemoteNetworkStatus(),
+  lastSyncAt: remoteNetworkStats.lastSyncAt,
+});
+
 ipcMain.handle(
   "remote-connect",
   async (_event, config: { url: string; apiKey?: string }) => {
+    ensureRemoteStorage();
     try {
-      remoteClient = new RemoteClient(config);
+      remoteClient = new RemoteClient(config, remoteObserver);
       const result = await remoteClient.testConnection();
       if (!result.ok) {
         remoteClient = null;
+        remoteSession = null;
+        return {
+          ok: false,
+          code: "REMOTE_PROTOCOL",
+          message: result.message || "Remote connection failed",
+        };
       }
-      return result;
+
+      remoteSession = {
+        url: config.url.trim().replace(/\/+$/, ""),
+        apiKey: config.apiKey?.trim() || undefined,
+        connectedAt: Date.now(),
+        source: detectRemoteSessionSource(config.url),
+      };
+
+      const [health, status] = await Promise.all([
+        remoteClient.getHealth(),
+        remoteClient.getStatus(),
+      ]);
+      remoteVersion = result.version || health.version;
+      remoteCapabilities = health.capabilities || [];
+      remoteAuthRequired = health.authRequired;
+      remoteStatusCache = {
+        status: status.status,
+        modelLoaded: status.modelLoaded,
+        currentModel: status.currentModel,
+        activeTasks: status.activeTasks,
+        lastCheckedAt: Date.now(),
+      };
+      remoteHealthFailures = 0;
+      return {
+        ok: true,
+        message: result.message || "Connected",
+        data: {
+          version: remoteVersion,
+        },
+      };
     } catch (e) {
       remoteClient = null;
-      return { ok: false, message: formatRemoteError(e).error };
+      remoteSession = null;
+      return buildRemoteErrorResponse(e, "Failed to connect remote server");
     }
   },
 );
 
 ipcMain.handle("remote-disconnect", async () => {
+  if (remoteTranslationBridge) {
+    const bridge = remoteTranslationBridge;
+    remoteTranslationBridge = null;
+    remoteActiveTaskId = null;
+    void bridge.client.cancelTask(bridge.taskId).catch(() => undefined);
+  }
+  remoteClient = null;
+  remoteSession = null;
+  remoteCapabilities = [];
+  remoteAuthRequired = undefined;
+  remoteVersion = undefined;
+  remoteStatusCache = {};
+  remoteActiveTaskId = null;
+  remoteNetworkStats.wsConnected = false;
+  remoteNetworkStats.inFlightRequests = 0;
   remoteClient = null;
   clearRemoteClient();
-  return { ok: true };
+  return {
+    ok: true,
+    message: "Disconnected",
+  };
 });
 
 ipcMain.handle("remote-status", async () => {
-  if (!remoteClient) {
-    return { connected: false };
+  if (!remoteClient || !remoteSession) {
+    return {
+      ok: true,
+      data: buildRemoteRuntimeStatus(),
+    };
   }
   try {
-    const status = await remoteClient.getStatus();
-    return { connected: true, ...status };
+    const [health, status] = await Promise.all([
+      remoteClient.getHealth(),
+      remoteClient.getStatus(),
+    ]);
+    remoteVersion = health.version || remoteVersion;
+    remoteCapabilities = health.capabilities || [];
+    remoteAuthRequired = health.authRequired;
+    remoteStatusCache = {
+      status: status.status,
+      modelLoaded: status.modelLoaded,
+      currentModel: status.currentModel,
+      activeTasks: status.activeTasks,
+      lastCheckedAt: Date.now(),
+    };
+    remoteHealthFailures = 0;
+    return {
+      ok: true,
+      data: buildRemoteRuntimeStatus(),
+    };
   } catch (e) {
-    return { connected: false, ...formatRemoteError(e) };
+    remoteHealthFailures += 1;
+    return {
+      ...buildRemoteErrorResponse(e, "Failed to fetch remote runtime status"),
+      data: buildRemoteRuntimeStatus(),
+    };
   }
 });
 
 ipcMain.handle("remote-models", async () => {
-  if (!remoteClient) return [];
+  if (!remoteClient) {
+    return {
+      ok: false,
+      code: "REMOTE_PROTOCOL",
+      message: "Not connected to remote server",
+    };
+  }
   try {
-    return await remoteClient.listModels();
+    const models = await remoteClient.listModels();
+    return {
+      ok: true,
+      data: models,
+    };
   } catch (e) {
     console.error("[Remote] listModels error:", e);
-    return [];
+    return buildRemoteErrorResponse(e, "Failed to fetch remote models");
   }
 });
 
 ipcMain.handle("remote-glossaries", async () => {
-  if (!remoteClient) return [];
+  if (!remoteClient) {
+    return {
+      ok: false,
+      code: "REMOTE_PROTOCOL",
+      message: "Not connected to remote server",
+    };
+  }
   try {
-    return await remoteClient.listGlossaries();
+    const glossaries = await remoteClient.listGlossaries();
+    return {
+      ok: true,
+      data: glossaries,
+    };
   } catch (e) {
     console.error("[Remote] listGlossaries error:", e);
-    return [];
+    return buildRemoteErrorResponse(e, "Failed to fetch remote glossaries");
   }
 });
 
@@ -722,47 +1216,95 @@ ipcMain.handle(
   "remote-translate",
   async (_event, options: TranslateOptions) => {
     if (!remoteClient) {
-      return { error: "Not connected to remote server" };
+      return {
+        ok: false,
+        code: "REMOTE_PROTOCOL",
+        message: "Not connected to remote server",
+      };
     }
     try {
       const { taskId, status } = await remoteClient.createTranslation(options);
-      return { taskId, status };
+      remoteActiveTaskId = taskId;
+      return {
+        ok: true,
+        data: { taskId, status },
+      };
     } catch (e) {
-      return formatRemoteError(e);
+      return buildRemoteErrorResponse(e, "Failed to create remote translation task");
     }
   },
 );
 
-ipcMain.handle("remote-task-status", async (_event, taskId: string) => {
-  if (!remoteClient) {
-    return { error: "Not connected to remote server" };
-  }
-  try {
-    return await remoteClient.getTaskStatus(taskId);
-  } catch (e) {
-    return formatRemoteError(e);
-  }
-});
+ipcMain.handle(
+  "remote-task-status",
+  async (
+    _event,
+    taskId: string,
+    query?: { logFrom?: number; logLimit?: number },
+  ) => {
+    if (!remoteClient) {
+      return {
+        ok: false,
+        code: "REMOTE_PROTOCOL",
+        message: "Not connected to remote server",
+      };
+    }
+    try {
+      const status = await remoteClient.getTaskStatus(taskId, query);
+      if (
+        remoteActiveTaskId === taskId &&
+        ["completed", "failed", "cancelled"].includes(status.status)
+      ) {
+        remoteActiveTaskId = null;
+      }
+      return {
+        ok: true,
+        data: status,
+      };
+    } catch (e) {
+      return buildRemoteErrorResponse(e, "Failed to fetch remote task status");
+    }
+  },
+);
 
 ipcMain.handle("remote-cancel", async (_event, taskId: string) => {
   if (!remoteClient) {
-    return { error: "Not connected to remote server" };
+    return {
+      ok: false,
+      code: "REMOTE_PROTOCOL",
+      message: "Not connected to remote server",
+    };
   }
   try {
-    return await remoteClient.cancelTask(taskId);
+    const result = await remoteClient.cancelTask(taskId);
+    if (remoteActiveTaskId === taskId) {
+      remoteActiveTaskId = null;
+    }
+    return {
+      ok: true,
+      data: result,
+    };
   } catch (e) {
-    return formatRemoteError(e);
+    return buildRemoteErrorResponse(e, "Failed to cancel remote task");
   }
 });
 
 ipcMain.handle("remote-upload", async (_event, filePath: string) => {
   if (!remoteClient) {
-    return { error: "Not connected to remote server" };
+    return {
+      ok: false,
+      code: "REMOTE_PROTOCOL",
+      message: "Not connected to remote server",
+    };
   }
   try {
-    return await remoteClient.uploadFile(filePath);
+    const uploaded = await remoteClient.uploadFile(filePath);
+    return {
+      ok: true,
+      data: uploaded,
+    };
   } catch (e) {
-    return formatRemoteError(e);
+    return buildRemoteErrorResponse(e, "Failed to upload file to remote server");
   }
 });
 
@@ -770,16 +1312,152 @@ ipcMain.handle(
   "remote-download",
   async (_event, taskId: string, savePath: string) => {
     if (!remoteClient) {
-      return { error: "Not connected to remote server" };
+      return {
+        ok: false,
+        code: "REMOTE_PROTOCOL",
+        message: "Not connected to remote server",
+      };
     }
     try {
       await remoteClient.downloadResult(taskId, savePath);
-      return { success: true };
+      return {
+        ok: true,
+        data: { success: true, path: savePath },
+      };
     } catch (e) {
-      return formatRemoteError(e);
+      return buildRemoteErrorResponse(
+        e,
+        "Failed to download result from remote server",
+      );
     }
   },
 );
+
+ipcMain.handle("remote-network-status", async () => {
+  return {
+    ok: true,
+    data: buildRemoteNetworkStatus(),
+  };
+});
+
+ipcMain.handle("remote-network-events", async (_event, limit?: number) => {
+  const normalizedLimit =
+    typeof limit === "number" && Number.isFinite(limit)
+      ? Math.max(1, Math.min(REMOTE_MAX_EVENTS, Math.floor(limit)))
+      : 50;
+  const events = remoteNetworkEvents.slice(-normalizedLimit);
+  return {
+    ok: true,
+    data: events,
+  };
+});
+
+ipcMain.handle("remote-diagnostics", async () => {
+  return {
+    ok: true,
+    data: buildRemoteDiagnostics(),
+  };
+});
+
+ipcMain.handle("remote-hf-check-network", async () => {
+  if (!remoteClient) {
+    return {
+      ok: false,
+      code: "REMOTE_PROTOCOL",
+      message: "Not connected to remote server",
+    };
+  }
+  try {
+    const data = await remoteClient.checkHfNetwork();
+    return { ok: true, data };
+  } catch (e) {
+    return buildRemoteErrorResponse(e, "Failed to check remote network");
+  }
+});
+
+ipcMain.handle("remote-hf-list-repos", async (_event, orgName: string) => {
+  if (!remoteClient) {
+    return {
+      ok: false,
+      code: "REMOTE_PROTOCOL",
+      message: "Not connected to remote server",
+    };
+  }
+  try {
+    const data = await remoteClient.listHfRepos(orgName);
+    return { ok: true, data };
+  } catch (e) {
+    return buildRemoteErrorResponse(e, "Failed to list remote repos");
+  }
+});
+
+ipcMain.handle("remote-hf-list-files", async (_event, repoId: string) => {
+  if (!remoteClient) {
+    return {
+      ok: false,
+      code: "REMOTE_PROTOCOL",
+      message: "Not connected to remote server",
+    };
+  }
+  try {
+    const data = await remoteClient.listHfFiles(repoId);
+    return { ok: true, data };
+  } catch (e) {
+    return buildRemoteErrorResponse(e, "Failed to list remote files");
+  }
+});
+
+ipcMain.handle(
+  "remote-hf-download-start",
+  async (_event, repoId: string, fileName: string, mirror: string = "direct") => {
+    if (!remoteClient) {
+      return {
+        ok: false,
+        code: "REMOTE_PROTOCOL",
+        message: "Not connected to remote server",
+      };
+    }
+    try {
+      const data = await remoteClient.startHfDownload(repoId, fileName, mirror);
+      return { ok: true, data };
+    } catch (e) {
+      return buildRemoteErrorResponse(e, "Failed to start remote download");
+    }
+  },
+);
+
+ipcMain.handle("remote-hf-download-status", async (_event, downloadId: string) => {
+  if (!remoteClient) {
+    return {
+      ok: false,
+      code: "REMOTE_PROTOCOL",
+      message: "Not connected to remote server",
+    };
+  }
+  try {
+    const data = await remoteClient.getHfDownloadStatus(downloadId);
+    return { ok: true, data };
+  } catch (e) {
+    return buildRemoteErrorResponse(e, "Failed to fetch remote download status");
+  }
+});
+
+ipcMain.handle("remote-hf-download-cancel", async (_event, downloadId: string) => {
+  if (!remoteClient) {
+    return {
+      ok: false,
+      code: "REMOTE_PROTOCOL",
+      message: "Not connected to remote server",
+    };
+  }
+  try {
+    const data = await remoteClient.cancelHfDownload(downloadId);
+    return { ok: true, data };
+  } catch (e) {
+    return buildRemoteErrorResponse(e, "Failed to cancel remote download");
+  }
+});
+
 // --------------------------
 
 // Single Block Retranslation
@@ -1055,7 +1733,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           }
         }
       }
-    } catch {}
+    } catch { }
 
     try {
       const { stdout } = await execWithTimeout(
@@ -1077,7 +1755,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           return;
         }
       }
-    } catch {}
+    } catch { }
 
     if (process.platform === "win32") {
       try {
@@ -1103,7 +1781,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.gpu = { name, driver: driver || undefined, vram };
           return;
         }
-      } catch {}
+      } catch { }
 
       try {
         const { stdout } = await execWithTimeout(
@@ -1124,7 +1802,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.gpu = { name, driver: driver || undefined, vram };
           return;
         }
-      } catch {}
+      } catch { }
     }
 
     if (process.platform === "darwin") {
@@ -1149,7 +1827,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.gpu = { name: String(name), driver: "METAL", vram };
           return;
         }
-      } catch {}
+      } catch { }
     }
 
     if (process.platform === "linux") {
@@ -1173,7 +1851,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
             return;
           }
         }
-      } catch {}
+      } catch { }
 
       try {
         const { stdout } = await execWithTimeout("lspci", 4000);
@@ -1187,7 +1865,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           };
           return;
         }
-      } catch {}
+      } catch { }
 
       try {
         const { stdout } = await execWithTimeout("glxinfo -B", 4000);
@@ -1200,7 +1878,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
             driver: "Detected via glxinfo",
           };
         }
-      } catch {}
+      } catch { }
     }
   })();
 
@@ -1230,7 +1908,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.python = { version, path: executable };
           return;
         }
-      } catch {}
+      } catch { }
     }
 
     if (primary.type === "bundle" && fs.existsSync(primary.path)) {
@@ -1263,7 +1941,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.cuda = { version: `driver ${first}`, available: true };
           return;
         }
-      } catch {}
+      } catch { }
       result.cuda = { version: "N/A", available: false };
     }
   })();
@@ -1293,7 +1971,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           version: versionMatch ? versionMatch[1] : undefined,
         };
         return;
-      } catch {}
+      } catch { }
       result.vulkan = { available: false };
     }
   })();
@@ -1396,6 +2074,64 @@ ipcMain.on("show-notification", (_event, { title, body }) => {
 ipcMain.on("set-theme", (_event, theme: "dark" | "light") => {
   nativeTheme.themeSource = theme;
 });
+
+// Read tail of a text file (for log viewing)
+ipcMain.handle(
+  "read-text-tail",
+  async (_event, path: string, options?: { maxBytes?: number; lineCount?: number }) => {
+    try {
+      if (!path) {
+        return { exists: false, error: "Empty path" };
+      }
+      const safePath = ensureLocalFilePathForUserOperation(path);
+      if (!fs.existsSync(safePath)) {
+        return { exists: false, path: safePath };
+      }
+
+      const stats = fs.statSync(safePath);
+      const maxBytes = Math.max(32 * 1024, options?.maxBytes ?? 512 * 1024);
+      const lineCount = Math.max(50, options?.lineCount ?? 500);
+
+      if (stats.size <= maxBytes) {
+        const content = fs.readFileSync(safePath, "utf-8");
+        const lines = content.split("\n");
+        return {
+          exists: true,
+          path: safePath,
+          lineCount: lines.length,
+          content: lines.slice(-lineCount).join("\n"),
+        };
+      }
+
+      return await new Promise((resolve) => {
+        const chunks: string[] = [];
+        const startPos = Math.max(0, stats.size - maxBytes);
+        const stream = fs.createReadStream(safePath, {
+          encoding: "utf-8",
+          start: startPos,
+        });
+
+        stream.on("data", (chunk: string) => chunks.push(chunk));
+        stream.on("end", () => {
+          const content = chunks.join("");
+          const lines = content.split("\n").slice(1);
+          resolve({
+            exists: true,
+            path: safePath,
+            lineCount: lines.length,
+            content: lines.slice(-lineCount).join("\n"),
+            truncated: true,
+          });
+        });
+        stream.on("error", (err) => {
+          resolve({ exists: false, path: safePath, error: String(err) });
+        });
+      });
+    } catch (e) {
+      return { exists: false, error: String(e) };
+    }
+  },
+);
 
 // Read server.log for debug export (streaming to avoid large-file memory spikes)
 ipcMain.handle("read-server-log", async () => {
@@ -1543,6 +2279,16 @@ ipcMain.handle("get-model-info", async (_event, modelName: string) => {
 });
 
 ipcMain.handle("get-hardware-specs", async () => {
+  if (
+    hardwareSpecsCache &&
+    Date.now() - hardwareSpecsCache.at < HARDWARE_SPECS_CACHE_TTL_MS
+  ) {
+    return hardwareSpecsCache.data;
+  }
+  if (hardwareSpecsInFlight) {
+    return hardwareSpecsInFlight;
+  }
+
   const middlewareDir = getMiddlewarePath();
   const scriptPath = join(middlewareDir, "get_specs.py");
   const pythonCmd = getScriptPythonInfo();
@@ -1551,7 +2297,7 @@ ipcMain.handle("get-hardware-specs", async () => {
   console.log("[HardwareSpecs] Python Cmd:", pythonCmd);
   console.log("[HardwareSpecs] Script Path:", scriptPath);
 
-  return new Promise((resolve) => {
+  hardwareSpecsInFlight = new Promise((resolve) => {
     if (!fs.existsSync(scriptPath)) {
       const err = `Spec script missing at: ${scriptPath}`;
       console.error(err);
@@ -1576,7 +2322,7 @@ ipcMain.handle("get-hardware-specs", async () => {
       console.error(errMsg);
       proc.kill();
       resolve({ error: errMsg });
-    }, 10000);
+    }, 30000);
 
     if (proc.stdout) {
       proc.stdout.on("data", (d) => (output += d.toString()));
@@ -1630,11 +2376,17 @@ ipcMain.handle("get-hardware-specs", async () => {
         resolve({ error: err });
       }
     });
-    proc.on("error", (e) => {
-      console.error(e);
-      resolve(null);
-    });
   });
+  try {
+    const result = await hardwareSpecsInFlight;
+    hardwareSpecsCache = {
+      at: Date.now(),
+      data: result,
+    };
+    return result;
+  } finally {
+    hardwareSpecsInFlight = null;
+  }
 });
 
 // 刷新 GPU 检测（清理缓存并重新探测）
@@ -1737,12 +2489,142 @@ ipcMain.handle("check-env-component", async (_event, component: string) => {
   });
 });
 
+const runEnvCheckReport = (
+  middlewareDir: string,
+  pythonCmd: { type: "python"; path: string },
+): Promise<
+  | { ok: true; report: any }
+  | { ok: false; error: string; output?: string; errorOutput?: string }
+> =>
+  new Promise((resolve) => {
+    const proc = spawnPythonProcess(
+      pythonCmd,
+      ["env_fixer.py", "--check", "--json"],
+      {
+        cwd: middlewareDir,
+      },
+    );
+
+    let output = "";
+    let errorOutput = "";
+    let resolved = false;
+
+    const timeout = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      proc.kill();
+      resolve({ ok: false, error: "Check timed out", output, errorOutput });
+    }, 60000);
+
+    if (proc.stdout) {
+      proc.stdout.on("data", (d) => (output += d.toString()));
+    }
+    if (proc.stderr) {
+      proc.stderr.on("data", (d) => (errorOutput += d.toString()));
+    }
+
+    proc.on("error", (err) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      resolve({ ok: false, error: err.message, output, errorOutput });
+    });
+
+    proc.on("close", (_code) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      try {
+        const mergedOutput = [output, errorOutput].filter(Boolean).join("\n");
+        const report =
+          extractLastJsonObject<any>(mergedOutput) ||
+          readEnvReportFromFile<any>(middlewareDir);
+        if (!report) {
+          resolve({
+            ok: false,
+            error: "Failed to parse report: no JSON object found",
+            output,
+            errorOutput,
+          });
+          return;
+        }
+        resolve({ ok: true, report });
+      } catch (error) {
+        resolve({
+          ok: false,
+          error: `Failed to parse report: ${error}`,
+          output,
+          errorOutput,
+        });
+      }
+    });
+  });
+
+ipcMain.removeHandler("check-env-component");
+ipcMain.handle("check-env-component", async (_event, component: string) => {
+  const middlewareDir = getMiddlewarePath();
+  const scriptPath = join(middlewareDir, "env_fixer.py");
+  const pythonCmd = getScriptPythonInfo();
+
+  if (!fs.existsSync(scriptPath)) {
+    return { success: false, error: `Script not found: ${scriptPath}` };
+  }
+
+  const now = Date.now();
+  if (envCheckCache && now - envCheckCache.at < ENV_CHECK_CACHE_TTL_MS) {
+    const componentData = envCheckCache.report?.components?.find(
+      (c: any) => c.name.toLowerCase() === component.toLowerCase(),
+    );
+    return {
+      success: true,
+      report: envCheckCache.report,
+      component: componentData || null,
+    };
+  }
+
+  if (!envCheckInFlight) {
+    console.log(`[EnvFixer] Checking environment (requested: ${component})`);
+    envCheckInFlight = runEnvCheckReport(middlewareDir, pythonCmd);
+  }
+
+  const inFlight = envCheckInFlight;
+  try {
+    const result = await inFlight;
+    if (!result.ok) {
+      return {
+        success: false,
+        error: result.error,
+        output: result.output,
+        errorOutput: result.errorOutput,
+      };
+    }
+    envCheckCache = {
+      at: Date.now(),
+      report: result.report,
+    };
+    const componentData = result.report?.components?.find(
+      (c: any) => c.name.toLowerCase() === component.toLowerCase(),
+    );
+    return {
+      success: true,
+      report: result.report,
+      component: componentData || null,
+    };
+  } finally {
+    if (envCheckInFlight === inFlight) {
+      envCheckInFlight = null;
+    }
+  }
+});
+
 ipcMain.handle("fix-env-component", async (_event, component: string) => {
   const middlewareDir = getMiddlewarePath();
   const scriptPath = join(middlewareDir, "env_fixer.py");
   const pythonCmd = getScriptPythonInfo();
 
   console.log(`[EnvFixer] Fixing component: ${component}`);
+  envCheckCache = null;
+  envCheckInFlight = null;
 
   return new Promise((resolve) => {
     if (!fs.existsSync(scriptPath)) {
@@ -2239,9 +3121,13 @@ ipcMain.handle(
     // Let's check if ServerManager has a running instance.
     const sm = ServerManager.getInstance();
     const status = sm.getStatus();
-    if (status.running) {
+    if (status.running && status.mode !== "api_v1") {
       args.push("--server", `http://127.0.0.1:${status.port}`);
       args.push("--no-server-spawn");
+    } else if (status.running && status.mode === "api_v1") {
+      console.warn(
+        "[Retranslate] Local daemon is api_v1 mode, fallback to direct llama-server path for compatibility.",
+      );
     }
 
     console.log("[Retranslate] Spawning:", pythonCmd, args.join(" "));
@@ -2480,8 +3366,407 @@ ipcMain.handle(
   },
 );
 
-ipcMain.on("start-translation", (event, { inputFile, modelPath, config }) => {
-  if (pythonProcess) return; // Already running
+const normalizeRemoteUrl = (value: unknown): string => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return raw.replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+};
+
+const resolveConfiguredRemoteUrl = (config: any): string => {
+  const candidates = [
+    config?.remoteUrl,
+    config?.serverUrl,
+    config?.config_remote_url,
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeRemoteUrl(candidate);
+    if (normalized) return normalized;
+  }
+  return "";
+};
+
+const resolveConfiguredRemoteApiKey = (config: any): string | undefined => {
+  const candidates = [config?.apiKey, config?.remoteApiKey, config?.config_api_key];
+  for (const candidate of candidates) {
+    const normalized = String(candidate || "").trim();
+    if (normalized) return normalized;
+  }
+  return undefined;
+};
+
+const normalizeLineTolerancePct = (value: unknown, fallback: number = 0.2): number => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  if (numeric > 1) return numeric / 100;
+  if (numeric < 0) return 0;
+  return numeric;
+};
+
+const resolveTranslationOutputPath = (
+  inputFile: string,
+  effectiveModelPath: string,
+  config: any,
+): string => {
+  const outputDir = String(config?.outputDir || "").trim();
+  if (outputDir && fs.existsSync(outputDir)) {
+    const ext = inputFile.split(".").pop() || "";
+    const baseName = ext ? basename(inputFile, `.${ext}`) : basename(inputFile);
+    const outFilename = ext
+      ? `${baseName}_translated.${ext}`
+      : `${baseName}_translated`;
+    return join(outputDir, outFilename);
+  }
+
+  const ext = inputFile.includes(".") ? `.${inputFile.split(".").pop()}` : "";
+  const base = ext ? inputFile.slice(0, -ext.length) : inputFile;
+  const normalizedPath = effectiveModelPath.replace(/\\/g, "/");
+  const fileName = normalizedPath.split("/").pop() || "";
+  const modelName = fileName.replace(/\.gguf$/i, "") || "unknown";
+  return `${base}_${modelName}${ext}`;
+};
+
+const buildRemoteTranslateOptionsFromConfig = (
+  config: any,
+  effectiveModelPath: string,
+  remoteFilePath: string,
+): TranslateOptions => {
+  const toInt = (value: unknown, fallback: number): number => {
+    const parsed = Number.parseInt(String(value ?? ""), 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const toFloat = (value: unknown, fallback: number): number => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  const parsedGpuLayers = toInt(config?.gpuLayers, -1);
+  const parsedSeed = Number.parseInt(String(config?.seed ?? ""), 10);
+
+  return {
+    filePath: remoteFilePath,
+    model: effectiveModelPath || undefined,
+    glossary: config?.glossaryPath,
+    preset: config?.preset || "novel",
+    mode: config?.mode || "doc",
+    chunkSize: toInt(config?.chunkSize, 1000),
+    ctx: toInt(config?.ctxSize, 8192),
+    gpuLayers: config?.deviceMode === "cpu" ? 0 : parsedGpuLayers,
+    temperature: toFloat(config?.temperature, 0.3),
+    lineFormat: config?.lineFormat || "single",
+    strictMode: config?.strictMode || "off",
+    lineCheck: config?.lineCheck !== false,
+    lineToleranceAbs: toInt(config?.lineToleranceAbs, 10),
+    lineTolerancePct: normalizeLineTolerancePct(config?.lineTolerancePct, 0.2),
+    traditional: config?.traditional === true,
+    saveCot: config?.saveCot === true,
+    saveSummary: config?.saveSummary === true,
+    alignmentMode: config?.alignmentMode === true,
+    resume: config?.resume === true,
+    saveCache: config?.saveCache !== false,
+    cachePath: config?.cacheDir,
+    rulesPreInline: Array.isArray(config?.rulesPre) ? config.rulesPre : undefined,
+    rulesPostInline: Array.isArray(config?.rulesPost) ? config.rulesPost : undefined,
+    repPenaltyBase: toFloat(config?.repPenaltyBase, 1.0),
+    repPenaltyMax: toFloat(config?.repPenaltyMax, 1.5),
+    repPenaltyStep: toFloat(config?.repPenaltyStep, 0.1),
+    maxRetries: toInt(config?.maxRetries, 3),
+    outputHitThreshold: toFloat(config?.outputHitThreshold, 60),
+    cotCoverageThreshold: toFloat(config?.cotCoverageThreshold, 80),
+    coverageRetries: toInt(config?.coverageRetries, 3),
+    retryTempBoost: toFloat(config?.retryTempBoost, 0.05),
+    retryPromptFeedback: config?.retryPromptFeedback !== false,
+    balanceEnable: config?.balanceEnable !== false,
+    balanceThreshold: toFloat(config?.balanceThreshold, 0.6),
+    balanceCount: toInt(config?.balanceCount, 3),
+    parallel: Math.max(1, toInt(config?.concurrency, 1)),
+    flashAttn: config?.flashAttn === true,
+    kvCacheType: String(config?.kvCacheType || "f16"),
+    useLargeBatch: config?.useLargeBatch === true,
+    batchSize:
+      toInt(config?.physicalBatchSize, 0) > 0
+        ? toInt(config?.physicalBatchSize, 0)
+        : undefined,
+    seed:
+      config?.seed === undefined || config?.seed === null || config?.seed === ""
+        ? undefined
+        : Number.isFinite(parsedSeed)
+          ? parsedSeed
+          : undefined,
+    textProtect: config?.textProtect === true,
+    protectPatterns: config?.protectPatterns,
+    fixRuby: config?.fixRuby === true,
+    fixKana: config?.fixKana === true,
+    fixPunctuation: config?.fixPunctuation === true,
+    gpuDeviceId: String(config?.gpuDeviceId || "").trim() || undefined,
+  };
+};
+
+const appendRemoteMirrorMessage = (params: {
+  taskId?: string;
+  serverUrl?: string;
+  model?: string;
+  level?: string;
+  message: string;
+}) => {
+  enqueueRemoteMirrorLog({
+    timestamp: Date.now(),
+    taskId: params.taskId,
+    serverUrl: params.serverUrl,
+    model: params.model,
+    level: params.level || "info",
+    message: params.message,
+  });
+};
+
+const runTranslationViaRemoteApi = async (
+  event: any,
+  params: {
+    client: RemoteClient;
+    sourceLabel: string;
+    inputFile: string;
+    effectiveModelPath: string;
+    config: any;
+  },
+) => {
+  const { client, sourceLabel, inputFile, effectiveModelPath, config } = params;
+  const outputPath = resolveTranslationOutputPath(inputFile, effectiveModelPath, config);
+  let taskId = "";
+  let nextLogIndex = 0;
+  let lastProgressSig = "";
+  const serverUrl = client.getBaseUrl?.() || "";
+  let serverVersion = "";
+
+  try {
+    try {
+      const health = await client.getHealth();
+      serverVersion = health?.version || "";
+    } catch {
+      // ignore health fetch failure
+    }
+    event.reply("log-update", `System: Execution mode remote-api (${sourceLabel})\n`);
+    // [Feature] 发送远程执行信息供 Dashboard 记录到翻译历史
+    const remoteInfoPayload = {
+      executionMode: "remote-api",
+      source: sourceLabel,
+      serverUrl,
+      model: effectiveModelPath,
+      serverVersion,
+    };
+    event.reply("log-update", `JSON_REMOTE_INFO:${JSON.stringify(remoteInfoPayload)}\n`);
+    if (serverVersion) {
+      appendRemoteMirrorMessage({
+        taskId,
+        serverUrl,
+        model: effectiveModelPath,
+        message: `System: Remote server version v${serverVersion}`,
+      });
+    }
+    event.reply("log-update", "System: Uploading source file to remote server...\n");
+    appendRemoteMirrorMessage({
+      taskId,
+      serverUrl,
+      model: effectiveModelPath,
+      message: "System: Uploading source file to remote server...",
+    });
+    const uploaded = await client.uploadFile(inputFile);
+    event.reply("log-update", `System: Upload completed (${uploaded.fileId})\n`);
+    appendRemoteMirrorMessage({
+      taskId,
+      serverUrl,
+      model: effectiveModelPath,
+      message: `System: Upload completed (${uploaded.fileId})`,
+    });
+
+    const options = buildRemoteTranslateOptionsFromConfig(
+      config,
+      effectiveModelPath,
+      uploaded.serverPath,
+    );
+    const created = await client.createTranslation(options);
+    taskId = created.taskId;
+    remoteActiveTaskId = taskId;
+    remoteTranslationBridge = {
+      client,
+      taskId,
+      cancelRequested: false,
+    };
+    event.reply("log-update", `System: Remote task created (${taskId})\n`);
+    appendRemoteMirrorMessage({
+      taskId,
+      serverUrl,
+      model: effectiveModelPath,
+      message: `System: Remote task created (${taskId})`,
+    });
+    event.reply(
+      "log-update",
+      `JSON_REMOTE_INFO:${JSON.stringify({
+        ...remoteInfoPayload,
+        taskId,
+      })}\n`,
+    );
+
+    while (true) {
+      if (!remoteTranslationBridge || remoteTranslationBridge.taskId !== taskId) return;
+      const status = await client.getTaskStatus(taskId, {
+        logFrom: nextLogIndex,
+        logLimit: 200,
+      });
+      if (!remoteTranslationBridge || remoteTranslationBridge.taskId !== taskId) return;
+
+      const taskLogs = Array.isArray(status.logs) ? status.logs : [];
+      // 检查日志中是否已含 main.py 输出的 JSON_PROGRESS（含真实速度/token 数据）
+      const logsContainProgress = taskLogs.some((log) => typeof log === "string" && log.includes("JSON_PROGRESS:"));
+      if (taskLogs.length > 0) {
+        event.reply("log-update", `${taskLogs.join("\n")}\n`);
+        taskLogs.forEach((logLine) => {
+          if (!logLine) return;
+          appendRemoteMirrorMessage({
+            taskId,
+            serverUrl,
+            model: effectiveModelPath,
+            message: logLine,
+          });
+        });
+      }
+      if (typeof status.nextLogIndex === "number" && Number.isFinite(status.nextLogIndex)) {
+        nextLogIndex = status.nextLogIndex;
+      } else {
+        nextLogIndex += taskLogs.length;
+      }
+
+      // 仅当日志中无 JSON_PROGRESS 时才发送补充性 block 进度
+      // 避免用硬编码零值覆盖 main.py 的真实速度/token 数据
+      if (!logsContainProgress) {
+        const percentRaw =
+          typeof status.progress === "number" && Number.isFinite(status.progress)
+            ? status.progress <= 1
+              ? status.progress * 100
+              : status.progress
+            : status.totalBlocks > 0
+              ? (status.currentBlock / status.totalBlocks) * 100
+              : 0;
+        const progressPayload = {
+          current: status.currentBlock || 0,
+          total: status.totalBlocks || 0,
+          percent: Math.max(0, Math.min(100, Number(percentRaw.toFixed(2)))),
+        };
+        const progressSig = `${progressPayload.current}/${progressPayload.total}/${progressPayload.percent}`;
+        if (progressSig !== lastProgressSig) {
+          event.reply("log-update", `JSON_PROGRESS:${JSON.stringify(progressPayload)}\n`);
+          lastProgressSig = progressSig;
+        }
+      }
+
+      if (status.status === "completed") {
+        // [Fix Bug 6/7] 追加获取所有剩余日志，确保 JSON_FINAL/PREVIEW_BLOCK 不被 200 行分页截断
+        if (typeof status.logTotal === "number" && nextLogIndex < status.logTotal) {
+          const finalStatus = await client.getTaskStatus(taskId, {
+            logFrom: nextLogIndex,
+            logLimit: 1000,
+          });
+          const finalLogs = Array.isArray(finalStatus.logs) ? finalStatus.logs : [];
+          if (finalLogs.length > 0) {
+            event.reply("log-update", `${finalLogs.join("\n")}\n`);
+            finalLogs.forEach((logLine) => {
+              if (!logLine) return;
+              appendRemoteMirrorMessage({
+                taskId,
+                serverUrl,
+                model: effectiveModelPath,
+                message: logLine,
+              });
+            });
+          }
+        }
+        await client.downloadResult(taskId, outputPath);
+        // [Fix Bug 8] 尝试下载缓存文件（用于校对）
+        try {
+          const cachePath = outputPath + ".cache.json";
+          await client.downloadCache(taskId, cachePath);
+        } catch (e) {
+          // 缓存下载失败不影响主流程
+        }
+        appendRemoteMirrorMessage({
+          taskId,
+          serverUrl,
+          model: effectiveModelPath,
+          message: `System: Remote task completed (${taskId})`,
+        });
+        event.reply("log-update", `JSON_OUTPUT_PATH:${JSON.stringify({ path: outputPath })}\n`);
+        event.reply("process-exit", { code: 0, signal: null, stopRequested: false });
+        return;
+      }
+
+      if (status.status === "failed") {
+        event.reply("log-update", `ERR: ${status.error || "Remote translation failed"}\n`);
+        appendRemoteMirrorMessage({
+          taskId,
+          serverUrl,
+          model: effectiveModelPath,
+          level: "error",
+          message: status.error || "Remote translation failed",
+        });
+        event.reply("process-exit", { code: 1, signal: null, stopRequested: false });
+        return;
+      }
+
+      if (status.status === "cancelled") {
+        event.reply("log-update", "[WARN] Remote translation cancelled by user\n");
+        appendRemoteMirrorMessage({
+          taskId,
+          serverUrl,
+          model: effectiveModelPath,
+          level: "warn",
+          message: "Remote translation cancelled by user",
+        });
+        event.reply("process-exit", { code: 1, signal: null, stopRequested: true });
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stopRequested =
+      translationStopRequested || remoteTranslationBridge?.cancelRequested === true;
+    if (taskId && !remoteTranslationBridge && stopRequested) {
+      return;
+    }
+    event.reply("log-update", `ERR: Remote translation failed. ${message}\n`);
+    appendRemoteMirrorMessage({
+      taskId,
+      serverUrl,
+      model: effectiveModelPath,
+      level: "error",
+      message: `Remote translation failed. ${message}`,
+    });
+    event.reply("process-exit", {
+      code: 1,
+      signal: null,
+      stopRequested,
+    });
+  } finally {
+    translationStopRequested = false;
+    if (taskId && remoteActiveTaskId === taskId) {
+      remoteActiveTaskId = null;
+    }
+    if (taskId && remoteTranslationBridge?.taskId === taskId) {
+      remoteTranslationBridge = null;
+    }
+  }
+};
+
+ipcMain.on("start-translation", async (event, { inputFile, modelPath, config }) => {
+  if (pythonProcess || remoteTranslationBridge) return; // Already running
+  translationStopRequested = false;
 
   const middlewareDir = getMiddlewarePath();
   const tempRuleFiles: string[] = [];
@@ -2508,6 +3793,68 @@ ipcMain.on("start-translation", (event, { inputFile, modelPath, config }) => {
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     event.reply("log-update", `ERR: ${errorMsg}`);
+    return;
+  }
+
+  const configuredRemoteUrl = resolveConfiguredRemoteUrl(config);
+  const configuredRemoteApiKey = resolveConfiguredRemoteApiKey(config);
+  const serverManager = ServerManager.getInstance();
+  const daemonStatus = config?.daemonMode ? serverManager.getStatus() : null;
+  const daemonConnection =
+    daemonStatus?.running && daemonStatus.mode === "api_v1"
+      ? serverManager.getConnectionInfo()
+      : null;
+
+  let remoteExecutionClient: RemoteClient | null = null;
+  let remoteExecutionSource = "";
+
+  if (remoteClient && remoteSession) {
+    remoteExecutionClient = remoteClient;
+    remoteExecutionSource =
+      remoteSession.source === "local-daemon"
+        ? "connected-local-daemon"
+        : "connected-remote-session";
+  } else if (daemonConnection?.url && config?.executionMode === "remote") {
+    // 仅当用户明确选择远程模式时才为本地 daemon 创建 RemoteClient。
+    // 本地翻译不走 HTTP API 桥接，避免轮询延迟导致的性能回退。
+    remoteExecutionClient = new RemoteClient(
+      {
+        url: daemonConnection.url,
+        apiKey: daemonConnection.apiKey,
+      },
+      remoteObserver,
+    );
+    remoteExecutionSource = "local-daemon-api_v1";
+  } else if (configuredRemoteUrl && config?.executionMode === "remote") {
+    remoteExecutionClient = new RemoteClient(
+      {
+        url: configuredRemoteUrl,
+        apiKey: configuredRemoteApiKey,
+      },
+      remoteObserver,
+    );
+    remoteExecutionSource = "configured-remote-url";
+  }
+
+  const effectiveRemoteModelPath = (
+    (typeof config?.remoteModel === "string" && config.remoteModel.trim()
+      ? config.remoteModel.trim()
+      : null) ||
+    (typeof config?.modelPath === "string" && config.modelPath.trim()
+      ? config.modelPath.trim()
+      : null) ||
+    modelPath ||
+    ""
+  ).trim();
+
+  if (remoteExecutionClient) {
+    await runTranslationViaRemoteApi(event, {
+      client: remoteExecutionClient,
+      sourceLabel: remoteExecutionSource,
+      inputFile,
+      effectiveModelPath: effectiveRemoteModelPath,
+      config,
+    });
     return;
   }
 
@@ -2579,8 +3926,7 @@ ipcMain.on("start-translation", (event, { inputFile, modelPath, config }) => {
     effectiveModelPath,
   ];
 
-  const configuredServerUrl =
-    typeof config?.serverUrl === "string" ? config.serverUrl.trim() : "";
+  const configuredServerUrl = config?.executionMode === "remote" ? configuredRemoteUrl : "";
   const useRemoteServerUrl = (() => {
     if (!configuredServerUrl) return false;
     try {
@@ -2599,23 +3945,20 @@ ipcMain.on("start-translation", (event, { inputFile, modelPath, config }) => {
     const sm = ServerManager.getInstance();
     const status = sm.getStatus();
 
-    // Auto-start logic handled by frontend?
-    // Here we assume if daemonMode is checked, server should be ready.
-    // Or we can try to start it here if not running?
-    // For now, simpler: assume frontend started it via 'server-start'.
-
-    // However, if we support auto-spawn in backend:
-    if (!status.running) {
-      console.log("[Daemon] Auto-starting server...");
-      // Blocking start? Might delay UI.
-      // Ideally frontend handles this.
-    }
-
-    if (status.running) {
+    if (status.running && status.mode !== "api_v1") {
+      // 非 api_v1 daemon：直接连接其 llama-server 端口
       args.push("--server", `http://127.0.0.1:${status.port}`);
       args.push("--no-server-spawn");
+      console.log("[start-translation] Using local daemon server on port", status.port);
+      event.reply("log-update", `System: Connected to local daemon on port ${status.port}`);
+    } else if (status.running && status.mode === "api_v1") {
+      // api_v1 daemon：API server 端口与 llama-server 协议不兼容，
+      // 回退到标准 spawn（main.py 自行启动 llama-server）
+      console.log("[start-translation] api_v1 daemon detected, using direct spawn for performance.");
+      event.reply("log-update", "System: Local daemon(api_v1) detected, using direct spawn mode for best performance.");
+      args.push("--server", serverExePath);
     } else {
-      // Fallback
+      // Daemon 未运行，回退到标准 spawn
       args.push("--server", serverExePath);
     }
   } else {
@@ -2637,8 +3980,6 @@ ipcMain.on("start-translation", (event, { inputFile, modelPath, config }) => {
 
     if (config.ctxSize) args.push("--ctx", config.ctxSize);
     if (config.chunkSize) args.push("--chunk-size", config.chunkSize);
-
-    // Concurrency
     if (config.concurrency) {
       args.push("--concurrency", config.concurrency.toString());
     }
@@ -2829,6 +4170,7 @@ ipcMain.on("start-translation", (event, { inputFile, modelPath, config }) => {
         "log-update",
         `CRITICAL ERROR: Failed to spawn python. ${err.message}`,
       );
+      translationStopRequested = false;
       pythonProcess = null;
     });
 
@@ -2867,15 +4209,23 @@ ipcMain.on("start-translation", (event, { inputFile, modelPath, config }) => {
       });
     }
 
-    pythonProcess.on("close", (code) => {
-      console.log("Process exited with code", code);
-      event.reply("process-exit", code);
+    pythonProcess.on("close", (code, signal) => {
+      const stopRequested = translationStopRequested;
+      translationStopRequested = false;
+      console.log(
+        `[Translation] Process exited (code=${String(code)}, signal=${String(signal)}, stopRequested=${stopRequested})`,
+      );
+      event.reply("process-exit", {
+        code,
+        signal,
+        stopRequested,
+      });
       pythonProcess = null;
       // 清理临时规则文件
       for (const tmpFile of tempRuleFiles) {
         try {
           fs.unlinkSync(tmpFile);
-        } catch (_) {}
+        } catch (_) { }
       }
     });
   } catch (e: unknown) {
@@ -2886,7 +4236,42 @@ ipcMain.on("start-translation", (event, { inputFile, modelPath, config }) => {
 });
 
 ipcMain.on("stop-translation", () => {
+  if (remoteTranslationBridge) {
+    translationStopRequested = true;
+    const bridge = remoteTranslationBridge;
+    bridge.cancelRequested = true;
+    console.log(`[Stop] Cancelling remote task: ${bridge.taskId}`);
+    mainWindow?.webContents.send("log-update", "System: Cancelling remote task...\n");
+    const cancellingTaskId = bridge.taskId;
+    setTimeout(() => {
+      if (
+        remoteTranslationBridge &&
+        remoteTranslationBridge.taskId === cancellingTaskId &&
+        remoteTranslationBridge.cancelRequested
+      ) {
+        remoteTranslationBridge = null;
+        if (remoteActiveTaskId === cancellingTaskId) {
+          remoteActiveTaskId = null;
+        }
+        mainWindow?.webContents.send("process-exit", {
+          code: 1,
+          signal: null,
+          stopRequested: true,
+        });
+      }
+    }, 8000);
+    void bridge.client.cancelTask(bridge.taskId).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      mainWindow?.webContents.send(
+        "log-update",
+        `ERR: Failed to cancel remote task immediately: ${message}\n`,
+      );
+    });
+    return;
+  }
+
   if (pythonProcess) {
+    translationStopRequested = true;
     const pid = pythonProcess.pid;
     console.log(`[Stop] Stopping translation process with PID: ${pid}`);
 
@@ -2904,13 +4289,13 @@ ipcMain.on("stop-translation", () => {
         // Fallback
         try {
           pythonProcess?.kill();
-        } catch (_) {}
+        } catch (_) { }
       });
       // 超时兜底：3s 后若进程仍然存活
       setTimeout(() => {
         try {
           pythonProcess?.kill("SIGKILL");
-        } catch (_) {}
+        } catch (_) { }
       }, 3000);
     } else {
       pythonProcess.kill();
@@ -3001,7 +4386,7 @@ ipcMain.handle(
           if (tempFile && fs.existsSync(tempFile)) {
             try {
               fs.unlinkSync(tempFile);
-            } catch (_) {}
+            } catch (_) { }
           }
 
           if (code === 0) {
@@ -3309,7 +4694,7 @@ ipcMain.handle("hf-download-cancel", async () => {
       } catch {
         try {
           hfDownloadProcess.kill();
-        } catch {}
+        } catch { }
       }
     } else {
       hfDownloadProcess.kill("SIGTERM");

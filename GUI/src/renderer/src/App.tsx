@@ -3,6 +3,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Dashboard } from "./components/Dashboard";
 import { SettingsView } from "./components/SettingsView";
 import { AdvancedView } from "./components/AdvancedView";
+import { ServiceView } from "./components/ServiceView";
 import { ModelView } from "./components/ModelView";
 import { GlossaryView } from "./components/GlossaryView";
 import { HistoryView } from "./components/HistoryView";
@@ -16,6 +17,8 @@ import { useAppHotkeys } from "./lib/useHotkeys";
 import { RuleEditor } from "./components/RuleEditor";
 import { AlertModal } from "./components/ui/AlertModal";
 import { useAlertModal } from "./hooks/useAlertModal";
+import { useRemoteRuntime } from "./hooks/useRemoteRuntime";
+import { RemoteStatusBar } from "./components/RemoteStatusBar";
 
 export type View =
   | "dashboard"
@@ -25,6 +28,7 @@ export type View =
   | "glossary"
   | "pre"
   | "post"
+  | "service"
   | "advanced"
   | "history"
   | "proofread";
@@ -35,6 +39,7 @@ function AppContent() {
   const [proofreadHasChanges, setProofreadHasChanges] = useState(false);
   const { alertProps, showConfirm } = useAlertModal();
   const [isRunning, setIsRunning] = useState(false);
+  const remoteRuntime = useRemoteRuntime();
 
   // Dashboard ref for triggering translation
   const dashboardRef = useRef<{
@@ -50,6 +55,7 @@ function AppContent() {
         "library",
         "settings",
         "model",
+        "service",
         "advanced",
         "glossary",
         "proofread",
@@ -106,6 +112,7 @@ function AppContent() {
           lang={lang}
           active={view === "dashboard"}
           onRunningChange={setIsRunning}
+          remoteRuntime={remoteRuntime}
         />
       </div>
       {view === "settings" && <SettingsView lang={lang} />}
@@ -113,6 +120,7 @@ function AppContent() {
         <LibraryView
           lang={lang}
           isRunning={isRunning}
+          remoteRuntime={remoteRuntime}
           onNavigate={(v) => handleSwitchView(v)}
           onProofreadFile={(cachePath) => {
             localStorage.setItem("proofread_target_file", cachePath);
@@ -120,8 +128,11 @@ function AppContent() {
           }}
         />
       )}
-      {view === "model" && <ModelView lang={lang} />}
+      {view === "model" && <ModelView lang={lang} remoteRuntime={remoteRuntime} />}
       {view === "glossary" && <GlossaryView lang={lang} />}
+      {view === "service" && (
+        <ServiceView lang={lang} remoteRuntime={remoteRuntime} />
+      )}
       {view === "pre" && <RuleEditor lang={lang} mode="pre" />}
       {view === "post" && <RuleEditor lang={lang} mode="post" />}
       {view === "advanced" && <AdvancedView lang={lang} />}
@@ -136,6 +147,7 @@ function AppContent() {
         </div>
       )}
 
+      <RemoteStatusBar remote={remoteRuntime} />
       <AlertModal {...alertProps} />
     </div>
   );

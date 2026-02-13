@@ -12,7 +12,7 @@ export const CONFIG_KEYS = {
   glossaryPath: "config_glossary_path",
   gpu: "config_gpu",
   ctx: "config_ctx",
-  server: "config_server",
+  remoteUrl: "config_remote_url",
   preset: "config_preset",
   deviceMode: "config_device_mode",
   gpuDeviceId: "config_gpu_device_id",
@@ -54,7 +54,6 @@ export type ConfigKey = keyof typeof CONFIG_KEYS;
 const DEFAULTS: Partial<Record<ConfigKey, string>> = {
   gpu: "true",
   ctx: "8192",
-  server: "embedded",
   preset: "novel",
   deviceMode: "auto",
   gpuDeviceId: "0",

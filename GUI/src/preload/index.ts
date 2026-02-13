@@ -2,6 +2,11 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 import { electronAPI } from "@electron-toolkit/preload";
 
 type Unsubscribe = () => void;
+type ProcessExitPayload = {
+  code: number | null;
+  signal: string | null;
+  stopRequested: boolean;
+};
 
 const listenerRegistry = new Map<string, Set<(...args: any[]) => void>>();
 
@@ -71,8 +76,18 @@ const api = {
     ipcRenderer.send("show-notification", { title, body }),
   onLogUpdate: (callback: (log: string) => void) =>
     addIpcListener("log-update", callback),
-  onProcessExit: (callback: (code: number) => void) =>
-    addIpcListener("process-exit", callback),
+  onProcessExit: (callback: (payload: ProcessExitPayload) => void) =>
+    addIpcListener("process-exit", (payload: any) => {
+      if (typeof payload === "number" || payload === null) {
+        callback({ code: payload, signal: null, stopRequested: false });
+        return;
+      }
+      callback({
+        code: typeof payload?.code === "number" || payload?.code === null ? payload.code : null,
+        signal: typeof payload?.signal === "string" || payload?.signal === null ? payload.signal : null,
+        stopRequested: Boolean(payload?.stopRequested),
+      });
+    }),
   removeLogListener: () => removeRegisteredListeners("log-update"),
   removeProcessExitListener: () => removeRegisteredListeners("process-exit"),
 
@@ -149,6 +164,8 @@ const api = {
   // Debug Export
   readServerLog: () => ipcRenderer.invoke("read-server-log"),
   getMainProcessLogs: () => ipcRenderer.invoke("get-main-process-logs"),
+  readTextTail: (path: string, options?: { maxBytes?: number; lineCount?: number }) =>
+    ipcRenderer.invoke("read-text-tail", path, options),
 
   // Theme Sync (for Windows title bar)
   setTheme: (theme: "dark" | "light") => ipcRenderer.send("set-theme", theme),
@@ -191,13 +208,33 @@ const api = {
   remoteGlossaries: () => ipcRenderer.invoke("remote-glossaries"),
   remoteTranslate: (options: any) =>
     ipcRenderer.invoke("remote-translate", options),
-  remoteTaskStatus: (taskId: string) =>
-    ipcRenderer.invoke("remote-task-status", taskId),
+  remoteTaskStatus: (
+    taskId: string,
+    query?: { logFrom?: number; logLimit?: number },
+  ) => ipcRenderer.invoke("remote-task-status", taskId, query),
   remoteCancel: (taskId: string) => ipcRenderer.invoke("remote-cancel", taskId),
   remoteUpload: (filePath: string) =>
     ipcRenderer.invoke("remote-upload", filePath),
   remoteDownload: (taskId: string, savePath: string) =>
     ipcRenderer.invoke("remote-download", taskId, savePath),
+  remoteNetworkStatus: () => ipcRenderer.invoke("remote-network-status"),
+  remoteNetworkEvents: (limit?: number) =>
+    ipcRenderer.invoke("remote-network-events", limit),
+  remoteDiagnostics: () => ipcRenderer.invoke("remote-diagnostics"),
+  remoteHfCheckNetwork: () => ipcRenderer.invoke("remote-hf-check-network"),
+  remoteHfListRepos: (orgName: string) =>
+    ipcRenderer.invoke("remote-hf-list-repos", orgName),
+  remoteHfListFiles: (repoId: string) =>
+    ipcRenderer.invoke("remote-hf-list-files", repoId),
+  remoteHfDownloadStart: (
+    repoId: string,
+    fileName: string,
+    mirror: string = "direct",
+  ) => ipcRenderer.invoke("remote-hf-download-start", repoId, fileName, mirror),
+  remoteHfDownloadStatus: (downloadId: string) =>
+    ipcRenderer.invoke("remote-hf-download-status", downloadId),
+  remoteHfDownloadCancel: (downloadId: string) =>
+    ipcRenderer.invoke("remote-hf-download-cancel", downloadId),
 
   // HuggingFace Download
   hfListRepos: (orgName: string) =>
