@@ -102,6 +102,7 @@ export interface ProcessExitPayload {
   code: number | null;
   signal: string | null;
   stopRequested: boolean;
+  runId?: string;
 }
 
 export type RemoteErrorCode =
@@ -265,7 +266,12 @@ export interface ElectronAPI {
   }) => Promise<{ success: boolean; error?: string }>;
 
   // Translation Process
-  startTranslation: (inputPath: string, modelPath: string, config: any) => void;
+  startTranslation: (
+    inputPath: string,
+    modelPath: string,
+    config: any,
+    runId?: string,
+  ) => void;
   stopTranslation: () => void;
   retranslateBlock: (options: {
     src: string;

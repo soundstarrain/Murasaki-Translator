@@ -503,6 +503,7 @@ export const translations = {
       exportLog: "导出详细日志",
       deleteRecord: "删除记录",
       triggerCount: "{count} 触发",
+      engineLogs: "Llama 日志",
       stats: {
         blocks: "区块",
         lines: "有效行数 (源/译)",
@@ -542,6 +543,7 @@ export const translations = {
         maxRetries: "- 全局重试上限:",
         triggersTitle: "## 触发事件 ({count})",
         logsTitle: "## 详细日志 (最近 {count} 条)",
+        llamaLogsTitle: "## Llama 日志 (最近 {count} 条)",
       },
       triggerLabels: {
         empty_retry: "空输出重试",
@@ -1106,6 +1108,7 @@ export const translations = {
       exportLog: "Export Detailed Log",
       deleteRecord: "Delete Record",
       triggerCount: "{count} Triggers",
+      engineLogs: "Llama Logs",
       stats: {
         blocks: "Blocks",
         lines: "Lines (Src/Dst)",
@@ -1145,6 +1148,7 @@ export const translations = {
         maxRetries: "- Max Retries:",
         triggersTitle: "## Triggers ({count})",
         logsTitle: "## Detailed Logs (Last {count})",
+        llamaLogsTitle: "## Llama Logs (Last {count})",
       },
       triggerLabels: {
         empty_retry: "Empty Retry",
@@ -1706,6 +1710,7 @@ export const translations = {
       exportLog: "詳細ログを出力",
       deleteRecord: "記録を削除",
       triggerCount: "{count} 回のトリガー",
+      engineLogs: "Llama ログ",
       stats: {
         blocks: "ブロック",
         lines: "有効行数 (源/訳)",
@@ -1745,6 +1750,7 @@ export const translations = {
         maxRetries: "- 最大再試行:",
         triggersTitle: "## トリガーイベント ({count})",
         logsTitle: "## 詳細ログ (最近 {count} 件)",
+        llamaLogsTitle: "## Llama ログ (最近 {count} 件)",
       },
       triggerLabels: {
         empty_retry: "空出力による再試行",

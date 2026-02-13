@@ -19,6 +19,7 @@ import { TranslateOptions } from "./remoteClient";
 
 let pythonProcess: ChildProcess | null = null;
 let translationStopRequested = false;
+let activeRunId: string | null = null;
 let remoteTranslationBridge: {
   client: any;
   taskId: string;
@@ -964,27 +965,114 @@ const remoteObserver: RemoteClientObserver = {
   onNetworkEvent: (event) => appendRemoteEvent(event),
 };
 
+const extractRemoteHttpError = (message: string) => {
+  const match = message.match(/HTTP\s+(\d{3})\s*:\s*(.*)$/i);
+  if (!match) return null;
+  const statusCode = Number.parseInt(match[1], 10);
+  const rawDetail = String(match[2] || "").trim();
+  let detail = rawDetail;
+
+  if (rawDetail) {
+    const parsed = tryParseJson<any>(rawDetail);
+    if (parsed !== null) {
+      if (typeof parsed === "string") {
+        detail = parsed;
+      } else if (typeof parsed.detail === "string") {
+        detail = parsed.detail;
+      } else if (Array.isArray(parsed.detail)) {
+        detail = parsed.detail
+          .map((item: any) => item?.msg || item?.message || JSON.stringify(item))
+          .join("; ");
+      } else if (typeof parsed.message === "string") {
+        detail = parsed.message;
+      }
+    }
+  }
+
+  return {
+    statusCode: Number.isFinite(statusCode) ? statusCode : undefined,
+    detail,
+    rawDetail,
+  };
+};
+
+const buildRemoteActionHint = (params: {
+  code: string;
+  statusCode?: number;
+  retryable: boolean;
+}) => {
+  const hints: string[] = [];
+  switch (params.code) {
+    case "REMOTE_UNAUTHORIZED":
+      hints.push("请确认 API Key 是否正确，且服务端已启用鉴权。");
+      break;
+    case "REMOTE_NOT_FOUND":
+      hints.push("请确认远程地址是否正确（通常为 http(s)://host:port）。");
+      break;
+    case "REMOTE_TIMEOUT":
+      hints.push("请求超时，建议检查服务器负载或稍后重试。");
+      break;
+    case "REMOTE_NETWORK":
+      hints.push("网络不可达，请检查网络/防火墙/代理与服务端在线状态。");
+      break;
+    case "REMOTE_PROTOCOL":
+      hints.push("连接未就绪，请先在服务页测试远程连接。");
+      break;
+    default:
+      break;
+  }
+
+  if (remoteNetworkStats.lastError?.message) {
+    hints.push(`最近网络错误：${remoteNetworkStats.lastError.message}`);
+  }
+
+  hints.push("可在服务管理 → 远程运行详情 打开网络日志/任务镜像日志排查。");
+  return hints.join(" ");
+};
+
 const formatRemoteError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   const lower = message.toLowerCase();
-  const retryable =
+  const httpInfo = extractRemoteHttpError(message);
+  const statusCode = httpInfo?.statusCode;
+  const hasAuthHint =
+    lower.includes("authentication") ||
+    lower.includes("unauthorized") ||
+    lower.includes("forbidden") ||
+    lower.includes("api key");
+  const retryableByStatus =
+    typeof statusCode === "number" &&
+    (statusCode === 408 || statusCode === 429 || (statusCode >= 500 && statusCode <= 504));
+  const retryableByMessage =
     lower.includes("timeout") ||
     lower.includes("network") ||
     lower.includes("fetch failed") ||
-    lower.includes("temporarily unavailable");
-  const errorCode = lower.includes("timeout")
-    ? "REMOTE_TIMEOUT"
-    : lower.includes("http 403")
+    lower.includes("temporarily unavailable") ||
+    lower.includes("econnreset") ||
+    lower.includes("etimedout");
+
+  const errorCode =
+    statusCode === 401 || statusCode === 403 || hasAuthHint
       ? "REMOTE_UNAUTHORIZED"
-      : lower.includes("http 404")
+      : statusCode === 404
         ? "REMOTE_NOT_FOUND"
-        : lower.includes("network") || lower.includes("fetch failed")
-          ? "REMOTE_NETWORK"
-          : "REMOTE_UNKNOWN";
+        : lower.includes("timeout")
+          ? "REMOTE_TIMEOUT"
+          : lower.includes("invalid response")
+            ? "REMOTE_PROTOCOL"
+            : lower.includes("network") ||
+                lower.includes("fetch failed") ||
+                lower.includes("econnreset") ||
+                lower.includes("etimedout")
+              ? "REMOTE_NETWORK"
+              : "REMOTE_UNKNOWN";
+
   return {
     error: message,
+    detail: httpInfo?.detail,
     errorCode,
-    retryable,
+    retryable: retryableByStatus || retryableByMessage,
+    statusCode,
   };
 };
 
@@ -993,12 +1081,24 @@ const buildRemoteErrorResponse = (
   fallbackMessage?: string,
 ) => {
   const formatted = formatRemoteError(error);
+  const actionHint = buildRemoteActionHint({
+    code: formatted.errorCode,
+    statusCode: formatted.statusCode,
+    retryable: formatted.retryable,
+  });
+  const message = fallbackMessage
+    ? formatted.detail
+      ? `${fallbackMessage}: ${formatted.detail}`
+      : fallbackMessage
+    : formatted.detail || formatted.error;
   return {
     ok: false,
     code: formatted.errorCode,
-    message: fallbackMessage || formatted.error,
+    message,
     technicalMessage: formatted.error,
+    actionHint,
     retryable: formatted.retryable,
+    statusCode: formatted.statusCode,
   };
 };
 
@@ -1078,11 +1178,9 @@ ipcMain.handle(
       if (!result.ok) {
         remoteClient = null;
         remoteSession = null;
-        return {
-          ok: false,
-          code: "REMOTE_PROTOCOL",
-          message: result.message || "Remote connection failed",
-        };
+        return buildRemoteErrorResponse(
+          new Error(result.message || "Remote connection failed"),
+        );
       }
 
       remoteSession = {
@@ -3436,6 +3534,20 @@ const normalizeLineTolerancePct = (value: unknown, fallback: number = 0.2): numb
   return numeric;
 };
 
+const resolveLocalGlossaryPath = (value: unknown): string => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (fs.existsSync(raw)) return raw;
+  try {
+    const userDataPath = getUserDataPath();
+    const candidate = join(userDataPath, "glossaries", basename(raw));
+    if (fs.existsSync(candidate)) return candidate;
+  } catch {
+    // ignore
+  }
+  return "";
+};
+
 const sanitizeRemoteConfig = (config: any, externalRemote: boolean) => {
   if (!externalRemote) return config;
   const next = { ...config };
@@ -3618,6 +3730,7 @@ const runTranslationViaRemoteApi = async (
     effectiveModelPath: string;
     config: any;
     isExternalRemote: boolean;
+    runId?: string;
   },
 ) => {
   const {
@@ -3627,6 +3740,7 @@ const runTranslationViaRemoteApi = async (
     effectiveModelPath,
     config,
     isExternalRemote,
+    runId,
   } = params;
   const serverUrl = client.getBaseUrl?.() || "";
   const sanitizedConfig = sanitizeRemoteConfig(config, isExternalRemote);
@@ -3659,6 +3773,17 @@ const runTranslationViaRemoteApi = async (
       serverUrl,
       model: effectiveModelPath,
       message: logLine,
+    });
+  };
+  const emitRemoteTroubleshootingHint = () => {
+    const hint =
+      "System: 远程排查：服务管理 → 远程运行详情 可打开网络日志/任务镜像日志（可按任务ID过滤）";
+    event.reply("log-update", `${hint}\n`);
+    appendRemoteMirrorMessage({
+      taskId,
+      serverUrl,
+      model: effectiveModelPath,
+      message: hint,
     });
   };
 
@@ -3703,8 +3828,29 @@ const runTranslationViaRemoteApi = async (
       message: `System: Upload completed (${uploaded.fileId})`,
     });
 
+    let glossaryPathToUse = sanitizedConfig?.glossaryPath;
+    const localGlossaryPath = resolveLocalGlossaryPath(glossaryPathToUse);
+    if (localGlossaryPath) {
+      event.reply("log-update", "System: Uploading glossary to remote server...\n");
+      appendRemoteMirrorMessage({
+        taskId,
+        serverUrl,
+        model: effectiveModelPath,
+        message: "System: Uploading glossary to remote server...",
+      });
+      const uploadedGlossary = await client.uploadFile(localGlossaryPath);
+      glossaryPathToUse = uploadedGlossary.serverPath;
+      event.reply("log-update", `System: Glossary upload completed (${uploadedGlossary.fileId})\n`);
+      appendRemoteMirrorMessage({
+        taskId,
+        serverUrl,
+        model: effectiveModelPath,
+        message: `System: Glossary upload completed (${uploadedGlossary.fileId})`,
+      });
+    }
+
     const options = buildRemoteTranslateOptionsFromConfig(
-      sanitizedConfig,
+      { ...sanitizedConfig, glossaryPath: glossaryPathToUse },
       effectiveModelPath,
       uploaded.serverPath,
     );
@@ -3832,7 +3978,7 @@ const runTranslationViaRemoteApi = async (
           message: `System: Remote task completed (${taskId})`,
         });
         event.reply("log-update", `JSON_OUTPUT_PATH:${JSON.stringify({ path: outputPath })}\n`);
-        event.reply("process-exit", { code: 0, signal: null, stopRequested: false });
+        event.reply("process-exit", { code: 0, signal: null, stopRequested: false, runId });
         return;
       }
 
@@ -3845,7 +3991,8 @@ const runTranslationViaRemoteApi = async (
           level: "error",
           message: status.error || "Remote translation failed",
         });
-        event.reply("process-exit", { code: 1, signal: null, stopRequested: false });
+        emitRemoteTroubleshootingHint();
+        event.reply("process-exit", { code: 1, signal: null, stopRequested: false, runId });
         return;
       }
 
@@ -3858,7 +4005,7 @@ const runTranslationViaRemoteApi = async (
           level: "warn",
           message: "Remote translation cancelled by user",
         });
-        event.reply("process-exit", { code: 1, signal: null, stopRequested: true });
+        event.reply("process-exit", { code: 1, signal: null, stopRequested: true, runId });
         return;
       }
 
@@ -3874,6 +4021,7 @@ const runTranslationViaRemoteApi = async (
       return;
     }
     event.reply("log-update", `ERR: Remote translation failed. ${message}\n`);
+    emitRemoteTroubleshootingHint();
     appendRemoteMirrorMessage({
       taskId,
       serverUrl,
@@ -3885,6 +4033,7 @@ const runTranslationViaRemoteApi = async (
       code: 1,
       signal: null,
       stopRequested,
+      runId,
     });
   } finally {
     if (wsClient) {
@@ -3904,9 +4053,13 @@ const runTranslationViaRemoteApi = async (
   }
 };
 
-ipcMain.on("start-translation", async (event, { inputFile, modelPath, config }) => {
-  if (pythonProcess || remoteTranslationBridge) return; // Already running
-  translationStopRequested = false;
+ipcMain.on(
+  "start-translation",
+  async (event, { inputFile, modelPath, config, runId }) => {
+    if (pythonProcess || remoteTranslationBridge) return; // Already running
+    translationStopRequested = false;
+    activeRunId =
+      typeof runId === "string" && runId.trim() ? runId.trim() : randomUUID();
 
   const middlewareDir = getMiddlewarePath();
   const tempRuleFiles: string[] = [];
@@ -3915,6 +4068,7 @@ ipcMain.on("start-translation", async (event, { inputFile, modelPath, config }) 
 
   if (!fs.existsSync(scriptPath)) {
     event.reply("log-update", `ERR: Script not found at ${scriptPath}`);
+    activeRunId = null;
     return;
   }
 
@@ -3933,6 +4087,7 @@ ipcMain.on("start-translation", async (event, { inputFile, modelPath, config }) 
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     event.reply("log-update", `ERR: ${errorMsg}`);
+    activeRunId = null;
     return;
   }
 
@@ -4009,7 +4164,9 @@ ipcMain.on("start-translation", async (event, { inputFile, modelPath, config }) 
       effectiveModelPath: effectiveRemoteModelPath,
       config,
       isExternalRemote,
+      runId: activeRunId,
     });
+    activeRunId = null;
     return;
   }
 
@@ -4338,6 +4495,15 @@ ipcMain.on("start-translation", async (event, { inputFile, modelPath, config }) 
     }
 
     if (pythonProcess.stderr) {
+      const emitLlamaLog = (raw: string) => {
+        const lines = raw
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        for (const line of lines) {
+          event.reply("log-update", `JSON_LLAMA_LOG:${JSON.stringify({ line })}\n`);
+        }
+      };
       pythonProcess.stderr.on("data", (data) => {
         const str = data.toString();
 
@@ -4350,7 +4516,7 @@ ipcMain.on("start-translation", async (event, { inputFile, modelPath, config }) 
           str.startsWith("slot ") ||
           str.includes("sched_reserve")
         ) {
-          // console.log('Suppressed log:', str) // Optional debug
+          emitLlamaLog(str);
           return;
         }
 
@@ -4367,6 +4533,7 @@ ipcMain.on("start-translation", async (event, { inputFile, modelPath, config }) 
     pythonProcess.on("close", (code, signal) => {
       const stopRequested = translationStopRequested;
       translationStopRequested = false;
+      const exitRunId = activeRunId;
       console.log(
         `[Translation] Process exited (code=${String(code)}, signal=${String(signal)}, stopRequested=${stopRequested})`,
       );
@@ -4374,8 +4541,10 @@ ipcMain.on("start-translation", async (event, { inputFile, modelPath, config }) 
         code,
         signal,
         stopRequested,
+        runId: exitRunId || undefined,
       });
       pythonProcess = null;
+      activeRunId = null;
       // 清理临时规则文件
       for (const tmpFile of tempRuleFiles) {
         try {
@@ -4412,6 +4581,7 @@ ipcMain.on("stop-translation", () => {
           code: 1,
           signal: null,
           stopRequested: true,
+          runId: activeRunId || undefined,
         });
       }
     }, 8000);

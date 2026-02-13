@@ -109,6 +109,8 @@ export interface TranslationRecord {
   triggers: TriggerEvent[];
   /** Log lines (last 100 kept) */
   logs: string[];
+  /** llama 引擎日志（可选） */
+  llamaLogs?: string[];
 }
 
 // ============================================================================
@@ -125,6 +127,7 @@ const DETAIL_KEY_PREFIX = "history_detail_";
 export interface RecordDetail {
   logs: string[];
   triggers: TriggerEvent[];
+  llamaLogs: string[];
 }
 
 /**
@@ -140,9 +143,10 @@ export const getHistory = (): TranslationRecord[] => {
     // Migration: if old format contains logs/triggers in main array, strip them
     return records.map((r) => {
       // Keep basic fields only, remove heavy data if present
-      const { logs, triggers, ...basic } = r as TranslationRecord & {
+      const { logs, triggers, llamaLogs, ...basic } = r as TranslationRecord & {
         logs?: string[];
         triggers?: TriggerEvent[];
+        llamaLogs?: string[];
       };
       return { ...basic, logs: [], triggers: [] } as TranslationRecord;
     });
@@ -167,19 +171,24 @@ export const getRecordDetail = (id: string): RecordDetail | null => {
       const records = JSON.parse(historyRaw) as (TranslationRecord & {
         logs?: string[];
         triggers?: TriggerEvent[];
+        llamaLogs?: string[];
       })[];
       const record = records.find((r) => r.id === id);
-      if (record && (record.logs?.length || record.triggers?.length)) {
+      if (
+        record &&
+        (record.logs?.length || record.triggers?.length || record.llamaLogs?.length)
+      ) {
         const detail = {
           logs: record.logs || [],
           triggers: record.triggers || [],
+          llamaLogs: record.llamaLogs || [],
         };
         // Migrate to new format
         saveRecordDetail(id, detail);
         return detail;
       }
     }
-    return { logs: [], triggers: [] };
+    return { logs: [], triggers: [], llamaLogs: [] };
   } catch {
     return null;
   }
@@ -204,9 +213,10 @@ export const saveHistory = (records: TranslationRecord[]) => {
   const trimmed = records.slice(-MAX_HISTORY_RECORDS);
   // Strip heavy data from main history storage
   const lightweight = trimmed.map((r) => {
-    const { logs, triggers, ...basic } = r as TranslationRecord & {
+    const { logs, triggers, llamaLogs, ...basic } = r as TranslationRecord & {
       logs?: string[];
       triggers?: TriggerEvent[];
+      llamaLogs?: string[];
     };
     return { ...basic, logs: [], triggers: [] };
   });
@@ -220,14 +230,15 @@ export const saveHistory = (records: TranslationRecord[]) => {
 export const addRecord = (record: TranslationRecord) => {
   const history = getHistory();
   // Save detail separately
-  if (record.logs?.length || record.triggers?.length) {
+  if (record.logs?.length || record.triggers?.length || record.llamaLogs?.length) {
     saveRecordDetail(record.id, {
       logs: record.logs || [],
       triggers: record.triggers || [],
+      llamaLogs: record.llamaLogs || [],
     });
   }
   // Add lightweight record
-  history.push({ ...record, logs: [], triggers: [] });
+  history.push({ ...record, logs: [], triggers: [], llamaLogs: [] });
   saveHistory(history);
 };
 
@@ -244,24 +255,28 @@ export const updateRecord = (
   const index = history.findIndex((r) => r.id === id);
   if (index >= 0) {
     // Handle detail data separately
-    if (updates.logs?.length || updates.triggers?.length) {
-      const existingDetail = getRecordDetail(id) || { logs: [], triggers: [] };
+    if (updates.logs?.length || updates.triggers?.length || updates.llamaLogs?.length) {
+      const existingDetail =
+        getRecordDetail(id) || { logs: [], triggers: [], llamaLogs: [] };
       saveRecordDetail(id, {
         logs: updates.logs || existingDetail.logs,
         triggers: updates.triggers || existingDetail.triggers,
+        llamaLogs: updates.llamaLogs || existingDetail.llamaLogs,
       });
     }
     // Update main record without heavy data
-    const { logs, triggers, ...lightUpdates } =
+    const { logs, triggers, llamaLogs, ...lightUpdates } =
       updates as Partial<TranslationRecord> & {
         logs?: string[];
         triggers?: TriggerEvent[];
+        llamaLogs?: string[];
       };
     history[index] = {
       ...history[index],
       ...lightUpdates,
       logs: [],
       triggers: [],
+      llamaLogs: [],
     };
     saveHistory(history);
   }
@@ -320,11 +335,12 @@ function RecordDetailContent({
   getTriggerTypeLabel,
 }: RecordDetailContentProps) {
   // Get full record with details
-  const detail = getDetail(record.id) || { logs: [], triggers: [] };
+  const detail = getDetail(record.id) || { logs: [], triggers: [], llamaLogs: [] };
   const fullRecord = {
     ...record,
     logs: detail.logs,
     triggers: detail.triggers,
+    llamaLogs: detail.llamaLogs || [],
   };
 
   // Trigger events collapse state
@@ -489,6 +505,22 @@ function RecordDetailContent({
           </div>
         )}
 
+        {/* Llama Logs */}
+        {fullRecord.llamaLogs && fullRecord.llamaLogs.length > 0 && (
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-2">
+              {t.historyView.engineLogs} (共 {fullRecord.llamaLogs.length} 条)
+            </p>
+            <div className="bg-slate-100 dark:bg-slate-900/50 rounded-lg p-3 max-h-80 overflow-y-auto font-mono text-xs text-slate-700 dark:text-slate-300 space-y-0.5 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700 border border-slate-200 dark:border-slate-800">
+              {fullRecord.llamaLogs.map((log, i) => (
+                <div key={i} className="whitespace-pre-wrap">
+                  {log}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* File Paths */}
         <div className="space-y-1.5 text-xs">
           <div className="flex items-center gap-2 text-muted-foreground">
@@ -634,11 +666,16 @@ export function HistoryView({ lang }: { lang: Language }) {
    */
   const handleExportLog = (record: TranslationRecord) => {
     // Lazy load details for export
-    const detail = getRecordDetail(record.id) || { logs: [], triggers: [] };
+    const detail = getRecordDetail(record.id) || {
+      logs: [],
+      triggers: [],
+      llamaLogs: [],
+    };
     const fullRecord = {
       ...record,
       logs: detail.logs,
       triggers: detail.triggers,
+      llamaLogs: detail.llamaLogs || [],
     };
 
     const e = t.historyView.export;
@@ -747,6 +784,18 @@ export function HistoryView({ lang }: { lang: Language }) {
       );
       lines.push("```");
       fullRecord.logs.forEach((log) => lines.push(log));
+      lines.push("```");
+    }
+
+    if (fullRecord.llamaLogs && fullRecord.llamaLogs.length > 0) {
+      lines.push(
+        e.llamaLogsTitle.replace(
+          "{count}",
+          fullRecord.llamaLogs.length.toString(),
+        ),
+      );
+      lines.push("```");
+      fullRecord.llamaLogs.forEach((log) => lines.push(log));
       lines.push("```");
     }
 

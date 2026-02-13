@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect, useMemo } from "react";
+import { flushSync } from "react-dom";
 import { Button, Tooltip } from "./ui/core";
 import {
   FolderOpen,
@@ -123,7 +124,16 @@ export default function ProofreadView({
 
   // Line Mode - strict line-by-line alignment with line numbers
   const [lineMode, setLineMode] = useState(true); // Default to line mode
+  const [selectionLock, setSelectionLock] = useState<
+    "src" | "dst" | null
+  >(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+  useEffect(() => {
+    const clearSelectionLock = () => setSelectionLock(null);
+    window.addEventListener("mouseup", clearSelectionLock);
+    return () => window.removeEventListener("mouseup", clearSelectionLock);
+  }, []);
 
   // Sync with parent for navigation guard
   useEffect(() => {
@@ -415,30 +425,67 @@ export default function ProofreadView({
     if (!cacheData || !cachePath) return;
     try {
       setLoading(true);
+      // Commit in-progress edit before save (avoid stale cacheData)
+      let dataToSave = cacheData;
+      if (editingBlockId !== null) {
+        const newBlocks = cacheData.blocks.map((b) =>
+          b.index === editingBlockId
+            ? { ...b, dst: editingText, status: "edited" }
+            : b,
+        );
+        dataToSave = { ...cacheData, blocks: newBlocks };
+        setCacheData(dataToSave);
+        setEditingBlockId(null);
+      }
       // 1. Save JSON Cache
-      const cacheOk = await window.api?.saveCache(cachePath, cacheData);
+      const cacheOk = await window.api?.saveCache(cachePath, dataToSave);
       if (!cacheOk) throw new Error("Failed to save cache JSON");
 
       // 2. Sync to Translated File (EPUB/TXT/SRT/ASS)
-      if (cacheData.outputPath) {
-        const ext = cacheData.outputPath.split(".").pop()?.toLowerCase();
+      const isWindows =
+        typeof navigator !== "undefined" &&
+        typeof navigator.platform === "string" &&
+        navigator.platform.toLowerCase().includes("win");
+      const looksLikeWindowsPath = (value: string) =>
+        /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+      const derivedOutputPath = cachePath.replace(/\.cache\.json$/i, "");
+      let resolvedOutputPath = derivedOutputPath !== cachePath
+        ? derivedOutputPath
+        : "";
+      if (!resolvedOutputPath) {
+        resolvedOutputPath =
+          cacheData.outputPath && cacheData.outputPath.trim()
+            ? cacheData.outputPath.trim()
+            : "";
+      }
+      if (isWindows && resolvedOutputPath && !looksLikeWindowsPath(resolvedOutputPath)) {
+        resolvedOutputPath = "";
+      }
+      if (resolvedOutputPath) {
+        const ext = resolvedOutputPath.split(".").pop()?.toLowerCase();
 
-        // For complex formats, trigger Python rebuild
-        if (["epub", "srt", "ass", "ssa"].includes(ext || "")) {
-          const rebuildResult = await window.api?.rebuildDoc({ cachePath });
+        // Use Python rebuild for formats that should strictly mirror cache
+        if (["epub", "srt", "ass", "ssa", "txt"].includes(ext || "")) {
+          const rebuildResult = await window.api?.rebuildDoc({
+            cachePath,
+            outputPath: resolvedOutputPath,
+          });
           if (!rebuildResult?.success) {
             throw new Error(
               `文档重建失败: ${rebuildResult?.error || "模型后端未正常返回结果"}`,
             );
           }
-        } else if (ext === "txt") {
-          // Direct write for TXT (matching Murasaki \n\n rule)
+        } else {
+          // Direct write for other plain-text outputs
           const content =
-            cacheData.blocks
+            dataToSave.blocks
               .sort((a, b) => a.index - b.index)
               .map((b) => b.dst.trim())
               .join("\n\n") + "\n";
-          await window.api?.writeFile(cacheData.outputPath, content);
+          const ok = await window.api?.writeFile(resolvedOutputPath, content);
+          if (!ok) {
+            throw new Error(`写入文本失败: ${resolvedOutputPath}`);
+          }
         }
       }
 
@@ -1434,101 +1481,147 @@ export default function ProofreadView({
                   {lineMode ? (
                     // Line Mode: per-row grid for height sync, overlay textarea for editing
                     <div className="relative">
+                      {selectionLock === "src" && (
+                        <div
+                          className="absolute top-0 bottom-0 z-10"
+                          style={{
+                            left: "50%",
+                            right: 0,
+                            userSelect: "none",
+                            WebkitUserSelect: "none",
+                            pointerEvents: "auto",
+                          }}
+                          onMouseDown={(e) => e.preventDefault()}
+                        />
+                      )}
+                      {selectionLock === "dst" && (
+                        <div
+                          className="absolute top-0 bottom-0 z-10"
+                          style={{
+                            left: 0,
+                            right: "50%",
+                            userSelect: "none",
+                            WebkitUserSelect: "none",
+                            pointerEvents: "auto",
+                          }}
+                          onMouseDown={(e) => e.preventDefault()}
+                        />
+                      )}
                       {/* Display layer: two independent text flows to avoid cross-column copy linkage */}
                       <div
                         className="grid"
-                        style={{ gridTemplateColumns: gridTemplate }}
+                        style={{
+                          gridTemplateColumns: gridTemplate,
+                          gridAutoRows: "minmax(20px, auto)",
+                          gridAutoFlow: "row",
+                        }}
                       >
-                        <div className="border-r border-border/20">
-                          {srcLines.map((srcLine, lineIdx) => {
-                            const isWarning = simSet.has(lineIdx + 1);
-                            const cellStyle: React.CSSProperties = {
-                              minHeight: "20px",
-                              paddingLeft: "44px",
-                              paddingRight: "12px",
-                              lineHeight: "20px",
-                              fontFamily:
-                                '"Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace',
-                              fontSize: "13px",
-                              wordBreak: "break-all",
-                            };
-                            return (
-                              <div
-                                key={`src-${lineIdx}`}
-                                className={`relative ${isWarning ? "bg-amber-500/20" : ""}`}
-                                style={cellStyle}
+                        {Array.from({ length: maxLines }).map((_, lineIdx) => {
+                          const srcLine = srcLines[lineIdx] || "";
+                          const isWarning = simSet.has(lineIdx + 1);
+                          const baseCellStyle: React.CSSProperties = {
+                            minHeight: "20px",
+                            paddingLeft: "44px",
+                            paddingRight: "12px",
+                            lineHeight: "20px",
+                            fontFamily:
+                              '"Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace',
+                            fontSize: "13px",
+                            wordBreak: "break-all",
+                          };
+                          const srcCellStyle: React.CSSProperties = {
+                            ...baseCellStyle,
+                            gridColumn: 1,
+                            gridRow: lineIdx + 1,
+                            userSelect:
+                              selectionLock === "dst" ? "none" : "text",
+                          };
+                          return (
+                            <div
+                              key={`src-${lineIdx}`}
+                              className={`relative border-r border-border/20 ${isWarning ? "bg-amber-500/20" : ""}`}
+                              style={srcCellStyle}
+                              onMouseDown={() =>
+                                flushSync(() => setSelectionLock("src"))
+                              }
+                            >
+                              <span
+                                style={{
+                                  position: "absolute",
+                                  left: "12px",
+                                  width: "24px",
+                                  textAlign: "right",
+                                  fontSize: "10px",
+                                  color: "hsl(var(--muted-foreground)/0.5)",
+                                  userSelect: "none",
+                                  lineHeight: "20px",
+                                }}
                               >
-                                <span
-                                  style={{
-                                    position: "absolute",
-                                    left: "12px",
-                                    width: "24px",
-                                    textAlign: "right",
-                                    fontSize: "10px",
-                                    color: "hsl(var(--muted-foreground)/0.5)",
-                                    userSelect: "none",
-                                    lineHeight: "20px",
-                                  }}
-                                >
-                                  {lineIdx + 1}
-                                </span>
-                                <span className="whitespace-pre-wrap text-foreground select-text">
-                                  {srcLine || "\u00A0"}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div
-                          className="cursor-text"
-                          onClick={() => {
-                            if (editingBlockId !== block.index) {
-                              setEditingBlockId(block.index);
-                              setEditingText(dstText);
-                            }
-                          }}
-                        >
-                          {dstLines.map((dstLine, lineIdx) => {
-                            const isWarning = simSet.has(lineIdx + 1);
-                            const cellStyle: React.CSSProperties = {
-                              minHeight: "20px",
-                              paddingLeft: "44px",
-                              paddingRight: "12px",
-                              lineHeight: "20px",
-                              fontFamily:
-                                '"Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace',
-                              fontSize: "13px",
-                              wordBreak: "break-all",
-                            };
-                            return (
-                              <div
-                                key={`dst-${lineIdx}`}
-                                className={`relative ${isWarning ? "bg-amber-500/20" : ""}`}
-                                style={cellStyle}
+                                {lineIdx + 1}
+                              </span>
+                              <span className="whitespace-pre-wrap text-foreground select-text">
+                                {srcLine || "\u00A0"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                        {Array.from({ length: maxLines }).map((_, lineIdx) => {
+                          const dstLine = dstLines[lineIdx] || "";
+                          const isWarning = simSet.has(lineIdx + 1);
+                          const baseCellStyle: React.CSSProperties = {
+                            minHeight: "20px",
+                            paddingLeft: "44px",
+                            paddingRight: "12px",
+                            lineHeight: "20px",
+                            fontFamily:
+                              '"Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace',
+                            fontSize: "13px",
+                            wordBreak: "break-all",
+                          };
+                          const dstCellStyle: React.CSSProperties = {
+                            ...baseCellStyle,
+                            gridColumn: 2,
+                            gridRow: lineIdx + 1,
+                            userSelect:
+                              selectionLock === "src" ? "none" : "text",
+                          };
+                          return (
+                            <div
+                              key={`dst-${lineIdx}`}
+                              className={`relative cursor-text ${isWarning ? "bg-amber-500/20" : ""}`}
+                              style={dstCellStyle}
+                              onClick={() => {
+                                if (editingBlockId !== block.index) {
+                                  setEditingBlockId(block.index);
+                                  setEditingText(dstText);
+                                }
+                              }}
+                              onMouseDown={() =>
+                                flushSync(() => setSelectionLock("dst"))
+                              }
+                            >
+                              <span
+                                style={{
+                                  position: "absolute",
+                                  left: "12px",
+                                  width: "24px",
+                                  textAlign: "right",
+                                  fontSize: "10px",
+                                  color: "hsl(var(--muted-foreground)/0.5)",
+                                  userSelect: "none",
+                                  lineHeight: "20px",
+                                }}
                               >
-                                <span
-                                  style={{
-                                    position: "absolute",
-                                    left: "12px",
-                                    width: "24px",
-                                    textAlign: "right",
-                                    fontSize: "10px",
-                                    color: "hsl(var(--muted-foreground)/0.5)",
-                                    userSelect: "none",
-                                    lineHeight: "20px",
-                                  }}
-                                >
-                                  {lineIdx + 1}
-                                </span>
-                                <span
-                                  className={`whitespace-pre-wrap text-foreground select-text ${editingBlockId === block.index ? "opacity-0" : ""}`}
-                                >
-                                  {dstLine || "\u00A0"}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
+                                {lineIdx + 1}
+                              </span>
+                              <span
+                                className={`whitespace-pre-wrap text-foreground select-text ${editingBlockId === block.index ? "opacity-0" : ""}`}
+                              >
+                                {dstLine || "\u00A0"}
+                              </span>
+                            </div>
+                          );
+                        })}
                       </div>
                       {/* Editing overlay: full-block textarea */}
                       {editingBlockId === block.index && (

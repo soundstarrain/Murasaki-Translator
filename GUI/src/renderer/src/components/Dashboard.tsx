@@ -174,7 +174,10 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     const glossarySelectionEphemeralRef = useRef(false);
     const activeModelPath = isRemoteMode ? remoteModelPath : modelPath;
     const activeModelsCount = isRemoteMode ? remoteModels.length : models.length;
-    const activeGlossaries = isRemoteMode ? remoteGlossaries : localGlossaries;
+    const preferredGlossaries =
+      isRemoteMode && localGlossaries.length === 0
+        ? remoteGlossaries
+        : localGlossaries;
     const selectedRemoteInfo = isRemoteMode
       ? remoteModels.find((model) => model.path === remoteModelPath)
       : null;
@@ -331,6 +334,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     const [isReordering, setIsReordering] = useState(false);
     const [configItem, setConfigItem] = useState<QueueItem | null>(null);
     const [logs, setLogs] = useState<string[]>([]);
+    const MAX_HISTORY_LOG_LINES = 500;
+    const MAX_HISTORY_LLAMA_LOG_LINES = 300;
 
     const presetOptionLabel = (value: "novel" | "script" | "short") => {
       if (lang === "zh") {
@@ -362,9 +367,11 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     const queueRef = useRef(queue);
     const currentRecordIdRef = useRef<string | null>(null);
     const logsBufferRef = useRef<string[]>([]);
+    const llamaLogsBufferRef = useRef<string[]>([]);
     const triggersBufferRef = useRef<TriggerEvent[]>([]);
     // Buffer for assembling split log chunks (fixing JSON parse errors)
     const lineBufferRef = useRef("");
+    const activeRunIdRef = useRef<string | null>(null);
     const remoteInfoRef = useRef<{
       executionMode?: string;
       source?: string;
@@ -554,11 +561,29 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     }, [currentQueueIndex]);
 
     const handleProcessExit = useCallback((payload: ProcessExitPayload) => {
+      const payloadRunId = payload?.runId;
+      if (
+        payloadRunId &&
+        activeRunIdRef.current &&
+        payloadRunId !== activeRunIdRef.current
+      ) {
+        console.warn(
+          "[Dashboard] Ignoring stale process-exit event:",
+          payloadRunId,
+        );
+        return;
+      }
+      activeRunIdRef.current = null;
       const code = payload?.code ?? null;
       const signal = payload?.signal ?? null;
       const stopRequested = payload?.stopRequested === true;
       setIsRunning(false);
       const success = code === 0;
+      const finalStatus: TranslationRecord["status"] = success
+        ? "completed"
+        : stopRequested
+          ? "interrupted"
+          : "failed";
       const message = success
         ? "✅ Translation completed successfully!"
         : stopRequested
@@ -585,7 +610,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         updateRecord(currentRecordIdRef.current, {
           endTime: new Date().toISOString(),
           duration: Math.round(effectiveDuration),
-          status: success ? "completed" : "interrupted",
+          status: finalStatus,
           executionMode: remoteInfoRef.current?.executionMode as any || "local",
           remoteInfo: remoteInfoRef.current ? {
             serverUrl: remoteInfoRef.current.serverUrl || "",
@@ -602,7 +627,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           sourceChars: progressDataRef.current.sourceChars,
           outputPath: progressDataRef.current.outputPath,
           avgSpeed: avgSpeed,
-          logs: logsBufferRef.current.slice(-10000), // Keep last 10000 logs (safe with lazy loading)
+          logs: logsBufferRef.current.slice(-MAX_HISTORY_LOG_LINES),
+          llamaLogs: llamaLogsBufferRef.current.slice(-MAX_HISTORY_LLAMA_LOG_LINES),
           triggers: triggersBufferRef.current,
         });
         currentRecordIdRef.current = null;
@@ -617,6 +643,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           speeds: [],
         };
         finalStatsRef.current = null;
+        llamaLogsBufferRef.current = [];
       }
 
       // Don't clear preview - keep showing last translation result
@@ -624,7 +651,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
 
       window.api?.showNotification(
         "Murasaki Translator",
-        success ? "翻译完成！" : "翻译已停止",
+        success ? "翻译完成！" : stopRequested ? "翻译已停止" : "翻译失败",
       );
 
       const queueIndex = currentQueueIndexRef.current;
@@ -708,6 +735,27 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             return;
           }
 
+          if (log.startsWith("JSON_LLAMA_LOG:")) {
+            try {
+              const data = JSON.parse(log.substring("JSON_LLAMA_LOG:".length));
+              const line =
+                typeof data?.line === "string"
+                  ? data.line.trim()
+                  : String(data?.line || "").trim();
+              if (line) {
+                llamaLogsBufferRef.current.push(line);
+                if (llamaLogsBufferRef.current.length > MAX_HISTORY_LLAMA_LOG_LINES) {
+                  llamaLogsBufferRef.current = llamaLogsBufferRef.current.slice(
+                    -MAX_HISTORY_LLAMA_LOG_LINES,
+                  );
+                }
+              }
+            } catch (e) {
+              console.error("JSON_LLAMA_LOG Parse Error:", e);
+            }
+            return;
+          }
+
           if (log.startsWith("JSON_MONITOR:")) {
             try {
               const monitorPayload = JSON.parse(
@@ -743,15 +791,33 @@ export const Dashboard = forwardRef<any, DashboardProps>(
               const data = JSON.parse(log.substring("JSON_PROGRESS:".length));
               // 直接使用后端数据，不保留旧值(避免上一次运行的残留)
               setProgress((prev) => ({
-                current: data.current ?? 0,
-                total: data.total ?? 0,
-                percent: data.percent ?? 0,
-                elapsed: data.elapsed ?? 0,
-                remaining: data.remaining >= 0 ? data.remaining : 0,
-                speedLines: data.speed_lines > 0 ? data.speed_lines : 0,
-                speedChars: data.speed_chars > 0 ? data.speed_chars : 0,
-                speedEval: data.speed_eval ?? 0,
-                speedGen: data.speed_gen ?? 0,
+                current:
+                  typeof data.current === "number" ? data.current : prev.current,
+                total: typeof data.total === "number" ? data.total : prev.total,
+                percent:
+                  typeof data.percent === "number" ? data.percent : prev.percent,
+                elapsed:
+                  typeof data.elapsed === "number" ? data.elapsed : prev.elapsed,
+                remaining:
+                  typeof data.remaining === "number"
+                    ? Math.max(0, data.remaining)
+                    : prev.remaining,
+                speedLines:
+                  typeof data.speed_lines === "number"
+                    ? data.speed_lines
+                    : prev.speedLines,
+                speedChars:
+                  typeof data.speed_chars === "number"
+                    ? data.speed_chars
+                    : prev.speedChars,
+                speedEval:
+                  typeof data.speed_eval === "number"
+                    ? data.speed_eval
+                    : prev.speedEval,
+                speedGen:
+                  typeof data.speed_gen === "number"
+                    ? data.speed_gen
+                    : prev.speedGen,
                 // If block changed, reset retries
                 retries: data.current !== prev.current ? 0 : prev.retries,
               }));
@@ -926,8 +992,10 @@ export const Dashboard = forwardRef<any, DashboardProps>(
 
             // Buffer logs for history record
             logsBufferRef.current.push(log);
-            if (logsBufferRef.current.length > 100) {
-              logsBufferRef.current = logsBufferRef.current.slice(-100);
+            if (logsBufferRef.current.length > MAX_HISTORY_LOG_LINES) {
+              logsBufferRef.current = logsBufferRef.current.slice(
+                -MAX_HISTORY_LOG_LINES,
+              );
             }
 
             // Detect trigger events - REMOVED to avoid duplication with JSON events
@@ -995,6 +1063,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     const lastBackendElapsedRef = useRef<number>(0);
     const lastBackendUpdateRef = useRef<number>(0);
     const hasReceivedProgressRef = useRef(false);
+    const localStartTimeRef = useRef<number>(0);
 
     useEffect(() => {
       if (!isRunning) {
@@ -1033,6 +1102,12 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           // 首次收到后端数据前使用后端值 (仅当已收到新数据时)
           setDisplayElapsed(Math.floor(progress.elapsed));
           setDisplayRemaining(Math.floor(progress.remaining));
+        } else if (localStartTimeRef.current > 0) {
+          // 后端尚未给出 elapsed，先用本地计时避免一直为 0
+          const localElapsed =
+            (Date.now() - localStartTimeRef.current) / 1000;
+          setDisplayElapsed(Math.floor(localElapsed));
+          setDisplayRemaining(0);
         }
       }, 100);
 
@@ -1249,6 +1324,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       setIsRunning(true);
       setDisplayElapsed(0);
       setDisplayRemaining(0);
+      const runId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      activeRunIdRef.current = runId;
+      localStartTimeRef.current = Date.now();
       // 重置 Ref 防止旧数据干扰
       lastBackendElapsedRef.current = 0;
       lastBackendUpdateRef.current = 0;
@@ -1321,6 +1399,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           "Please select a model in the Model Management page first.",
         );
         setIsRunning(false);
+        activeRunIdRef.current = null;
         return;
       }
 
@@ -1524,6 +1603,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       currentRecordIdRef.current = recordId;
       logsBufferRef.current = [];
       triggersBufferRef.current = [];
+      llamaLogsBufferRef.current = [];
 
       // 重置远程信息(新任务开始)
       remoteInfoRef.current = null;
@@ -1556,7 +1636,12 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       setAlignmentMode(finalConfig.alignmentMode);
       setSaveCot(finalConfig.saveCot);
 
-      window.api?.startTranslation(inputPath, effectiveModelPath, finalConfig);
+      window.api?.startTranslation(
+        inputPath,
+        effectiveModelPath,
+        finalConfig,
+        runId,
+      );
     };
 
     // --- State for Confirmation Modal ---
@@ -1620,8 +1705,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         ?.split(".")
         .slice(0, -1)
         .join(".");
-      if (inputName && activeGlossaries.length > 0) {
-        const match = activeGlossaries.find((g) => g.matchKey === inputName);
+      if (inputName && preferredGlossaries.length > 0) {
+        const match = preferredGlossaries.find((g) => g.matchKey === inputName);
         if (match && match.value !== glossaryPath) {
           matchedGlossary = match.value;
           setGlossaryPath(match.value);
@@ -2318,7 +2403,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                     }}
                   >
                     <option value="">{t.none}</option>
-                    {activeGlossaries.map((g) => (
+                    {preferredGlossaries.map((g) => (
                       <option key={`${g.label}-${g.value}`} value={g.value}>
                         {g.label}
                       </option>

@@ -6,6 +6,7 @@ type ProcessExitPayload = {
   code: number | null;
   signal: string | null;
   stopRequested: boolean;
+  runId?: string;
 };
 
 const listenerRegistry = new Map<string, Set<(...args: any[]) => void>>();
@@ -58,8 +59,18 @@ const api = {
   getModelsPath: () => ipcRenderer.invoke("get-models-path"),
   getModelInfo: (modelName: string) =>
     ipcRenderer.invoke("get-model-info", modelName),
-  startTranslation: (inputFile: string, modelPath: string, config: any) =>
-    ipcRenderer.send("start-translation", { inputFile, modelPath, config }),
+  startTranslation: (
+    inputFile: string,
+    modelPath: string,
+    config: any,
+    runId?: string,
+  ) =>
+    ipcRenderer.send("start-translation", {
+      inputFile,
+      modelPath,
+      config,
+      runId,
+    }),
   getHardwareSpecs: () => ipcRenderer.invoke("get-hardware-specs"),
   refreshGpuDetection: () => ipcRenderer.invoke("refresh-gpu-detection"),
   stopTranslation: () => ipcRenderer.send("stop-translation"),

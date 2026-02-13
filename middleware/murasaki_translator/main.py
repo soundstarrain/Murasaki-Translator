@@ -1286,6 +1286,27 @@ def main():
         monitor = HardwareMonitor()
         if monitor.enabled:
             print(f"Hardware Monitor Active: {monitor.name}")
+            # Emit an initial snapshot so GUI updates immediately
+            try:
+                init_status = monitor.get_status() or {
+                    "name": monitor.name,
+                    "vram_used_gb": 0,
+                    "vram_total_gb": 0,
+                    "vram_percent": 0,
+                    "gpu_util": 0,
+                    "mem_util": 0
+                }
+                if "name" not in init_status:
+                    init_status["name"] = monitor.name
+                try:
+                    metrics = engine.get_metrics()
+                    if metrics:
+                        init_status.update(metrics)
+                except:
+                    pass
+                safe_print_json("JSON_MONITOR", init_status)
+            except Exception:
+                pass
             
             # Start Monitor Thread
             def run_monitor_loop():
@@ -1664,6 +1685,7 @@ def main():
             
             # --- Execution Status Initialization ---
             results_buffer = {}
+            preview_sent = set()
             next_write_idx = skip_blocks_from_output
             
             # 统计修正：过滤掉空块（用于负载均衡的占位块）
@@ -1728,6 +1750,23 @@ def main():
                         total_source_chars += len(block_src_text)
                         total_source_lines += len([l for l in block_src_text.splitlines() if l.strip()])
                         
+                        # Emit preview as soon as a block finishes (out-of-order allowed)
+                        if block_idx not in preview_sent:
+                            if args.alignment_mode:
+                                preview_text = AlignmentHandler.process_result(result.get("out_text", ""))
+                            else:
+                                preview_text = result.get("preview_text") or result.get("out_text", "")
+                            result["preview_text"] = preview_text
+                            safe_print_json(
+                                "JSON_PREVIEW_BLOCK",
+                                {
+                                    "block": block_idx + 1,
+                                    "src": result.get("src_text", ""),
+                                    "output": preview_text
+                                }
+                            )
+                            preview_sent.add(block_idx)
+                        
                         # Progress reporting
                         elapsed_so_far = max(0.1, time.time() - start_time)
                         
@@ -1764,10 +1803,16 @@ def main():
                             # We need the tags in "out_text" for save_reconstructed to work at the end.
                             # Only strip tags for the Preview/GUI.
                             if args.alignment_mode:
-                                res["preview_text"] = AlignmentHandler.process_result(res["out_text"])  
+                                if not res.get("preview_text"):
+                                    res["preview_text"] = AlignmentHandler.process_result(res["out_text"])  
                             else:
-                                res["preview_text"] = res["out_text"]
-                            safe_print_json("JSON_PREVIEW_BLOCK", {"block": curr_disp, "src": res['src_text'], "output": res['preview_text']})
+                                res["preview_text"] = res.get("preview_text", res.get("out_text", ""))
+                            if next_write_idx not in preview_sent:
+                                safe_print_json(
+                                    "JSON_PREVIEW_BLOCK",
+                                    {"block": curr_disp, "src": res['src_text'], "output": res['preview_text']}
+                                )
+                                preview_sent.add(next_write_idx)
                             
                             if translation_cache:
                                 w_types = [w['type'] for w in res["warnings"]] if res["warnings"] else []
