@@ -59,7 +59,7 @@ export function ToastHost() {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-4 right-4 z-[60] flex flex-col gap-2">
+    <div className="fixed top-4 right-4 z-[var(--z-toast)] flex flex-col gap-2">
       {toasts.map((toast) => {
         const config = variantStyles[toast.variant];
         const Icon = config.icon;

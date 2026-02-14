@@ -33,6 +33,10 @@
     --ring: 222.2 84% 4.9%;
 
     --radius: 0.5rem;
+    --z-floating: 3000;
+    --z-modal: 4000;
+    --z-toast: 5000;
+    --z-tooltip: 6000;
   }
 
   .dark {
@@ -92,7 +96,7 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans;
   }
 
   /* Smooth theme transition for all elements */

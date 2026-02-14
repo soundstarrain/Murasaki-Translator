@@ -20,6 +20,8 @@ export interface TranslationConfig {
   lineCheck: boolean;
   lineToleranceAbs: number;
   lineTolerancePct: number;
+  anchorCheck: boolean;
+  anchorCheckRetries: number;
   saveCot: boolean;
   saveSummary: boolean;
   deviceMode: "auto" | "cpu" | "gpu" | "rocm";
@@ -94,6 +96,20 @@ export interface CacheData {
     dstChars: number;
   };
   blocks: CacheBlock[];
+}
+
+export interface WatchFolderConfig {
+  id: string;
+  path: string;
+  includeSubdirs: boolean;
+  fileTypes: string[];
+  enabled: boolean;
+  createdAt?: string;
+}
+
+export interface WatchFolderEntry {
+  config: WatchFolderConfig;
+  active: boolean;
 }
 
 export type Unsubscribe = () => void;
@@ -259,6 +275,10 @@ export interface ElectronAPI {
   openPath: (filePath: string) => Promise<string>;
   openFolder: (folderPath: string) => Promise<boolean>;
   writeFile: (path: string, content: string) => Promise<boolean>;
+  writeFileVerbose: (
+    path: string,
+    content: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
   saveFile: (options: any) => Promise<string | null>;
   importGlossary: (
     sourcePath: string,
@@ -465,6 +485,26 @@ export interface ElectronAPI {
     truncated?: boolean;
     error?: string;
   }>;
+
+  // Watch Folder
+  watchFolderAdd: (
+    config: WatchFolderConfig,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  watchFolderToggle: (
+    id: string,
+    enabled: boolean,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  watchFolderRemove: (
+    id: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  watchFolderList: () => Promise<{
+    ok: boolean;
+    entries?: WatchFolderEntry[];
+    error?: string;
+  }>;
+  onWatchFolderFileAdded: (
+    callback: (payload: { watchId: string; path: string; addedAt: string }) => void,
+  ) => Unsubscribe;
 
   // Rule System
   testRules: (

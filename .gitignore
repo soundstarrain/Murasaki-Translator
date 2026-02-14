@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+**/.pytest_cache/
 .venv
 venv-gpu/
 .env
@@ -38,6 +39,8 @@ GUI/node_modules/
 GUI/out/
 GUI/dist/
 GUI/.vite/
+GUI/.vitest/
+GUI/coverage/
 GUI/*.log
 
 # GUI/package-lock.json (Keep this tracked for consistency)
@@ -46,11 +49,23 @@ python_env/
 
 # External Binaries (Do not commit large runtime binaries)
 llama-b7770-*/
+middleware/bin/
+middleware/models/
+middleware/temp/
 
 # Murasaki Translation Temp Files
 *.bak
 *.pause
 *.log
+pytestdebug.log
+.coverage
+coverage.xml
+htmlcov/
+**/test-results/
+**/reports/
+**/junit*.xml
+middleware/tests/smoke/.env
+middleware/tests/smoke/.cache/
 GUI/release/
 GUI/dist-native/
 .DS_Store
@@ -71,7 +86,7 @@ middleware/environment_report.json
 release/
 docs/
 
-AGENT.MD
+AGENTS.md
 middleware/remote-sync
 middleware/uploads
 middleware/outputs

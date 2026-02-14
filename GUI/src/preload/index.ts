@@ -111,9 +111,23 @@ const api = {
     ipcRenderer.invoke("rebuild-doc", options),
   writeFile: (path: string, content: string) =>
     ipcRenderer.invoke("write-file", path, content),
+  writeFileVerbose: (path: string, content: string) =>
+    ipcRenderer.invoke("write-file-verbose", path, content),
   saveFile: (options: any) => ipcRenderer.invoke("save-file", options),
   retranslateBlock: (options: any) =>
     ipcRenderer.invoke("retranslate-block", options),
+
+  // Watch Folder
+  watchFolderAdd: (config: any) =>
+    ipcRenderer.invoke("watch-folder-add", config),
+  watchFolderToggle: (id: string, enabled: boolean) =>
+    ipcRenderer.invoke("watch-folder-toggle", { id, enabled }),
+  watchFolderRemove: (id: string) =>
+    ipcRenderer.invoke("watch-folder-remove", id),
+  watchFolderList: () => ipcRenderer.invoke("watch-folder-list"),
+  onWatchFolderFileAdded: (
+    callback: (payload: { watchId: string; path: string; addedAt: string }) => void,
+  ) => addIpcListener("watch-folder-file-added", callback),
 
   // Server Manager
   serverStatus: () => ipcRenderer.invoke("server-status"),

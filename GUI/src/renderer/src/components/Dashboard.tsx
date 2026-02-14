@@ -71,7 +71,6 @@ interface DashboardProps {
   active?: boolean;
   onRunningChange?: (isRunning: boolean) => void;
   remoteRuntime?: UseRemoteRuntimeResult;
-  onNavigate?: (view: string) => void;
 }
 
 interface RemoteModelInfo {
@@ -86,12 +85,11 @@ interface GlossaryOption {
   matchKey: string;
 }
 
-const QUICKSTART_STATE_KEY = "murasaki_quickstart_state";
-const QUICKSTART_SEEN_KEY = "murasaki_quickstart_seen";
-const LEGACY_GUIDE_KEY = "murasaki_guide_dismissed";
+const AUTO_START_QUEUE_KEY = "murasaki_auto_start_queue";
+const CONFIG_SYNC_KEY = "murasaki_pending_config_sync";
 
 export const Dashboard = forwardRef<any, DashboardProps>(
-  ({ lang, active, onRunningChange, remoteRuntime, onNavigate }, ref) => {
+  ({ lang, active, onRunningChange, remoteRuntime }, ref) => {
     const t = translations[lang];
 
     // Queue System (Synced with LibraryView)
@@ -159,22 +157,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       type: "info" | "warning" | "success";
       message: string;
     } | null>(null);
-    const [quickStartState, setQuickStartState] = useState<
-      "new" | "dismissed" | "completed"
-    >(() => {
-      const stored = localStorage.getItem(QUICKSTART_STATE_KEY);
-      if (stored === "dismissed" || stored === "completed") return stored;
-      if (localStorage.getItem(QUICKSTART_SEEN_KEY) === "true") {
-        localStorage.setItem(QUICKSTART_STATE_KEY, "dismissed");
-        return "dismissed";
-      }
-      if (localStorage.getItem(LEGACY_GUIDE_KEY) === "true") {
-        localStorage.setItem(QUICKSTART_STATE_KEY, "dismissed");
-        localStorage.setItem(QUICKSTART_SEEN_KEY, "true");
-        return "dismissed";
-      }
-      return "new";
-    });
     const [errorDigest, setErrorDigest] = useState<{
       title: string;
       message: string;
@@ -205,21 +187,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       };
     }, []);
 
-    const setQuickStartStatus = useCallback(
-      (next: "dismissed" | "completed") => {
-        setQuickStartState(next);
-        localStorage.setItem(QUICKSTART_STATE_KEY, next);
-        localStorage.setItem(QUICKSTART_SEEN_KEY, "true");
-        if (next === "dismissed") {
-          localStorage.setItem(LEGACY_GUIDE_KEY, "true");
-        }
-      },
-      [],
-    );
-
-    const dismissGuide = useCallback(() => {
-      setQuickStartStatus("dismissed");
-    }, [setQuickStartStatus]);
 
     // Monitors
     const [monitorData, setMonitorData] = useState<MonitorData | null>(null);
@@ -254,6 +221,27 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       ? remoteModels.find((model) => model.path === remoteModelPath)
       : null;
     const { alertProps, showAlert, showConfirm } = useAlertModal();
+
+
+    useEffect(() => {
+      if (!active) return;
+      const syncToken = localStorage.getItem(CONFIG_SYNC_KEY);
+      if (!syncToken) return;
+      localStorage.removeItem(CONFIG_SYNC_KEY);
+
+      setPromptPreset(localStorage.getItem("config_preset") || "novel");
+      if (isRemoteMode) {
+        const savedRemote = localStorage.getItem("config_remote_model");
+        if (savedRemote) setRemoteModelPath(savedRemote);
+        setGlossaryPath("");
+      } else {
+        const savedModel = localStorage.getItem("config_model");
+        if (savedModel) setModelPath(savedModel);
+        const savedGlossary =
+          localStorage.getItem("config_glossary_path") || "";
+        setGlossaryPath(savedGlossary);
+      }
+    }, [active, isRemoteMode]);
 
     const fetchData = async () => {
       const m = await window.api?.getModels();
@@ -807,7 +795,23 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           setCurrentQueueIndex(-1);
         }
       } else {
-        // Interrupted or index out of range
+        // Interrupted or failed
+        if (
+          Array.isArray(queue) &&
+          queueIndex >= 0 &&
+          queueIndex < queue.length
+        ) {
+          const errorMessage = stopRequested
+            ? t.dashboard.runStopped
+            : t.dashboard.runFailed;
+          setQueue((prev) =>
+            prev.map((item, i) =>
+              i === queueIndex
+                ? { ...item, status: "failed", error: errorMessage }
+                : item,
+            ),
+          );
+        }
         setCurrentQueueIndex(-1);
       }
       resetEphemeralGlossarySelection();
@@ -822,7 +826,26 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         lineBufferRef.current = lines.pop() || "";
 
         lines.forEach((line) => {
-          const log = line.trim();
+          const rawLog = line.trim();
+          if (!rawLog) return;
+
+          let log = rawLog;
+          if (rawLog.startsWith("{")) {
+            try {
+              const data = JSON.parse(rawLog);
+              if (data && typeof data === "object" && "message" in data) {
+                const message =
+                  typeof (data as { message?: unknown }).message === "string"
+                    ? String((data as { message?: unknown }).message)
+                    : String((data as { message?: unknown }).message ?? "");
+                if (message) {
+                  log = message.trim();
+                }
+              }
+            } catch {
+              // ignore JSONL parse errors
+            }
+          }
           if (!log) return;
 
           if (log.startsWith("JSON_REMOTE_INFO:")) {
@@ -968,7 +991,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                     ? "glossary_missed"
                     : data.type === "empty"
                       ? "empty_retry"
-                      : "line_mismatch";
+                      : data.type === "anchor_missing"
+                        ? "anchor_missing"
+                        : "line_mismatch";
               const retryMessages = t.dashboard.retryMessages;
               const coverageText =
                 typeof data.coverage === "number"
@@ -987,15 +1012,18 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                     : data.type === "glossary"
                       ? retryMessages.glossaryCoverage
                         .replace("{coverage}", coverageText)
-                      : data.type === "empty"
-                        ? retryMessages.emptyBlock
-                          .replace("{block}", String(data.block))
-                        : retryMessages.lineMismatch
-                          .replace("{block}", String(data.block))
-                          .replace(
-                            "{diff}",
-                            String(data.src_lines - data.dst_lines),
-                          ),
+                  : data.type === "empty"
+                    ? retryMessages.emptyBlock
+                      .replace("{block}", String(data.block))
+                    : data.type === "anchor_missing"
+                      ? retryMessages.anchorMissing
+                        .replace("{block}", String(data.block))
+                      : retryMessages.lineMismatch
+                        .replace("{block}", String(data.block))
+                        .replace(
+                          "{diff}",
+                          String(data.src_lines - data.dst_lines),
+                        ),
               });
             } catch (e) {
               console.error("JSON_RETRY Parse Error:", e, log);
@@ -1408,6 +1436,56 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       });
     }, [t, showConfirm]);
 
+    const handleRetryFailed = useCallback(() => {
+      const failedCount = queue.filter((item) => item.status === "failed").length;
+      if (failedCount === 0) {
+        pushQueueNotice({ type: "info", message: t.dashboard.retryFailedNone });
+        return;
+      }
+      const nextQueue = queue.map((item) =>
+        item.status === "failed"
+          ? { ...item, status: "pending", error: undefined }
+          : item,
+      );
+      setQueue(nextQueue);
+      pushQueueNotice({
+        type: "success",
+        message: t.dashboard.retryFailedDone.replace(
+          "{count}",
+          String(failedCount),
+        ),
+      });
+    }, [queue, pushQueueNotice, t]);
+
+    const handleClearCompletedOnly = useCallback(() => {
+      const completedCount = queue.filter(
+        (item) => item.status === "completed",
+      ).length;
+      if (completedCount === 0) {
+        pushQueueNotice({
+          type: "info",
+          message: t.dashboard.clearCompletedNone,
+        });
+        return;
+      }
+      const nextQueue = queue.filter((item) => item.status !== "completed");
+      setQueue(nextQueue);
+      setCompletedFiles(
+        new Set(
+          nextQueue
+            .filter((item) => item.status === "completed")
+            .map((item) => item.path),
+        ),
+      );
+      pushQueueNotice({
+        type: "success",
+        message: t.dashboard.clearCompletedDone.replace(
+          "{count}",
+          String(completedCount),
+        ),
+      });
+    }, [queue, pushQueueNotice, t]);
+
     // Drag handlers
     // Unified Drop Handler for Queue
     const handleDrop = useCallback(
@@ -1586,7 +1664,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           modelPath ||
           ""
       ).trim();
-      if (!effectiveModelPath) {
+      if (!effectiveModelPath && !isRemoteMode) {
         // Use custom AlertModal
         showAlert({
           title: t.dashboard.selectModelTitle,
@@ -1640,8 +1718,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           customConfig.gpuDeviceId,
           localStorage.getItem("config_gpu_device_id") || "",
         ),
-        // Text Processing Options (from Settings)
-
         // Quality Control Settings
         temperature:
           customConfig.temperature ??
@@ -1665,6 +1741,14 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         lineTolerancePct: pickCustom(
           customConfig.lineTolerancePct,
           parseInt(localStorage.getItem("config_line_tolerance_pct") || "20"),
+        ),
+        anchorCheck: pickCustom(
+          customConfig.anchorCheck,
+          localStorage.getItem("config_anchor_check") !== "false",
+        ),
+        anchorCheckRetries: pickCustom(
+          customConfig.anchorCheckRetries,
+          parseInt(localStorage.getItem("config_anchor_check_retries") || "1"),
         ),
         strictMode:
           pickCustom(
@@ -1706,7 +1790,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         ),
         coverageRetries: pickCustom(
           customConfig.coverageRetries,
-          parseInt(localStorage.getItem("config_coverage_retries") || "3"),
+          parseInt(localStorage.getItem("config_coverage_retries") || "1"),
         ),
 
         // Incremental Translation (增量翻译)
@@ -1809,6 +1893,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       // 重置远程信息(新任务开始)
       remoteInfoRef.current = null;
 
+      const finalConfig = { ...config, highFidelity: undefined };
+
       const newRecord: TranslationRecord = {
         id: recordId,
         fileName: inputPath.split(/[/\\]/).pop() || inputPath,
@@ -1820,19 +1906,12 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         totalBlocks: 0,
         completedBlocks: 0,
         totalLines: 0,
-        config: {
-          temperature: config.temperature,
-          lineCheck: config.lineCheck,
-          repPenaltyBase: config.repPenaltyBase,
-          maxRetries: config.maxRetries,
-          concurrency: config.concurrency,
-        },
+        config: finalConfig,
         triggers: [],
         logs: [],
       };
       addRecord(newRecord);
 
-      const finalConfig = { ...config, highFidelity: undefined };
       // Update local session state to match effective config for UI feedback
       setAlignmentMode(finalConfig.alignmentMode);
       setSaveCot(finalConfig.saveCot);
@@ -1868,6 +1947,14 @@ export const Dashboard = forwardRef<any, DashboardProps>(
 
       await checkAndStart(inputPath, targetIndex);
     };
+
+    useEffect(() => {
+      if (!active || isRunning || queue.length === 0) return;
+      if (localStorage.getItem(AUTO_START_QUEUE_KEY) === "true") {
+        localStorage.removeItem(AUTO_START_QUEUE_KEY);
+        handleStartQueue();
+      }
+    }, [active, isRunning, queue, handleStartQueue]);
 
     const checkAndStart = async (inputPath: string, index: number) => {
       // ... (Duplicate config logic? Or refactor?)
@@ -2348,43 +2435,17 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           },
         }[queueNotice.type]
       : null;
-    const hasUsageEvidence = (() => {
-      if (quickStartState !== "new") return false;
-      if (queue.length > 0) return true;
-      if (modelPath) return true;
-      const modelKey = localStorage.getItem("selected_model") || localStorage.getItem("config_model");
-      if (modelKey) return true;
-      try {
-        const historyRaw = localStorage.getItem("translation_history");
-        if (historyRaw) {
-          const parsed = JSON.parse(historyRaw);
-          if (Array.isArray(parsed) && parsed.length > 0) return true;
-        }
-      } catch { }
-      return false;
-    })();
-
-    useEffect(() => {
-      if (quickStartState === "new" && hasUsageEvidence) {
-        setQuickStartStatus("completed");
-      }
-    }, [quickStartState, hasUsageEvidence, setQuickStartStatus]);
-
-    const shouldShowGuide =
-      quickStartState === "new" && !isRunning && !hasUsageEvidence;
-
-    useEffect(() => {
-      if (!shouldShowGuide) return;
-      if (localStorage.getItem(QUICKSTART_SEEN_KEY) !== "true") {
-        localStorage.setItem(QUICKSTART_SEEN_KEY, "true");
-      }
-    }, [shouldShowGuide]);
+    const failedCount = queue.filter((item) => item.status === "failed").length;
+    const completedCount = queue.filter((item) => item.status === "completed").length;
+    const queueSummary = t.dashboard.queueSummary
+      .replace("{failed}", String(failedCount))
+      .replace("{completed}", String(completedCount));
     const activeConfirmModal = confirmModal;
 
     return (
       <div
         ref={containerRef}
-        className="flex-1 h-screen flex flex-col bg-background overflow-hidden relative"
+        className="flex-1 h-full min-h-0 flex flex-col bg-background overflow-hidden relative"
       >
         <div className="flex-1 p-4 flex gap-4 overflow-hidden min-h-0">
           <div
@@ -2453,6 +2514,35 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                     </div>
                   );
                 })()}
+                <div className="px-3 pb-2">
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                    <span>{queueSummary}</span>
+                    <div className="flex items-center gap-1">
+                      <UITooltip content={t.dashboard.retryFailed}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={handleRetryFailed}
+                          disabled={failedCount === 0 || isRunning}
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                        </Button>
+                      </UITooltip>
+                      <UITooltip content={t.dashboard.clearCompleted}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={handleClearCompletedOnly}
+                          disabled={completedCount === 0 || isRunning}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </UITooltip>
+                    </div>
+                  </div>
+                </div>
                 <div className="flex-1 overflow-y-auto p-2 space-y-1 relative">
                   {queue.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-muted-foreground text-sm px-4 text-center">
@@ -2612,7 +2702,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           </div>
 
           {/* CENTER: Stats & Progress */}
-          <div className="flex-1 flex flex-col gap-4 min-w-0">
+          <div className="flex-1 flex flex-col gap-4 min-w-0 min-h-0">
             {/* Hardware Monitor */}
             <HardwareMonitorBar data={monitorData} lang={lang} />
 
@@ -2638,108 +2728,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                   <p className="text-xs text-amber-400 mt-1">
                     {t.dashboard.modelMissingMsg}
                   </p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-3 h-7 text-xs"
-                    onClick={() => window.api?.openFolder?.("middleware/models")}
-                  >
-                    <FolderOpen className="w-3.5 h-3.5 mr-1.5" />
-                    {t.modelView.openFolder}
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {shouldShowGuide && (
-              <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                <div className="absolute inset-0" />
-                <div className="relative w-[min(960px,94vw)] max-h-[85vh] overflow-hidden rounded-2xl border border-border bg-background shadow-2xl">
-                  <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-border/60 bg-secondary/20">
-                    <div className="flex items-start gap-4">
-                      <div className="w-11 h-11 rounded-2xl bg-primary/10 flex items-center justify-center text-primary shrink-0">
-                        <Info className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <p className="text-base font-semibold">
-                          {t.dashboard.quickStartTitle}
-                        </p>
-                        <p className="text-sm text-muted-foreground mt-1">
-                          {t.dashboard.quickStartDesc}
-                        </p>
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-xs"
-                      onClick={dismissGuide}
-                    >
-                      {t.dashboard.quickStartDismiss}
-                    </Button>
-                  </div>
-                  <div className="p-6">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                      <div className="rounded-xl border border-border/60 bg-card/80 px-4 py-4 shadow-sm">
-                        <div className="text-xs uppercase tracking-widest text-muted-foreground font-semibold">
-                          {t.dashboard.quickStartStep} 1
-                        </div>
-                        <div className="mt-2 text-base font-semibold">
-                          {t.dashboard.quickStartModel}
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {t.dashboard.quickStartModelDesc}
-                        </p>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="mt-4 h-8 text-xs"
-                          onClick={() => onNavigate?.("model")}
-                        >
-                          {t.dashboard.quickStartGoModel}
-                        </Button>
-                      </div>
-                      <div className="rounded-xl border border-border/60 bg-card/80 px-4 py-4 shadow-sm">
-                        <div className="text-xs uppercase tracking-widest text-muted-foreground font-semibold">
-                          {t.dashboard.quickStartStep} 2
-                        </div>
-                        <div className="mt-2 text-base font-semibold">
-                          {t.dashboard.quickStartQueue}
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {t.dashboard.quickStartQueueDesc}
-                        </p>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="mt-4 h-8 text-xs"
-                          onClick={() => onNavigate?.("library")}
-                        >
-                          {t.dashboard.quickStartGoQueue}
-                        </Button>
-                      </div>
-                      <div className="rounded-xl border border-border/60 bg-card/80 px-4 py-4 shadow-sm">
-                        <div className="text-xs uppercase tracking-widest text-muted-foreground font-semibold">
-                          {t.dashboard.quickStartStep} 3
-                        </div>
-                        <div className="mt-2 text-base font-semibold">
-                          {t.dashboard.quickStartStart}
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {t.dashboard.quickStartStartDesc}
-                        </p>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="mt-4 h-8 text-xs"
-                          disabled={!canStart || needsModel}
-                          onClick={handleStartQueue}
-                        >
-                          {t.dashboard.quickStartRun}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
             )}
@@ -3217,7 +3205,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             </div>
 
             {/* Preview Area (Line-Aligned Mode) */}
-            <div className="flex-1 bg-card rounded-2xl border border-border overflow-hidden flex flex-col shadow-sm min-h-[300px]">
+            <div className="flex-1 bg-card rounded-2xl border border-border overflow-hidden flex flex-col shadow-sm min-h-[240px] 2xl:min-h-[300px]">
               <div className="p-3 px-5 border-b border-border flex justify-between items-center bg-muted/20">
                 <h3 className="font-bold text-sm flex items-center gap-2">
                   <ArrowRight className="w-4 h-4 text-primary" />{" "}
@@ -3369,7 +3357,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         {/* Confirmation Modal for Overwrite/Resume */}
         {
           activeConfirmModal && activeConfirmModal!.isOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-300">
+            <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-300">
               <Card className="w-[420px] max-w-[95vw] overflow-hidden border-border bg-background shadow-2xl animate-in zoom-in-95 duration-300 p-8">
                 <div className="flex items-center gap-4 mb-6">
                   <AlertTriangle className="w-6 h-6 text-amber-500" />

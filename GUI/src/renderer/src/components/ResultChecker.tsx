@@ -21,6 +21,10 @@ import {
   calculateSimilarity,
   findHighSimilarityLines,
   detectKanaResidue,
+  normalizeForSimilarity,
+  countJapaneseChars,
+  countMeaningfulChars,
+  getEffectiveLineCount,
 } from "../lib/quality-check";
 
 // 问题类型定义
@@ -227,6 +231,12 @@ export function ResultChecker({
       // 4. 检测高相似度 (可能是漏翻) - 阈值提高到90%，且原文长度需大于10
       const similarity = calculateSimilarity(srcText, dstText);
       const similarLines = findHighSimilarityLines(srcText, dstText);
+      const srcNormalized = normalizeForSimilarity(srcText);
+      const dstNormalized = normalizeForSimilarity(dstText);
+      const srcMeaningful = countMeaningfulChars(srcNormalized);
+      const dstMeaningful = countMeaningfulChars(dstNormalized);
+      const srcJa = countJapaneseChars(srcNormalized);
+      const dstJa = countJapaneseChars(dstNormalized);
 
       if (similarLines.length > 0) {
         //Found specific lines
@@ -241,7 +251,13 @@ export function ResultChecker({
           dstPreview: dstText.substring(0, 100),
           suggestion: t.messages.highSimilaritySuggestion,
         });
-      } else if (similarity > 0.9 && srcText.length > 10) {
+      } else if (
+        similarity > 0.9 &&
+        srcMeaningful >= 20 &&
+        dstMeaningful >= 20 &&
+        srcJa >= 10 &&
+        dstJa >= 6
+      ) {
         // Fallback global check
         result.push({
           blockIndex: block.index,
@@ -258,9 +274,13 @@ export function ResultChecker({
       }
 
       // 5. 检测行数不匹配 - 分级处理 (阈值 10%)
-      if (block.srcLines && block.dstLines) {
-        const diff = Math.abs(block.srcLines - block.dstLines);
-        const pct = diff / Math.max(block.srcLines, 1);
+      const effectiveSrcLines = getEffectiveLineCount(srcText);
+      const effectiveDstLines = getEffectiveLineCount(dstText);
+      const srcLineCount = effectiveSrcLines > 0 ? effectiveSrcLines : block.srcLines;
+      const dstLineCount = effectiveDstLines > 0 ? effectiveDstLines : block.dstLines;
+      if (srcLineCount && dstLineCount) {
+        const diff = Math.abs(srcLineCount - dstLineCount);
+        const pct = diff / Math.max(srcLineCount, 1);
 
         if (diff > 0) {
           if (pct < 0.1 && diff <= 5) {
@@ -269,8 +289,8 @@ export function ResultChecker({
               type: "line_mismatch",
               severity: "info",
               message: t.messages.lineMismatchMinor
-                .replace("{src}", String(block.srcLines))
-                .replace("{dst}", String(block.dstLines)),
+                .replace("{src}", String(srcLineCount))
+                .replace("{dst}", String(dstLineCount)),
               srcPreview: srcText.substring(0, 100),
               dstPreview: dstText.substring(0, 100),
               suggestion: t.messages.lineMismatchMinorSuggestion,
@@ -281,8 +301,8 @@ export function ResultChecker({
               type: "line_mismatch",
               severity: "warning",
               message: t.messages.lineMismatchMajor
-                .replace("{src}", String(block.srcLines))
-                .replace("{dst}", String(block.dstLines))
+                .replace("{src}", String(srcLineCount))
+                .replace("{dst}", String(dstLineCount))
                 .replace("{diff}", String(diff)),
               srcPreview: srcText.substring(0, 100),
               dstPreview: dstText.substring(0, 100),
@@ -349,6 +369,10 @@ export function ResultChecker({
       // 7. Include Warnings from Cache (Backend detected)
       if ((block as any).warnings && Array.isArray((block as any).warnings)) {
         (block as any).warnings.forEach((wType: string) => {
+          const normalizedType = wType.replace("warning_", "");
+          if (normalizedType.includes("hangeul") || wType.includes("hangeul")) {
+            return;
+          }
           // Check if we already have this type for this block from text scan
           const alreadyHas = result.some(
             (r) => r.blockIndex === block.index && r.type === wType,
@@ -358,8 +382,6 @@ export function ResultChecker({
             let severity: "error" | "warning" | "info" = "error";
 
             // Handle both legacy and new warning_ prefixed types
-            const normalizedType = wType.replace("warning_", "");
-
             if (
               ["line_mismatch", "kana_residue", "hangeul_residue"].includes(
                 normalizedType,

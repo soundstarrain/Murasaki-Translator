@@ -189,6 +189,187 @@ def build_retry_feedback(missed_terms: List[tuple], coverage: float) -> str:
     return feedback
 
 
+def _parse_protect_pattern_lines(lines: List[str]) -> tuple:
+    """
+    Parse protection pattern lines.
+    - Ignore empty lines and comments (# or //)
+    - Prefix '!' to remove a base pattern
+    - Prefix '+' to force add (same as plain)
+    """
+    additions: List[str] = []
+    removals: List[str] = []
+    for raw in lines:
+        line = (raw or "").strip()
+        if not line:
+            continue
+        if line.startswith("#") or line.startswith("//"):
+            continue
+        if line.startswith("!"):
+            pat = line[1:].strip()
+            if pat:
+                removals.append(pat)
+            continue
+        if line.startswith("+"):
+            line = line[1:].strip()
+        if line:
+            additions.append(line)
+    return additions, removals
+
+
+def _parse_protect_pattern_payload(raw) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(p) for p in raw if str(p).strip()]
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return [str(p) for p in parsed if str(p).strip()]
+        except Exception:
+            pass
+        return [line for line in stripped.splitlines() if line.strip()]
+    return []
+
+
+def _collect_protect_rule_lines(rules: List[Dict]) -> tuple:
+    enabled = False
+    lines: List[str] = []
+    for rule in rules or []:
+        if not rule or not rule.get("active", True):
+            continue
+        if rule.get("type") == "protect" or rule.get("pattern") == "text_protect":
+            enabled = True
+            options = rule.get("options") if isinstance(rule.get("options"), dict) else {}
+            raw = options.get("patterns")
+            lines.extend(_parse_protect_pattern_payload(raw))
+    return enabled, lines
+
+
+def _collect_legacy_protect_lines(post_rules: List[Dict]) -> List[str]:
+    lines: List[str] = []
+    for rule in post_rules or []:
+        if not rule or not rule.get("active", True):
+            continue
+        if rule.get("pattern") == "restore_protection":
+            options = rule.get("options") if isinstance(rule.get("options"), dict) else {}
+            raw = options.get("customPattern")
+            lines.extend(_parse_protect_pattern_payload(raw))
+    return lines
+
+
+def _merge_protect_patterns(base: Optional[List[str]], additions: List[str], removals: List[str]) -> List[str]:
+    merged = list(base) if base else []
+    for pat in additions:
+        if pat and pat not in merged:
+            merged.append(pat)
+    if removals:
+        merged = [p for p in merged if p not in removals]
+    return merged
+
+
+def _allow_text_protect(input_path: Optional[str], args) -> bool:
+    if getattr(args, "single_block", None) and not input_path:
+        return True
+    if getattr(args, "alignment_mode", False):
+        if not input_path:
+            return True
+        return os.path.splitext(input_path)[1].lower() == ".txt"
+    if not input_path:
+        return False
+    ext = os.path.splitext(input_path)[1].lower()
+    return ext == ".txt"
+
+
+def _normalize_anchor_stream(text: str) -> str:
+    """Normalize potentially mangled @id/@end anchors (full-width, spaces, newlines)."""
+    if not text:
+        return text
+
+    def _normalize_digits(s: str) -> str:
+        return s.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+
+    def _fix_id(m: re.Match) -> str:
+        return f"@id={_normalize_digits(m.group(1))}@"
+
+    def _fix_end(m: re.Match) -> str:
+        return f"@end={_normalize_digits(m.group(1))}@"
+
+    text = re.sub(
+        r"[@＠]\s*[iｉIＩ]\s*[dｄDＤ]\s*[=＝]\s*([0-9０-９]+)\s*[@＠]",
+        _fix_id,
+        text,
+    )
+    text = re.sub(
+        r"[@＠]\s*[eｅEＥ]\s*[nｎNＮ]\s*[dｄDＤ]\s*[=＝]\s*([0-9０-９]+)\s*[@＠]",
+        _fix_end,
+        text,
+    )
+    return text
+
+
+def _detect_anchor_missing(original_src_text: str, output_text: str, args) -> tuple:
+    """
+    Detect missing core anchors for structured formats.
+    Returns (missing: bool, meta: dict).
+    """
+    if not getattr(args, "anchor_check", False):
+        return False, {}
+
+    file_path = getattr(args, "file", "") or ""
+    ext = os.path.splitext(file_path)[1].lower()
+
+    # Alignment mode: @id=ID@ ... @id=ID@ (same marker twice)
+    if getattr(args, "alignment_mode", False):
+        src_norm = _normalize_anchor_stream(original_src_text)
+        out_norm = _normalize_anchor_stream(output_text)
+        src_ids = re.findall(r"@id=(\d+)@", src_norm)
+        if not src_ids:
+            return False, {}
+        out_ids = re.findall(r"@id=(\d+)@", out_norm)
+        counts = {}
+        for uid in out_ids:
+            counts[uid] = counts.get(uid, 0) + 1
+        missing = [uid for uid in set(src_ids) if counts.get(uid, 0) < 2]
+        if missing:
+            return True, {"format": "alignment", "missing_count": len(missing)}
+        return False, {}
+
+    # EPUB: require both @id= and @end= anchors for each id in the block
+    if ext == ".epub":
+        src_norm = _normalize_anchor_stream(original_src_text)
+        out_norm = _normalize_anchor_stream(output_text)
+        src_ids = re.findall(r"@id=(\d+)@", src_norm)
+        if not src_ids:
+            return False, {}
+        out_id_set = set(re.findall(r"@id=(\d+)@", out_norm))
+        out_end_set = set(re.findall(r"@end=(\d+)@", out_norm))
+        missing = [
+            uid for uid in set(src_ids)
+            if uid not in out_id_set or uid not in out_end_set
+        ]
+        if missing:
+            return True, {"format": "epub", "missing_count": len(missing)}
+        return False, {}
+
+    # Subtitles (SRT/ASS/SSA): require timecode lines to remain
+    if ext in (".srt", ".ass", ".ssa"):
+        timecode_re = re.compile(
+            r"\d{2}:\d{2}:\d{2}[,\.]\d{1,3}\s*[-=]+>\s*\d{2}:\d{2}:\d{2}[,\.]\d{1,3}"
+        )
+        src_count = len(timecode_re.findall(original_src_text))
+        if src_count == 0:
+            return False, {}
+        dst_count = len(timecode_re.findall(output_text))
+        if dst_count < src_count:
+            return True, {"format": "subtitle", "src_count": src_count, "dst_count": dst_count}
+
+    return False, {}
+
+
 def translate_block_with_retry(
     block_idx: int,
     original_src_text: str,   # Needed for glossary checks and post-processing
@@ -221,18 +402,30 @@ def translate_block_with_retry(
     last_coverage = 0.0
     best_result = None
     retry_history = []  # Track all retry attempts for debugging
+    anchor_attempts = 0
+    structural_retry_happened = False
+    anchor_retry_budget = 0
+    if getattr(args, "anchor_check", False):
+        try:
+            anchor_retry_budget = max(0, int(getattr(args, "anchor_check_retries", 0)))
+        except Exception:
+            anchor_retry_budget = 0
     
     final_output = None
 
+    total_retry_budget = max(0, args.max_retries, args.coverage_retries, anchor_retry_budget)
+
     while True:
-        attempt = global_attempts + glossary_attempts
-        if attempt > (args.max_retries + args.coverage_retries): break
+        attempt = global_attempts + glossary_attempts + anchor_attempts
+        if attempt > total_retry_budget:
+            break
 
         current_temp = args.temperature
         current_rep_base = args.rep_penalty_base
         
-        if retry_reason == 'line_check' or retry_reason == 'strict_line_check':
-            current_temp = min(args.temperature + (global_attempts * args.retry_temp_boost), 1.2)
+        if retry_reason in ('line_check', 'strict_line_check', 'anchor_missing'):
+            retry_steps = max(1, global_attempts + anchor_attempts)
+            current_temp = min(args.temperature + (retry_steps * args.retry_temp_boost), 1.2)
         elif retry_reason == 'glossary':
             current_temp = max(args.temperature - (glossary_attempts * args.retry_temp_boost), 0.3)
 
@@ -279,6 +472,7 @@ def translate_block_with_retry(
             if global_attempts < args.max_retries:
                 global_attempts += 1
                 retry_reason = 'empty'
+                structural_retry_happened = True
                 retry_history.append({'attempt': global_attempts, 'type': 'empty', 'raw_output': raw_output or ''})
                 safe_print_json("JSON_RETRY", {'block': block_idx + 1, 'attempt': global_attempts, 'type': 'empty', 'temp': round(current_temp, 2)})
                 continue
@@ -302,12 +496,45 @@ def translate_block_with_retry(
             if global_attempts < args.max_retries:
                 global_attempts += 1
                 retry_reason = error_type
+                structural_retry_happened = True
                 retry_history.append({'attempt': global_attempts, 'type': error_type, 'src_lines': src_line_count, 'dst_lines': dst_line_count, 'raw_output': raw_output or ''})
                 safe_print_json("JSON_RETRY", {'block': block_idx + 1, 'attempt': global_attempts, 'type': error_type, 'src_lines': src_line_count, 'dst_lines': dst_line_count, 'temp': round(current_temp, 2)})
                 continue
-            else: break
+            else:
+                # No retry budget left: keep current output and skip lower-priority retries
+                structural_retry_happened = True
+        
+        # Core Anchor Check (EPUB / Subtitle / Alignment)
+        anchor_check_text = "\n".join(parsed_lines)
+        if protector:
+            try:
+                anchor_check_text = protector.restore(anchor_check_text)
+            except Exception:
+                pass
+        anchor_missing, anchor_meta = _detect_anchor_missing(
+            original_src_text,
+            anchor_check_text,
+            args
+        )
+        if anchor_missing:
+            if anchor_attempts < anchor_retry_budget:
+                anchor_attempts += 1
+                retry_reason = 'anchor_missing'
+                structural_retry_happened = True
+                retry_payload = {
+                    'block': block_idx + 1,
+                    'attempt': anchor_attempts,
+                    'type': 'anchor_missing',
+                    'temp': round(current_temp, 2),
+                }
+                retry_payload.update(anchor_meta or {})
+                retry_history.append({**retry_payload, 'raw_output': raw_output or ''})
+                safe_print_json("JSON_RETRY", retry_payload)
+                continue
+            # No retry budget left: keep current output and skip lower-priority retries
+            structural_retry_happened = True
 
-        if glossary and args.output_hit_threshold > 0:
+        if glossary and args.output_hit_threshold > 0 and not structural_retry_happened:
             translated_text = '\n'.join(parsed_lines)
             passed, coverage, cot_coverage, hit, total = calculate_glossary_coverage(
                 original_src_text, translated_text, glossary, cot_content,
@@ -555,7 +782,76 @@ def translate_single_block(args):
     # Load Rules (Optional)
     pre_rules = load_rules(args.rules_pre) if hasattr(args, 'rules_pre') and args.rules_pre else []
     post_rules = load_rules(args.rules_post) if hasattr(args, 'rules_post') and args.rules_post else []
-    
+
+    protect_rule_enabled, protect_rule_lines = _collect_protect_rule_lines(pre_rules)
+    legacy_protect_lines = _collect_legacy_protect_lines(post_rules)
+    input_path = getattr(args, 'file', '') or ""
+    text_protect_allowed = _allow_text_protect(input_path, args)
+    if text_protect_allowed:
+        if protect_rule_enabled and not args.text_protect:
+            print("[Auto-Config] Pre-rules text protection enabled.")
+            args.text_protect = True
+        if legacy_protect_lines and not args.text_protect:
+            print("[Auto-Config] Legacy protection rule detected. Enabling TextProtector.")
+            args.text_protect = True
+        if args.protect_patterns and not args.text_protect:
+            print("[Auto-Config] protect_patterns provided. Enabling TextProtector.")
+            args.text_protect = True
+    else:
+        if args.text_protect or protect_rule_enabled or legacy_protect_lines or args.protect_patterns:
+            print("[TextProtect] Disabled for non-txt input.")
+        args.text_protect = False
+        protect_rule_lines = []
+        legacy_protect_lines = []
+
+    post_rules = [r for r in post_rules if r.get('pattern') != 'restore_protection']
+    if text_protect_allowed and args.text_protect:
+        post_rules.append({"type": "format", "pattern": "restore_protection", "active": True})
+
+    custom_protector_patterns = None
+    if text_protect_allowed:
+        if getattr(args, 'file', '').lower().endswith(('.srt', '.ass', '.ssa')):
+            custom_protector_patterns = TextProtector.SUBTITLE_PATTERNS
+        elif getattr(args, 'file', '').lower().endswith('.epub'):
+            custom_protector_patterns = [r'@id=\d+@', r'@end=\d+@', r'<[^>]+>']
+        elif args.alignment_mode:
+            anchor_patterns = [r'@id=\d+@', r'@end=\d+@']
+            custom_protector_patterns = _merge_protect_patterns(
+                TextProtector.DEFAULT_PATTERNS,
+                anchor_patterns,
+                []
+            )
+
+        additions: List[str] = []
+        removals: List[str] = []
+        if protect_rule_lines:
+            add, rem = _parse_protect_pattern_lines(protect_rule_lines)
+            additions.extend(add)
+            removals.extend(rem)
+        if legacy_protect_lines:
+            add, rem = _parse_protect_pattern_lines(legacy_protect_lines)
+            additions.extend(add)
+            removals.extend(rem)
+        if args.protect_patterns and os.path.exists(args.protect_patterns):
+            try:
+                raw_text = ""
+                with open(args.protect_patterns, 'r', encoding='utf-8') as f:
+                    raw_text = f.read()
+                file_lines = _parse_protect_pattern_payload(raw_text)
+                add, rem = _parse_protect_pattern_lines(file_lines)
+                additions.extend(add)
+                removals.extend(rem)
+            except Exception as e:
+                print(f"[Warning] Failed to load protection patterns: {e}")
+
+        if additions or removals:
+            base_patterns = (
+                custom_protector_patterns
+                if custom_protector_patterns
+                else TextProtector.DEFAULT_PATTERNS
+            )
+            custom_protector_patterns = _merge_protect_patterns(base_patterns, additions, removals)
+
     pre_processor = RuleProcessor(pre_rules)
     post_processor = RuleProcessor(post_rules)
     prompt_builder = PromptBuilder(glossary)
@@ -563,9 +859,8 @@ def translate_single_block(args):
     
     # Initialize Text Protector
     protector = None
-    if getattr(args, 'text_protect', False):
-         # Try to get patterns from app data or default
-         protector = TextProtector()
+    if text_protect_allowed and getattr(args, 'text_protect', False):
+         protector = TextProtector(patterns=custom_protector_patterns)
     
     
     # 针对 SRT/ASS 的特殊工程化处理 (Rule Melting)
@@ -799,6 +1094,8 @@ def main():
     parser.add_argument("--line-check", action="store_true", help="Enable line count validation and auto-retry")
     parser.add_argument("--line-tolerance-abs", type=int, default=10, help="Line count absolute tolerance (default 10)")
     parser.add_argument("--line-tolerance-pct", type=float, default=0.2, help="Line count percent tolerance (default 0.2 = 20%%)")
+    parser.add_argument("--anchor-check", action="store_true", help="Enable core anchor validation and auto-retry (EPUB/SRT/ASS/Alignment)")
+    parser.add_argument("--anchor-check-retries", type=int, default=1, help="Max retries for anchor check (default 1)")
     parser.add_argument("--rep-penalty-base", type=float, default=1.0, help="Initial repetition penalty (default 1.0)")
     parser.add_argument("--rep-penalty-max", type=float, default=1.5, help="Max repetition penalty (default 1.5)")
     parser.add_argument("--rep-penalty-step", type=float, default=0.1, help="Internal loop penalty increment (default 0.1)")
@@ -807,18 +1104,34 @@ def main():
     # Glossary Coverage Check (术语表覆盖率检测)
     parser.add_argument("--output-hit-threshold", type=float, default=60.0, help="Min output exact hit percentage to pass (default 60)")
     parser.add_argument("--cot-coverage-threshold", type=float, default=80.0, help="Min CoT coverage percentage to pass (default 80)")
-    parser.add_argument("--coverage-retries", type=int, default=2, help="Max retries for low coverage (default 2)")
+    parser.add_argument("--coverage-retries", type=int, default=1, help="Max retries for low coverage (default 1)")
     
     # Dynamic Retry Strategy (动态重试策略)
     parser.add_argument("--retry-temp-boost", type=float, default=0.05, help="Temperature boost per retry (default 0.05)")
-    parser.add_argument("--retry-prompt-feedback", action="store_true", default=True, help="Inject feedback about missed terms in retry prompts")
+    retry_prompt_group = parser.add_mutually_exclusive_group()
+    retry_prompt_group.add_argument(
+        "--retry-prompt-feedback",
+        dest="retry_prompt_feedback",
+        action="store_true",
+        help="Inject feedback about missed terms in retry prompts",
+    )
+    retry_prompt_group.add_argument(
+        "--no-retry-prompt-feedback",
+        dest="retry_prompt_feedback",
+        action="store_false",
+        help="Disable retry prompt feedback injection",
+    )
+    parser.set_defaults(retry_prompt_feedback=True)
     
     # Incremental Translation (增量翻译)
     parser.add_argument("--resume", action="store_true", help="Resume from existing output file (skip translated content)")
 
     # Text Protection (文本保护)
     parser.add_argument("--text-protect", action="store_true", help="Protect variables/tags from translation")
-    parser.add_argument("--protect-patterns", help="Path to custom protection patterns file (one regex per line)")
+    parser.add_argument(
+        "--protect-patterns",
+        help="Path to custom protection patterns file (JSON list or one regex per line; supports #/ // comments, ! remove, + add)",
+    )
 
     # Cache & Proofreading (缓存与校对)
     parser.add_argument("--save-cache", action="store_true", help="Save translation cache for proofreading")
@@ -1104,18 +1417,26 @@ def main():
         add_unique_rule(post_rules, "traditional_chinese")
 
     add_unique_rule(post_rules, "number_fixer")
+    protect_rule_enabled, protect_rule_lines = _collect_protect_rule_lines(pre_rules)
+    legacy_protect_lines = _collect_legacy_protect_lines(post_rules)
+    text_protect_allowed = _allow_text_protect(input_path, args)
+    if text_protect_allowed:
+        if protect_rule_enabled and not args.text_protect:
+            print("[Auto-Config] Pre-rules text protection enabled.")
+            args.text_protect = True
+        if legacy_protect_lines and not args.text_protect:
+            print("[Auto-Config] Legacy protection rule detected. Enabling TextProtector.")
+            args.text_protect = True
+    else:
+        if args.text_protect or protect_rule_enabled or legacy_protect_lines or args.protect_patterns:
+            print("[TextProtect] Disabled for non-txt input.")
+        args.text_protect = False
+        protect_rule_lines = []
+        legacy_protect_lines = []
 
-    # [Audit Fix] Auto-detect protection requirement from rules
-    protection_rules = [r for r in post_rules if r.get('pattern') == 'restore_protection']
-    
     # [Formula Factory] Structured engineering
     if is_structured:
-        # 1. 强制开启标签保护 (即使前端没勾选，为了保护锚点 ID、结构和合法标签)
-        if not args.text_protect:
-            print(f"[Auto-Config] Structured document detected. Enabling TextProtector for structural safety.")
-            args.text_protect = True
-        
-        # 2. 规则熔断：针对字幕格式和对齐模式，剔除所有可能破坏换行或合并行数的规则
+        # 规则熔断：针对字幕格式和对齐模式，剔除所有可能破坏换行或合并行数的规则
         # Alignment Mode 必须享受同等的规则熔断待遇，否则 PostProcess 会破坏 @id@ 结构
         is_sub = input_path.lower().endswith(('.srt', '.ass', '.ssa')) or args.alignment_mode
         if is_sub:
@@ -1125,30 +1446,48 @@ def main():
             if len(post_rules) < original_count:
                 print(f"[Auto-Config] Subtitle/Alignment detected. Disabled {original_count - len(post_rules)} formatting rules to preserve structure.")
 
+    if text_protect_allowed and args.protect_patterns and not args.text_protect:
+        print("[Auto-Config] protect_patterns provided. Enabling TextProtector.")
+        args.text_protect = True
+
     # [Critical Fix] 强制将样式还原逻辑置于所有后处理规则的最末端，确保还原后不会再次被误伤
     # 先移除已有的（如果有），再追加到最后
     post_rules = [r for r in post_rules if r.get('pattern') != 'restore_protection']
-    if args.text_protect:
+    if text_protect_allowed and args.text_protect:
         add_unique_rule(post_rules, "restore_protection")
         print("[Auto-Config] Ensured 'restore_protection' is the final post-processing rule.")
 
     custom_protector_patterns = None
-    if input_path.lower().endswith(('.srt', '.ass', '.ssa')):
-        # [Specialized Rule] 针对字幕，优先使用合法的标签捕获规则，避免拦截 【】 （） [ ] 等
-        custom_protector_patterns = TextProtector.SUBTITLE_PATTERNS
-        print("[Auto-Config] Using restrictive SUBTITLE_PATTERNS for legal tags only.")
-    elif input_path.lower().endswith('.epub') or args.alignment_mode:
-        # [Specialized Rule] 针对 EPUB/Alignment，保护 @id=ID@/@end=ID@ 锚点和可能残留的 HTML 标签
-        custom_protector_patterns = [r'@id=\d+@', r'@end=\d+@', r'<[^>]+>']
-        print("[Auto-Config] Using EPUB_ANCHOR_PATTERNS for @id=ID@ anchors.")
+    if text_protect_allowed:
+        if input_path.lower().endswith(('.srt', '.ass', '.ssa')):
+            # [Specialized Rule] 针对字幕，优先使用合法的标签捕获规则，避免拦截 【】 （） [ ] 等
+            custom_protector_patterns = TextProtector.SUBTITLE_PATTERNS
+            print("[Auto-Config] Using restrictive SUBTITLE_PATTERNS for legal tags only.")
+        elif input_path.lower().endswith('.epub'):
+            # [Specialized Rule] 针对 EPUB，保护 @id=ID@/@end=ID@ 锚点和可能残留的 HTML 标签
+            custom_protector_patterns = [r'@id=\d+@', r'@end=\d+@', r'<[^>]+>']
+            print("[Auto-Config] Using EPUB_ANCHOR_PATTERNS for @id=ID@ anchors.")
+        elif args.alignment_mode:
+            # [Specialized Rule] 对齐模式基于 TXT：默认规则 + @id 锚点
+            anchor_patterns = [r'@id=\d+@', r'@end=\d+@']
+            custom_protector_patterns = _merge_protect_patterns(
+                TextProtector.DEFAULT_PATTERNS,
+                anchor_patterns,
+                []
+            )
+            print("[Auto-Config] Using ALIGNMENT_PATTERNS (DEFAULT + @id anchors).")
 
-    protection_rules = [r for r in post_rules if r.get('pattern') == 'restore_protection']
-    if protection_rules:
-        # Override protector patterns if customPattern is defined in rule options
-        rule_custom_patterns = [r.get('options', {}).get('customPattern') for r in protection_rules if r.get('options', {}).get('customPattern')]
-        if rule_custom_patterns:
-            custom_protector_patterns = rule_custom_patterns
-            print(f"[Auto-Config] Using {len(rule_custom_patterns)} custom protection pattern(s) from rules.")
+    additions: List[str] = []
+    removals: List[str] = []
+    if text_protect_allowed:
+        if protect_rule_lines:
+            add, rem = _parse_protect_pattern_lines(protect_rule_lines)
+            additions.extend(add)
+            removals.extend(rem)
+        if legacy_protect_lines:
+            add, rem = _parse_protect_pattern_lines(legacy_protect_lines)
+            additions.extend(add)
+            removals.extend(rem)
 
     pre_processor = RuleProcessor(pre_rules)
     post_processor = RuleProcessor(post_rules)
@@ -1236,19 +1575,30 @@ def main():
                     # [封装] 使用 clear() 方法，避免直接操作内部结构
                     translation_cache.clear()
         
-        # Load legacy custom protection patterns file if provided via CLI
-        if args.protect_patterns and os.path.exists(args.protect_patterns):
+        # Load legacy/custom protection patterns file if provided via CLI
+        if text_protect_allowed and args.protect_patterns and os.path.exists(args.protect_patterns):
              try:
                  with open(args.protect_patterns, 'r', encoding='utf-8') as f:
-                     legacy_patterns = [line.strip() for line in f if line.strip()]
-                     # If we don't already have patterns from the new Rule system, use these
-                     if not custom_protector_patterns:
-                         custom_protector_patterns = legacy_patterns
-                         print(f"Loaded {len(custom_protector_patterns)} legacy protection patterns from file.")
-                     else:
-                         print("[Info] New rule-based protection pattern taking precedence over legacy file.")
+                     raw_text = f.read()
+                 file_lines = _parse_protect_pattern_payload(raw_text)
+                 add, rem = _parse_protect_pattern_lines(file_lines)
+                 additions.extend(add)
+                 removals.extend(rem)
              except Exception as e:
-                 print(f"[Warning] Failed to load legacy protection patterns: {e}")
+                 print(f"[Warning] Failed to load protection patterns: {e}")
+
+        if text_protect_allowed and (additions or removals):
+            base_patterns = (
+                custom_protector_patterns
+                if custom_protector_patterns
+                else TextProtector.DEFAULT_PATTERNS
+            )
+            merged_patterns = _merge_protect_patterns(base_patterns, additions, removals)
+            custom_protector_patterns = merged_patterns
+            print(
+                f"[TextProtect] Merged custom patterns (+{len(additions)} / -{len(removals)}). "
+                f"Total={len(custom_protector_patterns)}"
+            )
         
         gpu_name = get_gpu_name()  # Get GPU Name once
         display_name, params, quant = format_model_info(args.model)
@@ -1264,6 +1614,7 @@ def main():
         print("\n[Config] Feature Status:")
         print(f"  Temperature: {args.temperature}")
         print(f"  Line Check: {'[V] Enabled' if args.line_check else '[X] Disabled'} (±{args.line_tolerance_abs}/{args.line_tolerance_pct*100:.0f}%)")
+        print(f"  Anchor Check: {'[V] Enabled' if args.anchor_check else '[X] Disabled'} (Retries={args.anchor_check_retries})")
         print(f"  Rep Penalty Retry: Base={args.rep_penalty_base}, Max={args.rep_penalty_max}")
         print(f"  Max Retries: {args.max_retries}")
         print(f"  Glossary Coverage: {'[V] Enabled' if args.output_hit_threshold < 100 else '[X] Disabled'} (Output>={args.output_hit_threshold}% or CoT>={args.cot_coverage_threshold}%, Retries={args.coverage_retries})")

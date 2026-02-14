@@ -14,6 +14,8 @@ export interface FileConfig {
   lineCheck?: boolean;
   lineToleranceAbs?: number;
   lineTolerancePct?: number;
+  anchorCheck?: boolean;
+  anchorCheckRetries?: number;
   strictMode?: string;
   repPenaltyBase?: number;
   repPenaltyMax?: number;
@@ -21,6 +23,8 @@ export interface FileConfig {
   maxRetries?: number;
   retryTempBoost?: number;
   retryPromptFeedback?: boolean;
+  textProtect?: boolean;
+  protectPatterns?: string;
 
   // Features
   alignmentMode?: boolean;

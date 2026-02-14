@@ -33,6 +33,7 @@ import { AlertModal } from "./ui/AlertModal";
 import { translations, Language } from "../lib/i18n";
 import { APP_CONFIG, DEFAULT_POST_RULES } from "../lib/config";
 import { cn } from "../lib/utils";
+import { buildConfigSnapshot, parseConfigSnapshot } from "../lib/configSnapshot";
 import { LogViewerModal } from "./LogViewerModal";
 import { EnvFixerModal } from "./EnvFixerModal";
 
@@ -427,6 +428,153 @@ export function SettingsView({ lang }: { lang: Language }) {
     setTimeout(() => setSaved(false), 2000);
   };
 
+  const buildSnapshotFileName = () => {
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .replace("T", "_")
+      .slice(0, 19);
+    return `${APP_CONFIG.name}_config_${stamp}.json`;
+  };
+
+  const resolveDefaultSavePath = async (fileName: string) => {
+    const candidates = [
+      localStorage.getItem("config_output_dir"),
+      localStorage.getItem("last_output_dir"),
+      localStorage.getItem("config_cache_dir"),
+      localStorage.getItem("last_input_path"),
+    ].filter(Boolean) as string[];
+    const resolveFolderFromPath = (value: string) => {
+      if (!value) return "";
+      const hasSlash = value.includes("/") || value.includes("\\");
+      const looksLikeFile = /\.[^\\/]+$/.test(value);
+      if (hasSlash && looksLikeFile) {
+        return value.replace(/[\\/][^\\/]+$/, "");
+      }
+      return value;
+    };
+    const folder = candidates
+      .map((item) => resolveFolderFromPath(item))
+      .find((item) => item && item.length > 0);
+    if (!folder) {
+      const modelsPath = await window.api?.getModelsPath?.();
+      if (modelsPath) {
+        const sep = modelsPath.includes("\\") ? "\\" : "/";
+        return `${modelsPath}${sep}${fileName}`;
+      }
+      return "";
+    }
+    const sep = folder.includes("\\") ? "\\" : "/";
+    const normalized = folder.endsWith("\\") || folder.endsWith("/")
+      ? folder.slice(0, -1)
+      : folder;
+    return `${normalized}${sep}${fileName}`;
+  };
+
+  const handleExportSnapshot = async () => {
+    try {
+      const snapshot = buildConfigSnapshot(APP_CONFIG.version);
+      const defaultPath = await resolveDefaultSavePath(buildSnapshotFileName());
+      const filePath = await window.api?.saveFile?.({
+        title: settingsText.snapshotExportTitle,
+        defaultPath: defaultPath || undefined,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!filePath) return;
+      let ok = false;
+      let writeError = "";
+      if (window.api?.writeFileVerbose) {
+        const result = await window.api.writeFileVerbose(
+          filePath,
+          JSON.stringify(snapshot, null, 2),
+        );
+        ok = result?.ok === true;
+        writeError = result?.error || "";
+      } else {
+        ok = Boolean(
+          await window.api?.writeFile?.(
+            filePath,
+            JSON.stringify(snapshot, null, 2),
+          ),
+        );
+      }
+      if (!ok) {
+        throw new Error(writeError || settingsText.snapshotExportFailDesc);
+      }
+      setAlertConfig({
+        open: true,
+        title: settingsText.snapshotExportSuccessTitle,
+        description: settingsText.snapshotExportSuccessDesc,
+        variant: "success",
+        showCancel: false,
+        confirmText: t.common.confirm,
+        onConfirm: () => setAlertConfig((prev) => ({ ...prev, open: false })),
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setAlertConfig({
+        open: true,
+        title: settingsText.snapshotExportFailTitle,
+        description:
+          message === settingsText.snapshotExportFailDesc
+            ? settingsText.snapshotExportFailDesc
+            : `${settingsText.snapshotExportFailDesc}\n${message}`,
+        variant: "destructive",
+        showCancel: false,
+        confirmText: t.common.confirm,
+        onConfirm: () => setAlertConfig((prev) => ({ ...prev, open: false })),
+      });
+    }
+  };
+
+  const handleImportSnapshot = async () => {
+    try {
+      const filePath = await window.api?.selectFile?.({
+        title: settingsText.snapshotImportTitle,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!filePath) return;
+      const raw = await window.api?.readFile?.(filePath);
+      if (!raw) throw new Error(settingsText.snapshotImportFailDesc);
+      const parsed = parseConfigSnapshot(raw);
+      if (parsed.error || !parsed.snapshot) {
+        throw new Error(parsed.error || settingsText.snapshotImportFailDesc);
+      }
+      const snapshot = parsed.snapshot;
+      const count = Object.keys(snapshot.data).length;
+      setAlertConfig({
+        open: true,
+        title: settingsText.snapshotImportConfirmTitle,
+        description: settingsText.snapshotImportConfirmDesc
+          .replace("{count}", String(count))
+          .replace("{version}", String(snapshot.version)),
+        variant: "warning",
+        confirmText: settingsText.snapshotImportConfirm,
+        showCancel: true,
+        onConfirm: () => {
+          Object.entries(snapshot.data).forEach(([key, value]) => {
+            localStorage.setItem(key, value);
+          });
+          window.location.reload();
+        },
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setAlertConfig({
+        open: true,
+        title: settingsText.snapshotImportFailTitle,
+        description:
+          message === settingsText.snapshotImportFailDesc
+            ? settingsText.snapshotImportFailDesc
+            : `${settingsText.snapshotImportFailDesc}\n${message}`,
+        variant: "destructive",
+        showCancel: false,
+        confirmText: t.common.confirm,
+        onConfirm: () => setAlertConfig((prev) => ({ ...prev, open: false })),
+      });
+    }
+  };
+
   // Alert State
   const [alertConfig, setAlertConfig] = useState<{
     open: boolean;
@@ -464,9 +612,6 @@ export function SettingsView({ lang }: { lang: Language }) {
           "last_preview_blocks",
           "config_rules_pre",
           "config_rules_post",
-          "murasaki_quickstart_state",
-          "murasaki_quickstart_seen",
-          "murasaki_guide_dismissed",
         ];
 
         Object.keys(localStorage).forEach((key) => {
@@ -634,18 +779,52 @@ export function SettingsView({ lang }: { lang: Language }) {
       mainProcessLogs: mainProcessLogs,
     };
 
-    const content = JSON.stringify(debugData, null, 2);
-    const blob = new Blob([content], {
-      type: "application/json;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `murasaki_debug_${new Date().toISOString().slice(0, 10)}_${Date.now()}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    try {
+      const content = JSON.stringify(debugData, null, 2);
+      const fileName = `murasaki_debug_${new Date()
+        .toISOString()
+        .slice(0, 10)}_${Date.now()}.json`;
+      const defaultPath = await resolveDefaultSavePath(fileName);
+      const filePath = await window.api?.saveFile?.({
+        title: settingsText.exportDebug,
+        defaultPath: defaultPath || undefined,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!filePath) return;
+      let ok = false;
+      let writeError = "";
+      if (window.api?.writeFileVerbose) {
+        const result = await window.api.writeFileVerbose(filePath, content);
+        ok = result?.ok === true;
+        writeError = result?.error || "";
+      } else {
+        ok = Boolean(await window.api?.writeFile?.(filePath, content));
+      }
+      if (!ok) throw new Error(writeError || settingsText.exportDebugFailDesc);
+      setAlertConfig({
+        open: true,
+        title: settingsText.exportDebugSuccessTitle,
+        description: settingsText.exportDebugSuccessDesc,
+        variant: "success",
+        showCancel: false,
+        confirmText: t.common.confirm,
+        onConfirm: () => setAlertConfig((prev) => ({ ...prev, open: false })),
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setAlertConfig({
+        open: true,
+        title: settingsText.exportDebugFailTitle,
+        description:
+          message === settingsText.exportDebugFailDesc
+            ? settingsText.exportDebugFailDesc
+            : `${settingsText.exportDebugFailDesc}\n${message}`,
+        variant: "destructive",
+        showCancel: false,
+        confirmText: t.common.confirm,
+        onConfirm: () => setAlertConfig((prev) => ({ ...prev, open: false })),
+      });
+    }
   };
 
   const renderEnvFixerContent = () => {
@@ -1232,6 +1411,45 @@ export function SettingsView({ lang }: { lang: Language }) {
                   ? t.settingsView.cacheDirDesc
                   : t.settingsView.cacheDirDefaultDesc}
               </p>
+            </div>
+
+            <div className="h-px bg-border" />
+
+            {/* Config Snapshot */}
+            <div className="space-y-3">
+              <label className="text-sm font-medium block">
+                {settingsText.snapshotTitle}
+              </label>
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-border/60 bg-muted/20 p-3">
+                <div className="min-w-0">
+                  <p className="text-xs text-muted-foreground">
+                    {settingsText.snapshotDesc}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground/70 mt-1">
+                    {APP_CONFIG.name} v{APP_CONFIG.version}
+                  </p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={handleExportSnapshot}
+                  >
+                    <Download className="w-4 h-4" />
+                    {settingsText.snapshotExport}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={handleImportSnapshot}
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    {settingsText.snapshotImport}
+                  </Button>
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>

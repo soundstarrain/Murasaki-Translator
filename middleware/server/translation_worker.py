@@ -128,7 +128,7 @@ class TranslationWorker:
         middleware_dir = Path(__file__).parent.parent
         cleanup_roots = [middleware_dir, self._temp_artifact_dir]
         name_pattern = re.compile(
-            r"^(rules_pre_|rules_post_|protect_patterns_|temp_rules_pre_|temp_rules_post_).*\.(json|txt)$",
+            r"^(rules_pre_|rules_post_|protect_patterns_|temp_rules_pre_|temp_rules_post_|temp_protect_patterns_).*\.(json|txt)$",
             re.IGNORECASE,
         )
 
@@ -488,14 +488,14 @@ class TranslationWorker:
                     task.add_log(f"[Worker] 使用当前配置继续 (ctx: {self._current_config['ctx']})")
                     effective_config = {
                         "model_path": self._current_config["model_path"] or requested_model_path,
-                        "ctx": self._current_config["ctx"] if self._current_config["ctx"] is not None else request.ctx,
-                        "gpu_layers": self._current_config["gpu_layers"] if self._current_config["gpu_layers"] is not None else request.gpu_layers,
-                        "flash_attn": self._current_config["flash_attn"] if self._current_config["flash_attn"] is not None else request.flash_attn,
-                        "kv_cache_type": self._current_config["kv_cache_type"] if self._current_config["kv_cache_type"] is not None else request.kv_cache_type,
-                        "parallel": self._current_config["parallel"] if self._current_config["parallel"] is not None else request.parallel,
-                        "use_large_batch": self._current_config["use_large_batch"] if self._current_config["use_large_batch"] is not None else request.use_large_batch,
-                        "batch_size": self._current_config["batch_size"] if self._current_config["batch_size"] is not None else request.batch_size,
-                        "seed": self._current_config["seed"] if self._current_config["seed"] is not None else request.seed,
+                        "ctx": self._current_config["ctx"],
+                        "gpu_layers": self._current_config["gpu_layers"],
+                        "flash_attn": self._current_config["flash_attn"],
+                        "kv_cache_type": self._current_config["kv_cache_type"],
+                        "parallel": self._current_config["parallel"],
+                        "use_large_batch": self._current_config["use_large_batch"],
+                        "batch_size": self._current_config["batch_size"],
+                        "seed": self._current_config["seed"],
                     }
                 else:
                     # 没有任务运行，可以安全重启
@@ -601,7 +601,7 @@ class TranslationWorker:
                 temp_artifacts.append(temp_file.name)
                 return temp_file.name
 
-            parallel = max(1, int(request.parallel))
+            parallel = max(1, int(effective_config.get("parallel") or 1))
 
             # 构建命令行参数（关键：使用 --no-server-spawn 连接常驻服务器）
             cmd = [
@@ -645,6 +645,11 @@ class TranslationWorker:
                     "--line-tolerance-abs", str(request.line_tolerance_abs),
                     "--line-tolerance-pct", str(request.line_tolerance_pct),
                 ])
+            if request.anchor_check:
+                cmd.extend([
+                    "--anchor-check",
+                    "--anchor-check-retries", str(request.anchor_check_retries),
+                ])
 
             if request.balance_enable:
                 cmd.append("--balance-enable")
@@ -682,6 +687,8 @@ class TranslationWorker:
 
             if request.retry_prompt_feedback:
                 cmd.append("--retry-prompt-feedback")
+            else:
+                cmd.append("--no-retry-prompt-feedback")
 
             if effective_config["flash_attn"]:
                 cmd.append("--flash-attn")
@@ -689,12 +696,12 @@ class TranslationWorker:
             if effective_config["kv_cache_type"]:
                 cmd.extend(["--kv-cache-type", effective_config["kv_cache_type"]])
 
-            if request.use_large_batch:
+            if effective_config.get("use_large_batch"):
                 cmd.append("--use-large-batch")
-            if request.batch_size:
-                cmd.extend(["--batch-size", str(request.batch_size)])
-            if request.seed is not None:
-                cmd.extend(["--seed", str(request.seed)])
+            if effective_config.get("batch_size"):
+                cmd.extend(["--batch-size", str(effective_config["batch_size"])])
+            if effective_config.get("seed") is not None:
+                cmd.extend(["--seed", str(effective_config["seed"])])
 
             if request.text_protect:
                 cmd.append("--text-protect")
@@ -863,12 +870,14 @@ if __name__ == "__main__":
             chunk_size = 1000
             ctx = 8192
             gpu_layers = -1
-            temperature = 0.3
+            temperature = 0.7
             line_format = "single"
             strict_mode = "off"
             line_check = False
             line_tolerance_abs = 10
             line_tolerance_pct = 0.2
+            anchor_check = True
+            anchor_check_retries = 1
             traditional = False
             save_cot = False
             save_summary = False
@@ -886,16 +895,16 @@ if __name__ == "__main__":
             max_retries = 3
             output_hit_threshold = 60.0
             cot_coverage_threshold = 80.0
-            coverage_retries = 3
+            coverage_retries = 1
             retry_temp_boost = 0.05
             retry_prompt_feedback = True
-            balance_enable = False
+            balance_enable = True
             balance_threshold = 0.6
             balance_count = 3
             parallel = 1
             flash_attn = False
             kv_cache_type = "f16"
-            use_large_batch = False
+            use_large_batch = True
             batch_size = None
             seed = None
             text_protect = False

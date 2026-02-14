@@ -38,14 +38,14 @@ class TextProtector:
     ]
     
     
-    def __init__(self, patterns: List[str] = None, enabled: bool = True, placeholder_format: str = "@{index}@", block_id: int = 0, aggressive_cleaning: bool = False):
+    def __init__(self, patterns: List[str] = None, enabled: bool = True, placeholder_format: str = "@P{index}@", block_id: int = 0, aggressive_cleaning: bool = False):
         """
         初始化文本保护器。
         
         Args:
             patterns: 正则表达式列表，匹配需要保护的文本
             enabled: 是否启用保护
-            placeholder_format: 占位符格式，默认为 @{index}@
+            placeholder_format: 占位符格式，默认为 @P{index}@
             block_id: 当前分块 ID，用于元数据追踪
             aggressive_cleaning: 是否启用激进的占位符清洗（吞噬占位符后的空格）。
                                  ASS 格式建议开启（防止排版偏移），SRT 格式建议关闭（防止吞噬换行）。
@@ -79,7 +79,17 @@ class TextProtector:
                         if orig == original:
                             return placeholder
                     
-                    placeholder = self.placeholder_format.replace("{block_id}", str(self.block_id)).replace("{index}", str(self.counter))
+                    # Avoid collisions with existing system markers or original text
+                    while True:
+                        placeholder = (
+                            self.placeholder_format
+                            .replace("{block_id}", str(self.block_id))
+                            .replace("{index}", str(self.counter))
+                        )
+                        if placeholder not in result and placeholder not in self.replacements:
+                            break
+                        self.counter += 1
+
                     self.counter += 1
                     self.replacements[placeholder] = original
                     return placeholder
@@ -100,9 +110,9 @@ class TextProtector:
         
         result = text
         
-        # 按照索引降序尝试还原（防止 @11@ 先被 @1@ 替换）
-        # 我们这里重新构建一个索引映射，因为 keys 现在可能是 @1@ 这种格式
-        # 假设格式是 @{index}@
+        # 按照索引降序尝试还原（防止 @P11@ 先被 @P1@ 替换）
+        # 我们这里重新构建一个索引映射，因为 keys 现在可能是 @P1@ 这种格式
+        # 假设格式是 @P{index}@
         items = []
         for placeholder, original in self.replacements.items():
             match = re.search(r'(\d+)', placeholder)
@@ -117,10 +127,10 @@ class TextProtector:
             # 核心修复：之前的 strict replace 无法消除模型在占位符后插入的空格
             # 现在的正则会自动吞噬占位符后的所有空白 (\s*)
             
-            # 针对 @N@ 格式构造一个模糊正则
+            # 针对 @P{N}@ 格式构造一个模糊正则
             # 允许在 @ 符号和数字之间有任意空格，允许全半角混杂
-            safe_placeholder = re.escape(placeholder) # e.g. \@1\@
-            # 构造一个能匹配 @1@, @ 1 @, ＠１＠, ＠　１　＠ 的正则
+            safe_placeholder = re.escape(placeholder) # e.g. \@P1\@
+            # 构造一个能匹配 @P1@, @ P 1 @, ＠Ｐ１＠, ＠　Ｐ　１　＠ 的正则
             # 把每个字符都变成 [字符|全角字符]\s*
             fuzzy_pattern = ""
             for i, char in enumerate(placeholder):

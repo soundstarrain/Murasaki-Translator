@@ -13,6 +13,7 @@ import {
 import { translations, Language } from "../lib/i18n";
 import { AlertModal } from "./ui/AlertModal";
 import { useAlertModal } from "../hooks/useAlertModal";
+import { emitToast } from "../lib/toast";
 
 interface GlossaryConverterProps {
   onClose: () => void;
@@ -196,6 +197,7 @@ export function GlossaryConverter({
         "Murasaki Translator",
         t.glossaryConverter.saveSuccess,
       );
+      emitToast({ variant: "success", message: t.glossaryConverter.saveSuccess });
       onSuccess();
       onClose();
     } catch (e) {
@@ -208,7 +210,7 @@ export function GlossaryConverter({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in duration-300">
+    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in duration-300">
       <Card className="w-full max-w-4xl max-h-[85vh] flex flex-col shadow-[0_0_50px_-12px_rgba(138,43,226,0.3)] border-primary/20 bg-background/95 backdrop-blur-xl animate-in zoom-in-95 duration-200">
         <CardHeader className="flex flex-row items-center justify-between border-b px-6 py-4 bg-secondary/10">
           <div className="flex items-center gap-3">

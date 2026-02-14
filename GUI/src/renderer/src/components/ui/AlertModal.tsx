@@ -1,4 +1,5 @@
 import React from "react";
+import { createPortal } from "react-dom";
 import { Card, Button } from "./core";
 import { AlertTriangle, Info, CheckCircle2, X, RefreshCw } from "lucide-react";
 import { translations, Language } from "../../lib/i18n";
@@ -66,8 +67,8 @@ export function AlertModal({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+  const modalContent = (
+    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
       <Card className="w-full max-w-lg shadow-lg border-border bg-background animate-in zoom-in-95 duration-200">
         {showIcon ? (
           <div className="p-6 relative">
@@ -146,4 +147,6 @@ export function AlertModal({
       </Card>
     </div>
   );
+
+  return createPortal(modalContent, document.body);
 }

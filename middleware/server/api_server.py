@@ -511,7 +511,7 @@ class TranslateRequest(BaseModel):
     gpu_layers: int = Field(
         default_factory=lambda: _parse_env_int("MURASAKI_DEFAULT_GPU_LAYERS", -1)
     )
-    temperature: float = 0.3
+    temperature: float = 0.7
     
     # 高级选项
     line_format: str = "single"
@@ -519,6 +519,8 @@ class TranslateRequest(BaseModel):
     line_check: bool = True
     line_tolerance_abs: int = 10
     line_tolerance_pct: float = 0.2
+    anchor_check: bool = True
+    anchor_check_retries: int = 1
     traditional: bool = False
     save_cot: bool = False
     save_summary: bool = False
@@ -536,10 +538,10 @@ class TranslateRequest(BaseModel):
     max_retries: int = 3
     output_hit_threshold: float = 60.0
     cot_coverage_threshold: float = 80.0
-    coverage_retries: int = 3
+    coverage_retries: int = 1
     retry_temp_boost: float = 0.05
     retry_prompt_feedback: bool = True
-    balance_enable: bool = False
+    balance_enable: bool = True
     balance_threshold: float = 0.6
     balance_count: int = 3
     
@@ -558,7 +560,7 @@ class TranslateRequest(BaseModel):
         default_factory=lambda: _parse_env_str("MURASAKI_DEFAULT_KV_CACHE_TYPE", "f16")
     )
     use_large_batch: bool = Field(
-        default_factory=lambda: _parse_env_bool("MURASAKI_DEFAULT_USE_LARGE_BATCH", False)
+        default_factory=lambda: _parse_env_bool("MURASAKI_DEFAULT_USE_LARGE_BATCH", True)
     )
     batch_size: Optional[int] = Field(
         default_factory=lambda: _parse_env_optional_int(

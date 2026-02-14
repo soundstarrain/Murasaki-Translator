@@ -206,6 +206,7 @@ export { Label };
 
 // --- Tooltip Component (Portal-based to avoid overflow clipping) ---
 import { createPortal } from "react-dom";
+import { computeTooltipPosition } from "./tooltipPosition";
 
 interface TooltipProps {
   children: React.ReactNode;
@@ -219,42 +220,24 @@ const Tooltip = ({ children, content, className }: TooltipProps) => {
     top: 0,
     left: 0,
     placement: "top" as "top" | "bottom",
+    arrowLeft: 0,
   });
   const triggerRef = React.useRef<HTMLDivElement>(null);
   const tooltipRef = React.useRef<HTMLDivElement>(null);
 
-  const updatePosition = React.useCallback(() => {
-    if (triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      const tooltipHeight = 40; // Estimated tooltip height
-      const spacing = 8;
-
-      // Check if there's enough space above
-      const spaceAbove = rect.top;
-      const spaceBelow = window.innerHeight - rect.bottom;
-
-      // Prefer top, but use bottom if not enough space above
-      const placement =
-        spaceAbove < tooltipHeight + spacing && spaceBelow > spaceAbove
-          ? "bottom"
-          : "top";
-
-      // Calculate left position with boundary check
-      let left = rect.left + rect.width / 2;
-      const minLeft = 120; // Half of max tooltip width
-      const maxLeft = window.innerWidth - 120;
-      left = Math.max(minLeft, Math.min(left, maxLeft));
-
-      setPosition({
-        top: placement === "top" ? rect.top - spacing : rect.bottom + spacing,
-        left,
-        placement,
-      });
-    }
+  const recalcPosition = React.useCallback(() => {
+    if (!triggerRef.current || !tooltipRef.current) return;
+    const triggerRect = triggerRef.current.getBoundingClientRect();
+    const tooltipRect = tooltipRef.current.getBoundingClientRect();
+    const next = computeTooltipPosition({
+      triggerRect,
+      tooltipSize: { width: tooltipRect.width, height: tooltipRect.height },
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    });
+    setPosition(next);
   }, []);
 
   const handleMouseEnter = () => {
-    updatePosition();
     setIsVisible(true);
   };
 
@@ -272,6 +255,21 @@ const Tooltip = ({ children, content, className }: TooltipProps) => {
     return undefined;
   }, [isVisible]);
 
+  React.useLayoutEffect(() => {
+    if (!isVisible) return;
+    const frame = window.requestAnimationFrame(() => {
+      recalcPosition();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [content, isVisible, recalcPosition]);
+
+  React.useEffect(() => {
+    if (!isVisible) return;
+    const handleResize = () => recalcPosition();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [isVisible, recalcPosition]);
+
   return (
     <>
       <div
@@ -287,24 +285,26 @@ const Tooltip = ({ children, content, className }: TooltipProps) => {
           <div
             ref={tooltipRef}
             className={cn(
-              "fixed px-3 py-1.5 bg-popover border border-border text-popover-foreground text-[11px] rounded-lg shadow-2xl z-[99999] w-max max-w-[240px] leading-relaxed backdrop-blur-md whitespace-pre-line pointer-events-none animate-in fade-in-0 zoom-in-95 duration-150",
+              "fixed px-3 py-1.5 bg-popover border border-border text-popover-foreground text-[11px] rounded-lg shadow-2xl z-[var(--z-tooltip)] w-max max-w-[240px] leading-relaxed backdrop-blur-md whitespace-pre-line pointer-events-none animate-in fade-in-0 zoom-in-95 duration-150",
               className,
             )}
             style={{
               top: position.top,
               left: position.left,
-              transform:
-                position.placement === "top"
-                  ? "translate(-50%, -100%)"
-                  : "translate(-50%, 0)",
             }}
           >
             {content}
             {/* Arrow indicator */}
             {position.placement === "top" ? (
-              <div className="absolute top-full left-1/2 -translate-x-1/2 border-x-[5px] border-x-transparent border-t-[5px] border-t-popover" />
+              <div
+                className="absolute top-full -translate-x-1/2 border-x-[5px] border-x-transparent border-t-[5px] border-t-popover"
+                style={{ left: position.arrowLeft }}
+              />
             ) : (
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-x-[5px] border-x-transparent border-b-[5px] border-b-popover" />
+              <div
+                className="absolute bottom-full -translate-x-1/2 border-x-[5px] border-x-transparent border-b-[5px] border-b-popover"
+                style={{ left: position.arrowLeft }}
+              />
             )}
           </div>,
           document.body,

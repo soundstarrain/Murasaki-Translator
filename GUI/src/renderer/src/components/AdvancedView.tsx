@@ -66,6 +66,8 @@ export function AdvancedView({ lang }: AdvancedViewProps) {
   const [enableLineCheck, setEnableLineCheck] = useState(true);
   const [lineToleranceAbs, setLineToleranceAbs] = useState(10);
   const [lineTolerancePct, setLineTolerancePct] = useState(20);
+  const [enableAnchorCheck, setEnableAnchorCheck] = useState(true);
+  const [anchorCheckRetries, setAnchorCheckRetries] = useState(1);
   const [enableRepPenaltyRetry, setEnableRepPenaltyRetry] = useState(true);
   const [repPenaltyBase, setRepPenaltyBase] = useState(1.0);
   const [repPenaltyMax, setRepPenaltyMax] = useState(1.5);
@@ -76,16 +78,12 @@ export function AdvancedView({ lang }: AdvancedViewProps) {
   const [enableCoverageCheck, setEnableCoverageCheck] = useState(true);
   const [outputHitThreshold, setOutputHitThreshold] = useState(60); // 输出精确命中阈值
   const [cotCoverageThreshold, setCotCoverageThreshold] = useState(80); // CoT覆盖阈值
-  const [coverageRetries, setCoverageRetries] = useState(2);
+  const [coverageRetries, setCoverageRetries] = useState(1);
 
   // Dynamic Retry Strategy (动态重试策略)
   const [retryTempBoost, setRetryTempBoost] = useState(0.05);
   const [repPenaltyStep, setRepPenaltyStep] = useState(0.1);
   const [retryPromptFeedback, setRetryPromptFeedback] = useState(true);
-
-  // Text Protection (文本保护)
-  const [enableTextProtect, setEnableTextProtect] = useState(false);
-  const [protectPatterns, setProtectPatterns] = useState("");
 
   // Chunking Strategy
   const [enableBalance, setEnableBalance] = useState(true);
@@ -132,6 +130,16 @@ export function AdvancedView({ lang }: AdvancedViewProps) {
     if (savedLineAbs) setLineToleranceAbs(parseInt(savedLineAbs));
     const savedLinePct = localStorage.getItem("config_line_tolerance_pct");
     if (savedLinePct) setLineTolerancePct(parseInt(savedLinePct));
+    setEnableAnchorCheck(
+      localStorage.getItem("config_anchor_check") !== "false",
+    );
+    const savedAnchorRetries = localStorage.getItem(
+      "config_anchor_check_retries",
+    );
+    if (savedAnchorRetries) {
+      const val = parseInt(savedAnchorRetries);
+      setAnchorCheckRetries(Number.isFinite(val) && val > 0 ? val : 1);
+    }
     setEnableRepPenaltyRetry(
       localStorage.getItem("config_rep_penalty_retry") !== "false",
     );
@@ -160,10 +168,10 @@ export function AdvancedView({ lang }: AdvancedViewProps) {
     const savedCoverageRetries = localStorage.getItem(
       "config_coverage_retries",
     );
-    // 修复：如果保存的值大于5，重置为默认值2
+    // 修复：如果保存的值大于5，重置为默认值1
     if (savedCoverageRetries) {
       const val = parseInt(savedCoverageRetries);
-      setCoverageRetries(val > 5 ? 2 : val);
+      setCoverageRetries(val > 5 ? 1 : val);
     }
 
     // Load Dynamic Retry Strategy Config
@@ -174,12 +182,6 @@ export function AdvancedView({ lang }: AdvancedViewProps) {
     setRetryPromptFeedback(
       localStorage.getItem("config_retry_prompt_feedback") !== "false",
     );
-
-    // Load Text Protect Config
-    setEnableTextProtect(
-      localStorage.getItem("config_text_protect") === "true",
-    );
-    setProtectPatterns(localStorage.getItem("config_protect_patterns") || "");
 
     // Load Chunking Strategy
     setEnableBalance(localStorage.getItem("config_balance_enable") !== "false");
@@ -278,6 +280,11 @@ export function AdvancedView({ lang }: AdvancedViewProps) {
     localStorage.setItem("config_line_check", String(enableLineCheck));
     localStorage.setItem("config_line_tolerance_abs", String(lineToleranceAbs));
     localStorage.setItem("config_line_tolerance_pct", String(lineTolerancePct));
+    localStorage.setItem("config_anchor_check", String(enableAnchorCheck));
+    localStorage.setItem(
+      "config_anchor_check_retries",
+      String(anchorCheckRetries),
+    );
     localStorage.setItem(
       "config_rep_penalty_retry",
       String(enableRepPenaltyRetry),
@@ -286,10 +293,6 @@ export function AdvancedView({ lang }: AdvancedViewProps) {
     localStorage.setItem("config_rep_penalty_max", String(repPenaltyMax));
     localStorage.setItem("config_max_retries", String(maxRetries));
     localStorage.setItem("config_strict_mode", strictMode);
-
-    // Save Text Protect Config
-    localStorage.setItem("config_text_protect", enableTextProtect.toString());
-    localStorage.setItem("config_protect_patterns", protectPatterns);
 
     // Save Chunking Strategy
     localStorage.setItem("config_balance_enable", String(enableBalance));
@@ -1663,6 +1666,47 @@ export function AdvancedView({ lang }: AdvancedViewProps) {
                   )}
                 </div>
 
+                {/* Core Anchor Check */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">
+                        {av.anchorCheck}
+                      </span>
+                    </div>
+                    <Switch
+                      checked={enableAnchorCheck}
+                      onCheckedChange={setEnableAnchorCheck}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {av.anchorCheckDesc}
+                  </p>
+                  {enableAnchorCheck && (
+                    <div className="border-l-2 border-primary/30 pl-4 ml-2 mt-2">
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">
+                          {av.anchorCheckRetries}
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={10}
+                          className="w-full border p-1.5 rounded text-sm bg-secondary text-center"
+                          value={anchorCheckRetries}
+                          onChange={(
+                            e: React.ChangeEvent<HTMLInputElement>,
+                          ) =>
+                            setAnchorCheckRetries(
+                              Math.max(1, parseInt(e.target.value) || 1),
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Repetition Penalty */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
@@ -1870,9 +1914,11 @@ export function AdvancedView({ lang }: AdvancedViewProps) {
                           {av.promptFeedbackDesc}
                         </p>
                       </div>
+
                     </div>
                   )}
                 </div>
+
               </CardContent>
             </Card>
           </div>

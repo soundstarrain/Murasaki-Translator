@@ -1,4 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
+import CodeMirror from "@uiw/react-codemirror";
+import { python } from "@codemirror/lang-python";
+import { EditorView, placeholder } from "@codemirror/view";
 import {
   Trash,
   Plus,
@@ -20,12 +23,12 @@ import {
   Download,
   Settings2,
 } from "lucide-react";
-import { Button, Tooltip } from "./ui/core";
+import { Button, Tooltip, Switch } from "./ui/core";
 import { translations, Language } from "../lib/i18n";
 import { AlertModal } from "./ui/AlertModal";
 import { useAlertModal } from "../hooks/useAlertModal";
 
-export type RuleType = "replace" | "regex" | "format" | "python";
+export type RuleType = "replace" | "regex" | "format" | "python" | "protect";
 
 export interface Rule {
   id: string;
@@ -100,12 +103,6 @@ const buildPatternMetadata = (
     label: re.patterns.traditionalChinese.label,
     description: re.patterns.traditionalChinese.desc,
   },
-  restore_protection: {
-    label: re.patterns.restoreProtection.label,
-    isExperimental: true,
-    description: re.patterns.restoreProtection.desc,
-    defaultOptions: { customPattern: "<PROTECT_(\\d+)>" },
-  },
   kana_fixer: {
     label: re.patterns.kanaFixer.label,
     isExperimental: true,
@@ -175,6 +172,33 @@ const buildPresetTemplates = (
   ],
 });
 const generateId = () => Math.random().toString(36).substr(2, 9);
+
+const buildProtectRule = (
+  re: RuleEditorI18n,
+  patterns: string = "",
+): Rule => ({
+  id: generateId(),
+  type: "protect",
+  active: true,
+  pattern: "text_protect",
+  replacement: "",
+  description: re.textProtectDesc,
+  options: { patterns },
+});
+
+const isHiddenRule = (rule: Rule) =>
+  rule.type === "protect" || rule.pattern === "restore_protection";
+
+const normalizeProtectPatterns = (value: unknown) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item).trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (typeof value === "string") return value;
+  return "";
+};
 
 const normalizePythonScript = (script: string) => {
   if (!script) return script;
@@ -262,6 +286,53 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
     [patternMetadata, re],
   );
   const pythonTemplates = useMemo(() => buildPythonTemplates(re), [re]);
+  const pythonEditorExtensions = useMemo(
+    () => [
+      python(),
+      placeholder(re.python.placeholder),
+      EditorView.contentAttributes.of({ spellcheck: "false" }),
+      EditorView.lineWrapping,
+      EditorView.theme({
+        "&": {
+          fontSize: "12px",
+          lineHeight: "1.6",
+          fontFamily:
+            '"JetBrains Mono", "Fira Code", "Cascadia Mono", "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", "Monaco", "Noto Sans Mono CJK SC", "Microsoft YaHei UI", "PingFang SC", monospace',
+          backgroundColor: "transparent",
+          color: "hsl(var(--foreground))",
+        },
+        ".cm-content": {
+          padding: "10px 12px",
+        },
+        ".cm-gutters": {
+          backgroundColor: "transparent",
+          color: "hsl(var(--muted-foreground))",
+          borderRight: "1px solid hsl(var(--border))",
+        },
+        ".cm-lineNumbers": {
+          minWidth: "26px",
+        },
+        ".cm-activeLine": {
+          backgroundColor: "hsl(var(--muted) / 0.25)",
+        },
+        ".cm-activeLineGutter": {
+          backgroundColor: "hsl(var(--muted) / 0.25)",
+        },
+        ".cm-selectionBackground": {
+          backgroundColor: "hsl(var(--primary) / 0.16)",
+        },
+        ".cm-cursor, .cm-dropCursor": {
+          borderLeftColor: "hsl(var(--primary))",
+        },
+        ".cm-placeholder": {
+          color: "hsl(var(--muted-foreground))",
+          fontFamily:
+            '"Inter", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+        },
+      }),
+    ],
+    [re.python.placeholder],
+  );
 
   const buildPresetRules = (presetKey: string) => {
     const preset = presetTemplates[presetKey];
@@ -291,6 +362,8 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
   const [showPythonTemplates, setShowPythonTemplates] = useState<string | null>(
     null,
   );
+  const [showProtectPresets, setShowProtectPresets] = useState(false);
+  const [protectInfoOpen, setProtectInfoOpen] = useState(false);
   const [testing, setTesting] = useState(false);
   const { alertProps, showAlert, showConfirm } = useAlertModal();
 
@@ -693,6 +766,60 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
     commitRules((prev) =>
       prev.map((r) => (r.id === id ? { ...r, active: !r.active } : r)),
     );
+  const toggleProtectRule = (nextValue: boolean) =>
+    commitRules((prev) => {
+      const index = prev.findIndex(
+        (rule) => rule.type === "protect" || rule.pattern === "text_protect",
+      );
+      if (nextValue) {
+        if (index >= 0) {
+          const current = prev[index];
+          const nextRule = {
+            ...current,
+            type: "protect" as RuleType,
+            pattern: "text_protect",
+            active: true,
+            description: current.description || re.textProtectDesc,
+            options: {
+              ...(current.options || {}),
+              patterns: normalizeProtectPatterns(current.options?.patterns),
+            },
+          };
+          const next = [...prev];
+          next[index] = nextRule;
+          return next;
+        }
+        return [...prev, buildProtectRule(re)];
+      }
+      if (index < 0) return prev;
+      const next = [...prev];
+      next[index] = { ...next[index], active: false };
+      return next;
+    });
+  const updateProtectPatterns = (nextPatterns: string) =>
+    commitRules((prev) => {
+      const index = prev.findIndex(
+        (rule) => rule.type === "protect" || rule.pattern === "text_protect",
+      );
+      if (index < 0) {
+        return [...prev, buildProtectRule(re, nextPatterns)];
+      }
+      const current = prev[index];
+      const nextRule = {
+        ...current,
+        type: "protect" as RuleType,
+        pattern: "text_protect",
+        active: true,
+        description: current.description || re.textProtectDesc,
+        options: {
+          ...(current.options || {}),
+          patterns: nextPatterns,
+        },
+      };
+      const next = [...prev];
+      next[index] = nextRule;
+      return next;
+    });
 
   // Native Drag and Drop Logic
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
@@ -858,6 +985,52 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
           },
         ];
 
+  const protectPresets = useMemo(
+    () => [
+      {
+        key: "name_tags",
+        label: re.textProtectPresetNameTags,
+        lines: "\\[\\[.+?\\]\\]",
+      },
+      {
+        key: "html_tags",
+        label: re.textProtectPresetHtmlTags,
+        lines: "<[^>]+>",
+      },
+      {
+        key: "dollar_vars",
+        label: re.textProtectPresetDollarVars,
+        lines: "\\$\\{[^}]+\\}",
+      },
+      {
+        key: "double_braces",
+        label: re.textProtectPresetDoubleBraces,
+        lines: "\\{\\{.+?\\}\\}",
+      },
+      {
+        key: "percent_placeholders",
+        label: re.textProtectPresetPercent,
+        lines: "%[a-zA-Z0-9_]+",
+      },
+      {
+        key: "square_brackets",
+        label: re.textProtectPresetSquareBrackets,
+        lines: "\\[[^\\]]+\\]",
+      },
+      {
+        key: "fullwidth_brackets",
+        label: re.textProtectPresetFullwidthBrackets,
+        lines: "【[^】]+】",
+      },
+      {
+        key: "single_braces",
+        label: re.textProtectPresetSingleBraces,
+        lines: "\\{[^}]+\\}",
+      },
+    ],
+    [re],
+  );
+
   const currentStepText =
     activeStep >= 0 && testSteps[activeStep]
       ? testSteps[activeStep].text
@@ -866,6 +1039,39 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
     activeStep >= 0 && testSteps[activeStep]?.error
       ? testSteps[activeStep]?.error
       : "";
+  const protectRule =
+    mode === "pre"
+      ? rules.find(
+          (rule) =>
+            rule.type === "protect" || rule.pattern === "text_protect",
+        )
+      : null;
+  const protectEnabled = Boolean(protectRule?.active);
+  const protectPatterns =
+    normalizeProtectPatterns(protectRule?.options?.patterns);
+  useEffect(() => {
+    if (protectEnabled) {
+      setProtectInfoOpen(false);
+    }
+  }, [protectEnabled]);
+  const applyProtectPreset = (presetLines: string) => {
+    const nextLines = presetLines
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const existing = protectPatterns
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const merged = [...existing];
+    nextLines.forEach((line) => {
+      if (!merged.includes(line)) merged.push(line);
+    });
+    updateProtectPatterns(merged.join("\n"));
+  };
+  const visibleRules = rules
+    .map((rule, index) => ({ rule, index }))
+    .filter(({ rule }) => !isHiddenRule(rule));
 
   return (
     <div className="flex-1 h-screen flex flex-col bg-background text-foreground overflow-hidden">
@@ -1147,24 +1353,196 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
       {/* Main Workbench */}
       <div className="flex-1 flex overflow-hidden bg-gradient-to-b from-transparent to-purple-500/5 dark:to-purple-900/10">
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3 custom-scrollbar">
-            {rules.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-muted-foreground animate-pulse">
-                <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
-                  <Layers className="w-6 h-6 opacity-20" />
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2 custom-scrollbar">
+            {mode === "pre" && (
+              <div className="rounded-2xl border border-border/60 bg-card/80 p-3 shadow-sm">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-1.5">
+                  <div>
+                    <div className="text-sm font-semibold text-foreground">
+                      {re.textProtectLabel}
+                    </div>
+                    <p className="text-[12px] text-muted-foreground leading-relaxed mt-0.5">
+                      {re.textProtectDesc}
+                      {" "}
+                      <span className="whitespace-nowrap">
+                        {re.textProtectSupportNote}
+                      </span>
+                    </p>
+                    {!protectEnabled && (
+                      <div className="mt-0.5 text-[11px] text-muted-foreground/70">
+                        {re.textProtectCollapsedHint}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={protectEnabled}
+                      onCheckedChange={toggleProtectRule}
+                      aria-label={re.textProtectLabel}
+                    />
+                  </div>
                 </div>
-                <p className="text-base font-medium">{re.emptyState.title}</p>
-                <p className="text-xs mt-1">{re.emptyState.desc}</p>
+                {protectEnabled && (
+                  <div className="mt-2 space-y-2.5">
+                    <div className="space-y-1.5">
+                      <textarea
+                        className="w-full min-h-[72px] rounded-xl border border-border bg-background px-3 py-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-purple-500/40 transition-all"
+                        placeholder={re.textProtectPlaceholder}
+                        value={protectPatterns}
+                        onChange={(e) =>
+                          updateProtectPatterns(e.target.value)
+                        }
+                        spellCheck={false}
+                      />
+                      <div className="flex items-center justify-end gap-2">
+                        <div className="relative inline-flex">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setShowProtectPresets((prev) => !prev)
+                            }
+                            className="h-7 px-2 text-[10px] font-semibold rounded-lg border border-border/60 bg-background text-foreground/80 hover:border-purple-500/40 hover:text-purple-600 dark:hover:text-purple-300 transition-all inline-flex items-center gap-1"
+                          >
+                            {re.textProtectPresetsTitle}
+                            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground rotate-90" />
+                          </button>
+                          {showProtectPresets && (
+                            <div className="absolute right-0 mt-2 w-56 bg-popover/95 backdrop-blur-2xl rounded-xl shadow-xl border border-border z-50 p-2 animate-in fade-in zoom-in-95 duration-200">
+                              <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground px-2 py-1">
+                                {re.textProtectPresetsTitle}
+                              </div>
+                              <div className="space-y-1">
+                                {protectPresets.map((preset) => (
+                                  <button
+                                    key={preset.key}
+                                    type="button"
+                                    onClick={() => {
+                                      applyProtectPreset(preset.lines);
+                                      setShowProtectPresets(false);
+                                    }}
+                                    className="w-full text-left px-3 py-2 rounded-lg hover:bg-accent text-[11px] font-semibold text-foreground"
+                                  >
+                                    {preset.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="pt-2 border-t border-border/30 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[12px] font-semibold text-foreground/80">
+                          {re.textProtectInfoTitle}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setProtectInfoOpen((prev) => !prev)}
+                          className="text-[11px] font-semibold text-purple-600 hover:text-purple-500"
+                        >
+                          {protectInfoOpen
+                            ? re.textProtectInfoCollapse
+                            : re.textProtectInfoExpand}
+                        </button>
+                      </div>
+                      <div className="text-[12px] text-muted-foreground leading-relaxed">
+                        {re.textProtectInfoSummary}
+                      </div>
+                      {protectInfoOpen && (
+                        <div className="space-y-2.5">
+                          <div className="space-y-1">
+                            <div className="text-[12px] font-semibold text-muted-foreground">
+                              {re.textProtectInfoRuleTitle}
+                            </div>
+                            <div className="space-y-0.5 text-[12px] text-muted-foreground/80 leading-relaxed">
+                              <div>{re.textProtectInfoRuleLine1}</div>
+                              <div>{re.textProtectInfoRuleLine2}</div>
+                              <div>{re.textProtectInfoRuleLine3}</div>
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="text-[12px] font-semibold text-muted-foreground">
+                              {re.textProtectInfoAlgorithmTitle}
+                            </div>
+                            <div className="space-y-1 text-[12px] text-muted-foreground/80 leading-relaxed">
+                              <div className="flex items-start gap-2">
+                                <span className="text-muted-foreground/60">•</span>
+                                <span>{re.textProtectInfoStep1}</span>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <span className="text-muted-foreground/60">•</span>
+                                <span>{re.textProtectInfoStep2}</span>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <span className="text-muted-foreground/60">•</span>
+                                <span>{re.textProtectInfoStep3}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="text-[12px] font-semibold text-muted-foreground">
+                              {re.textProtectInfoExampleTitle}
+                            </div>
+                            <div className="space-y-0.5 text-[12px] text-muted-foreground/80 leading-relaxed">
+                              <div>
+                                <span className="text-muted-foreground">
+                                  {re.textProtectInfoExampleRuleLabel}
+                                </span>{" "}
+                                {re.textProtectInfoExampleRule}
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">
+                                  {re.textProtectInfoExampleInputLabel}
+                                </span>{" "}
+                                {re.textProtectInfoExampleInput}
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">
+                                  {re.textProtectInfoExampleProtectedLabel}
+                                </span>{" "}
+                                {re.textProtectInfoExampleProtected}
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">
+                                  {re.textProtectInfoExampleOutputLabel}
+                                </span>{" "}
+                                {re.textProtectInfoExampleOutput}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="text-[12px] font-semibold text-muted-foreground">
+                              {re.textProtectInfoEffectTitle}
+                            </div>
+                            <div className="space-y-0.5 text-[12px] text-muted-foreground/80 leading-relaxed">
+                              <div>{re.textProtectInfoEffectLine1}</div>
+                              <div>{re.textProtectInfoEffectLine2}</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {visibleRules.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border/60 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2">
+                <div className="w-5 h-5 rounded-md border border-border/60 bg-background flex items-center justify-center">
+                  <Layers className="w-3 h-3 text-muted-foreground/70" />
+                </div>
+                <span>{re.emptyStateCompact}</span>
               </div>
             ) : (
-              rules.map((rule, idx) => (
+              visibleRules.map(({ rule, index }, visibleIndex) => (
                 <div
                   key={rule.id}
-                  className={`group relative flex gap-4 p-4 rounded-2xl border transition-all duration-300 ${draggedIdx === idx ? "opacity-20 scale-[0.98] border-dashed border-purple-500/50" : dropIdx === idx ? "border-purple-500 shadow-lg shadow-purple-500/10" : !rule.active ? "bg-muted/30 border-border/50 opacity-50 grayscale" : "bg-card border-border hover:border-purple-500/40 hover:shadow-sm"}`}
-                  draggable={rule.active && dragHandleIdx === idx}
-                  onDragStart={(e) => handleDragStart(e, idx)}
-                  onDragOver={(e) => handleDragOver(e, idx)}
-                  onDrop={(e) => handleDrop(e, idx)}
+                  className={`group relative flex gap-4 p-4 rounded-2xl border transition-all duration-300 ${draggedIdx === index ? "opacity-20 scale-[0.98] border-dashed border-purple-500/50" : dropIdx === index ? "border-purple-500 shadow-lg shadow-purple-500/10" : !rule.active ? "bg-muted/30 border-border/50 opacity-50 grayscale" : "bg-card border-border hover:border-purple-500/40 hover:shadow-sm"}`}
+                  draggable={rule.active && dragHandleIdx === index}
+                  onDragStart={(e) => handleDragStart(e, index)}
+                  onDragOver={(e) => handleDragOver(e, index)}
+                  onDrop={(e) => handleDrop(e, index)}
                   onDragEnd={handleDragEnd}
                 >
                   {/* Numbering integrated into the card */}
@@ -1172,7 +1550,7 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                     <div
                       className={`w-6 h-6 rounded-lg border flex items-center justify-center text-[10px] font-bold transition-colors ${rule.active ? "bg-purple-500/10 border-purple-500/20 text-purple-600 dark:text-purple-400" : "bg-muted border-border text-muted-foreground"}`}
                     >
-                      {idx + 1}
+                      {visibleIndex + 1}
                     </div>
                     <button
                       onClick={() => toggleRule(rule.id)}
@@ -1186,7 +1564,7 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                     </button>
                     <div
                       className="cursor-grab active:cursor-grabbing p-1 -m-1"
-                      onMouseEnter={() => setDragHandleIdx(idx)}
+                      onMouseEnter={() => setDragHandleIdx(index)}
                       onMouseLeave={() => setDragHandleIdx(null)}
                     >
                       <GripVertical className="w-4 h-4 text-muted-foreground/20 hover:text-muted-foreground transition-colors" />
@@ -1249,7 +1627,9 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                                   ([key, meta]) => (
                                     <option key={key} value={key}>
                                       {meta.label}
-                                      {meta.isExperimental ? re.experimentalSuffix : ""}
+                                      {meta.isExperimental
+                                        ? re.experimentalSuffix
+                                        : ""}
                                     </option>
                                   ),
                                 )}
@@ -1304,28 +1684,34 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                                 )}
                               </div>
                             </div>
-                            <textarea
-                              className="w-full min-h-[160px] bg-background border border-border rounded-lg px-3 py-2 text-[11px] font-mono text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-purple-500/40 transition-all"
-                              placeholder={re.python.placeholder}
-                              spellCheck={false}
-                              value={rule.script || ""}
-                              onChange={(e) =>
-                                updateRule(rule.id, { script: e.target.value })
-                              }
-                            />
+                            <div className="w-full min-h-[160px] rounded-lg border border-border bg-background/50 focus-within:ring-1 focus-within:ring-purple-500/40 transition-all">
+                              <CodeMirror
+                                value={rule.script || ""}
+                                minHeight="160px"
+                                basicSetup={{
+                                  lineNumbers: false,
+                                  foldGutter: false,
+                                  highlightActiveLineGutter: false,
+                                }}
+                                extensions={pythonEditorExtensions}
+                                onChange={(value) =>
+                                  updateRule(rule.id, { script: value })
+                                }
+                              />
+                            </div>
                             <div className="rounded-lg border border-border/40 bg-muted/10 px-3 py-2 text-[10px] text-muted-foreground/80">
                               <div className="grid grid-cols-[52px_minmax(0,1fr)] gap-x-3 gap-y-1 items-start">
                                 <div className="text-muted-foreground/70 font-semibold text-right">
                                   {re.python.help.variables}
                                 </div>
                                 <div className="font-mono text-foreground/80 break-words">
-                                  text / src_text / protector
+                                  transform(text, src_text=None, protector=None)
                                 </div>
                                 <div className="text-muted-foreground/70 font-semibold text-right">
                                   {re.python.help.returns}
                                 </div>
                                 <div className="font-mono text-foreground/80 break-words">
-                                  return / output
+                                  {"return <string>"}
                                 </div>
                                 <div className="text-muted-foreground/70 font-semibold text-right">
                                   {re.python.help.modules}
@@ -1345,19 +1731,7 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                                 <div className="font-mono text-foreground/80 break-words">
                                   {re.python.help.limits}
                                 </div>
-                                <div className="text-muted-foreground/70 font-semibold text-right">
-                                  {re.python.help.outputLabel}
-                                </div>
-                                <div className="font-mono text-foreground/80 break-words">
-                                  {re.python.help.autoString}
-                                </div>
                               </div>
-                            </div>
-                            <div className="rounded-lg border border-border/40 bg-background/60 px-3 py-2 font-mono text-[10px] text-foreground/80 whitespace-pre-wrap leading-relaxed">
-                              <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70 mb-1">
-                                {re.python.exampleTitle}
-                              </div>
-                              {`if "??" in text:\n    output = text.replace("??", "？")\n    return output\nreturn text`}
                             </div>
                           </div>
                         ) : (
@@ -1487,31 +1861,6 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                                   </span>
                                 </div>
                               ))}
-
-                            {rule.pattern === "restore_protection" && (
-                              <div className="pt-2 border-t border-border/30 space-y-1.5">
-                                <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-tight ml-0.5">
-                                  {re.protectionPatternLabel}
-                                </div>
-                                <input
-                                  type="text"
-                                  className="w-full h-8 bg-background border border-border rounded-lg px-2.5 py-1 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-purple-500/40 transition-all"
-                                  placeholder={re.protectionPatternPlaceholder}
-                                  value={rule.options?.customPattern || ""}
-                                  onChange={(e) =>
-                                    updateRule(rule.id, {
-                                      options: {
-                                        ...rule.options,
-                                        customPattern: e.target.value,
-                                      },
-                                    })
-                                  }
-                                />
-                                <p className="text-[9px] text-muted-foreground/60 italic px-1">
-                                  {re.protectionPatternHint}
-                                </p>
-                              </div>
-                            )}
 
                             {patternMetadata[rule.pattern]?.isExperimental && (
                               <div className="pt-2 border-t border-border/30 flex items-center gap-2 text-amber-600 dark:text-amber-400">

@@ -606,7 +606,7 @@ export function EnvFixerModal({ onClose }: EnvFixerModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+      className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
       onClick={(e) =>
         e.target === e.currentTarget && !fixingComponent && onClose()
       }
@@ -952,7 +952,7 @@ export function EnvFixerModal({ onClose }: EnvFixerModalProps) {
 
       {/* Fix Confirmation Dialog */}
       {showFixConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">
+        <div className="fixed inset-0 z-[calc(var(--z-modal)+1)] flex items-center justify-center bg-black/40">
           <Card className="w-[420px] bg-card border-border/50 shadow-2xl rounded-xl overflow-hidden animate-in zoom-in-95 duration-200">
             <CardHeader className="py-3 px-4 border-b border-border/50 bg-muted/30">
               <CardTitle className="text-sm font-bold flex items-center gap-2">

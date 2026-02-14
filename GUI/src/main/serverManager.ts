@@ -923,7 +923,7 @@ sys.exit(0 if not missing else 3)
         const taskStatus = await this.requestJson<{
           status?: string;
           error?: string;
-        }>(`/api/v1/translate/${taskId}?log_from=-1&log_limit=1`, "GET");
+        }>(`/api/v1/translate/${taskId}?log_from=0&log_limit=1`, "GET");
 
         if (taskStatus.statusCode >= 400) {
           return {

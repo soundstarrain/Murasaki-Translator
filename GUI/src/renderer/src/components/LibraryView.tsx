@@ -3,7 +3,7 @@
  * 提供: 队列管理、拖放导入、单文件自定义配置、直接跳转校对
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   FolderOpen,
   FileText,
@@ -12,6 +12,7 @@ import {
   AlignLeft,
   Plus,
   FolderPlus,
+  Eye,
   X,
   ClipboardCheck,
   Cpu,
@@ -31,8 +32,11 @@ import {
   LayoutGrid,
   ArrowUp,
   Layers,
+  Search,
+  Download,
+  Upload,
 } from "lucide-react";
-import { Button, Card, Switch, Tooltip as UITooltip } from "./ui/core";
+import { Button, Card, Switch, Input, Tooltip as UITooltip } from "./ui/core";
 import { FileIcon } from "./ui/FileIcon";
 import { AlertModal } from "./ui/AlertModal";
 import { useAlertModal } from "../hooks/useAlertModal";
@@ -44,6 +48,16 @@ import {
   generateId,
   getFileType,
 } from "../types/common";
+import { buildQueueExport, parseQueueExport } from "../lib/queueExport";
+import { formatGlobalValue } from "../lib/formatting";
+import { APP_CONFIG } from "../lib/config";
+import { emitToast } from "../lib/toast";
+import {
+  filterWatchFilesByTypes,
+  isLikelyTranslatedOutput,
+  normalizeWatchFolderConfig,
+  type WatchFolderConfig,
+} from "../lib/watchFolder";
 
 // ============ Types ============
 
@@ -55,16 +69,38 @@ interface LibraryViewProps {
   remoteRuntime?: UseRemoteRuntimeResult;
 }
 
+interface QueueImportPreview {
+  items: QueueItem[];
+  meta: {
+    total: number;
+    unsupported: number;
+    duplicateInFile: number;
+  };
+}
+
 // ============ Constants ============
 
 const LIBRARY_QUEUE_KEY = "library_queue";
 const FILE_QUEUE_KEY = "file_queue";
+const WATCH_FOLDERS_KEY = "watch_folders";
 const SUPPORTED_EXTENSIONS = [".txt", ".epub", ".srt", ".ass", ".ssa"];
+const WATCH_FILE_TYPES = SUPPORTED_EXTENSIONS.map((ext) => ext.replace(".", ""));
 
 // ============ Helpers ============
 
-function getCachePath(filePath: string, outputDir?: string): string {
-  // Fix: Handle both slash types correctly. lastIndexOf returns -1 if not found, checking both ensures we find the real separator.
+const getModelNameFromPath = (modelPath?: string) => {
+  const raw = String(modelPath || "").trim();
+  if (!raw) return "";
+  const name = raw.split(/[/\\]/).pop() || "";
+  return name.replace(/\.gguf$/i, "");
+};
+
+function getCachePath(
+  filePath: string,
+  outputDir?: string,
+  modelPath?: string,
+): string {
+  // Handle both slash types correctly. lastIndexOf returns -1 if not found, checking both ensures we find the real separator.
   const lastSep = Math.max(
     filePath.lastIndexOf("\\"),
     filePath.lastIndexOf("/"),
@@ -75,7 +111,16 @@ function getCachePath(filePath: string, outputDir?: string): string {
       ? "."
       : filePath.substring(0, lastSep);
   const baseName = filePath.substring(lastSep + 1).replace(/\.[^.]+$/, "");
-  return `${dir}\\${baseName}_zh.cache.json`;
+  const extMatch = filePath.match(/\.[^.]+$/);
+  const ext = extMatch ? extMatch[0] : "";
+  const modelName = getModelNameFromPath(modelPath);
+  const outputName = modelName ? `${baseName}_${modelName}${ext}` : `${baseName}${ext}`;
+  const sep =
+    dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+  const joined = dir.endsWith("\\") || dir.endsWith("/")
+    ? `${dir}${outputName}`
+    : `${dir}${sep}${outputName}`;
+  return `${joined}.cache.json`;
 }
 
 // ============ Texts ============
@@ -91,6 +136,39 @@ const texts = {
     emptyDragHint: "或点击任意处浏览文件",
     selectFiles: "选择文件",
     selectFolder: "选择文件夹",
+    importQueue: "导入队列",
+    exportQueue: "导出队列",
+    watchFolder: "监控文件夹",
+    watchFolderTitle: "监控文件夹",
+    watchFolderDesc: "监控文件夹新增文件并自动加入队列",
+    watchFolderBrowse: "选择文件夹",
+    watchFolderAdd: "添加监控",
+    watchFolderEmpty: "暂无监控文件夹",
+    watchFolderIncludeSubdirs: "包含子目录",
+    watchFolderEnabled: "启用",
+    watchFolderTypes: "过滤格式",
+    watchFolderTypesHint: "不选择则监控全部支持格式",
+    watchFolderAllTypes: "全部",
+    watchFolderPathRequired: "请选择要监控的文件夹",
+    watchFolderDuplicate: "该文件夹已在监控列表中",
+    watchFolderAddFail: "添加监控失败",
+    watchFolderRemoveFail: "移除监控失败",
+    watchFolderUpdateFail: "更新监控失败",
+    watchFolderToggleFail: "启用或停用失败",
+    watchNoticePrefix: "翻译监控: ",
+    importQueueTitle: "导入队列",
+    importQueueDesc: "请选择导入方式",
+    importQueueMerge: "合并",
+    importQueueReplace: "替换",
+    importQueueSelectTitle: "选择队列文件",
+    importQueueInvalid: "队列文件格式不正确",
+    importQueueEmpty: "队列文件为空",
+    importQueueSummary:
+      "总计 {total} 项，新增 {added}，重复 {duplicate}，不支持 {unsupported}",
+    importQueueApply: "应用",
+    importQueueDone: "已导入 {count} 项",
+    exportQueueDone: "队列已导出",
+    exportQueueFail: "队列导出失败",
     scanSubdirs: "扫描子目录",
     confirmClear: "确定要清空翻译队列吗？",
     confirmRemoveTitle: "确认移除",
@@ -130,9 +208,16 @@ const texts = {
     addedNotice: "已添加 {count} 个文件",
     ignoredUnsupported: "已忽略 {count} 个不支持格式",
     ignoredDuplicate: "已跳过 {count} 个重复文件",
+    ignoredTranslated: "已跳过 {count} 个已翻译文件",
     scanFailed: "扫描失败：{count} 个路径无法读取",
     noValidFiles: "未发现可导入的文件",
     busyHint: "翻译进行中，暂时无法修改队列",
+    searchPlaceholder: "搜索文件名 / 路径",
+    filterAll: "全部",
+    filterPending: "待处理",
+    filterCompleted: "已完成",
+    filterFailed: "失败",
+    noMatch: "没有匹配结果",
 
     // Params
     glossary: "术语表",
@@ -148,7 +233,16 @@ const texts = {
     kvCacheType: "KV Cache 量化",
     alignmentMode: "辅助对齐",
     saveCot: "CoT 导出",
+    anchorCheck: "核心锚点校验 (Anchor Check)",
+    anchorCheckDesc:
+      "在翻译 EPUB/SRT/ASS 以及辅助对齐模式的 TXT 文件的核心结构锚点缺失时自动重试。",
+    anchorCheckRetries: "锚点重试次数 (Max)",
+    sectionStrategy: "翻译策略",
     rulesProfileSection: "文本处理规则",
+    sectionResources: "资源与输出",
+    sectionCoreParams: "核心参数",
+    sectionEngineTuning: "质量参数",
+    sectionFeatureToggles: "功能开关",
     rulesPreProfile: "预处理配置组",
     rulesPostProfile: "后处理配置组",
     on: "开",
@@ -162,10 +256,11 @@ const texts = {
     unnamedProfile: "未命名配置",
     currentGlobal: "当前全局",
     seed: "随机种子 (Seed)",
+    random: "随机",
 
     presetOptions: {
       novel: "轻小说模式 (默认)",
-      script: "剧本模式 (Galgame)",
+      script: "剧本模式",
       short: "单句模式",
     },
     shortModeWarning: "短句模式会导致翻译效率和质量下降，建议使用轻小说或剧本模式。",
@@ -198,6 +293,7 @@ const texts = {
       "Batch process queue, specify independent parameters for each file",
 
     seed: "Seed",
+    random: "Random",
     currentGlobal: "Global",
     files: "files",
     dropHint: "Drop files or folders here to add to queue",
@@ -206,6 +302,39 @@ const texts = {
     emptyDragHint: "Or click anywhere to browse",
     selectFiles: "Select Files",
     selectFolder: "Select Folder",
+    importQueue: "Import Queue",
+    exportQueue: "Export Queue",
+    watchFolder: "Watch Folder",
+    watchFolderTitle: "Watch Folders",
+    watchFolderDesc: "Watch folders and auto-add new files to the queue",
+    watchFolderBrowse: "Choose Folder",
+    watchFolderAdd: "Add Watch",
+    watchFolderEmpty: "No watched folders yet",
+    watchFolderIncludeSubdirs: "Include Subfolders",
+    watchFolderEnabled: "Enabled",
+    watchFolderTypes: "File Types",
+    watchFolderTypesHint: "Empty means all supported types",
+    watchFolderAllTypes: "All",
+    watchFolderPathRequired: "Please choose a folder to watch",
+    watchFolderDuplicate: "This folder is already watched",
+    watchFolderAddFail: "Failed to add watch",
+    watchFolderRemoveFail: "Failed to remove watch",
+    watchFolderUpdateFail: "Failed to update watch",
+    watchFolderToggleFail: "Failed to toggle watch",
+    watchNoticePrefix: "Watch: ",
+    importQueueTitle: "Import Queue",
+    importQueueDesc: "Choose how to import",
+    importQueueMerge: "Merge",
+    importQueueReplace: "Replace",
+    importQueueSelectTitle: "Select queue file",
+    importQueueInvalid: "Invalid queue file",
+    importQueueEmpty: "Queue file is empty",
+    importQueueSummary:
+      "Total {total}, added {added}, duplicates {duplicate}, unsupported {unsupported}",
+    importQueueApply: "Apply",
+    importQueueDone: "Imported {count} items",
+    exportQueueDone: "Queue exported",
+    exportQueueFail: "Export failed",
     scanSubdirs: "Scan Subdirs",
     confirmClear: "Are you sure you want to clear the translation queue?",
     confirmRemoveTitle: "Confirm Remove",
@@ -245,9 +374,16 @@ const texts = {
     addedNotice: "Added {count} files",
     ignoredUnsupported: "Ignored {count} unsupported files",
     ignoredDuplicate: "Skipped {count} duplicate files",
+    ignoredTranslated: "Skipped {count} translated outputs",
     scanFailed: "Scan failed: {count} paths could not be read",
     noValidFiles: "No importable files found",
     busyHint: "Translation is running. Queue is locked.",
+    searchPlaceholder: "Search name / path",
+    filterAll: "All",
+    filterPending: "Pending",
+    filterCompleted: "Completed",
+    filterFailed: "Failed",
+    noMatch: "No matches",
 
     glossary: "Glossary",
     outputDir: "Output Directory",
@@ -262,7 +398,16 @@ const texts = {
     kvCacheType: "KV Cache Quant",
     alignmentMode: "Auxiliary Alignment",
     saveCot: "CoT Export",
+    anchorCheck: "Anchor Check",
+    anchorCheckDesc:
+      "Auto-retry when key anchors are missing in EPUB/SRT/ASS or alignment-mode TXT.",
+    anchorCheckRetries: "Anchor Retry Limit",
+    sectionStrategy: "Strategy & Model",
     rulesProfileSection: "Rule Profiles",
+    sectionResources: "Resources & Output",
+    sectionCoreParams: "Core Parameters",
+    sectionEngineTuning: "Engine Tuning",
+    sectionFeatureToggles: "Feature Toggles",
     rulesPreProfile: "Pre-process Profile",
     rulesPostProfile: "Post-process Profile",
     on: "On",
@@ -312,6 +457,7 @@ const texts = {
     subtitle: "キューを一括処理し、ファイルごとに個別のパラメータを指定",
 
     seed: "シード (Seed)",
+    random: "ランダム",
     currentGlobal: "現在のグローバル値",
     files: "ファイル",
     dropHint: "ファイルまたはフォルダをドロップして追加",
@@ -320,6 +466,39 @@ const texts = {
     emptyDragHint: "またはクリックして選択",
     selectFiles: "ファイル選択",
     selectFolder: "フォルダ選択",
+    importQueue: "キューをインポート",
+    exportQueue: "キューをエクスポート",
+    watchFolder: "フォルダ監視",
+    watchFolderTitle: "フォルダ監視",
+    watchFolderDesc: "監視フォルダの新規ファイルを自動でキューに追加",
+    watchFolderBrowse: "フォルダ選択",
+    watchFolderAdd: "監視を追加",
+    watchFolderEmpty: "監視フォルダはありません",
+    watchFolderIncludeSubdirs: "サブフォルダを含む",
+    watchFolderEnabled: "有効",
+    watchFolderTypes: "ファイル種別",
+    watchFolderTypesHint: "未選択は全ての対応形式",
+    watchFolderAllTypes: "全て",
+    watchFolderPathRequired: "監視するフォルダを選択してください",
+    watchFolderDuplicate: "このフォルダは既に監視中です",
+    watchFolderAddFail: "監視の追加に失敗しました",
+    watchFolderRemoveFail: "監視の削除に失敗しました",
+    watchFolderUpdateFail: "監視の更新に失敗しました",
+    watchFolderToggleFail: "監視の切替に失敗しました",
+    watchNoticePrefix: "翻訳監視: ",
+    importQueueTitle: "キューをインポート",
+    importQueueDesc: "取り込み方法を選択",
+    importQueueMerge: "統合",
+    importQueueReplace: "置き換え",
+    importQueueSelectTitle: "キューファイルを選択",
+    importQueueInvalid: "無効なキューファイル",
+    importQueueEmpty: "キューが空です",
+    importQueueSummary:
+      "合計 {total} 件、追加 {added}、重複 {duplicate}、非対応 {unsupported}",
+    importQueueApply: "適用",
+    importQueueDone: "{count} 件をインポートしました",
+    exportQueueDone: "キューをエクスポートしました",
+    exportQueueFail: "エクスポートに失敗しました",
     scanSubdirs: "サブディレクトリをスキャン",
     confirmClear: "翻訳キューを空にしてもよろしいですか？",
     confirmRemoveTitle: "削除確認",
@@ -359,9 +538,16 @@ const texts = {
     addedNotice: "{count} 件のファイルを追加しました",
     ignoredUnsupported: "対応外形式 {count} 件を無視しました",
     ignoredDuplicate: "重複 {count} 件をスキップしました",
+    ignoredTranslated: "翻訳済み {count} 件をスキップしました",
     scanFailed: "スキャン失敗：{count} 件のパスを読み込めませんでした",
     noValidFiles: "追加可能なファイルが見つかりません",
     busyHint: "翻訳中のためキューを変更できません",
+    searchPlaceholder: "ファイル名 / パスを検索",
+    filterAll: "すべて",
+    filterPending: "保留",
+    filterCompleted: "完了",
+    filterFailed: "失敗",
+    noMatch: "一致する項目がありません",
 
     glossary: "用語集",
     outputDir: "出力ディレクトリ",
@@ -376,7 +562,16 @@ const texts = {
     kvCacheType: "KV Cache 量子化",
     alignmentMode: "補助アラインメント",
     saveCot: "CoT エクスポート",
+    anchorCheck: "アンカーチェック",
+    anchorCheckDesc:
+      "EPUB/SRT/ASS/整列TXTの重要アンカー欠落時に自動再試行。",
+    anchorCheckRetries: "アンカー再試行回数",
+    sectionStrategy: "翻訳方針とモデル",
     rulesProfileSection: "ルール設定",
+    sectionResources: "リソースと出力",
+    sectionCoreParams: "コアパラメータ",
+    sectionEngineTuning: "エンジン調整",
+    sectionFeatureToggles: "機能スイッチ",
     rulesPreProfile: "前処理プロファイル",
     rulesPostProfile: "後処理プロファイル",
     on: "オン",
@@ -476,6 +671,7 @@ export function FileConfigModal({
 
   // Get global defaults for display
   const globalGlossary = localStorage.getItem("config_glossary_path") || "";
+  const globalOutputDir = localStorage.getItem("config_output_dir") || "";
   const globalCtx = localStorage.getItem("config_ctx") || "4096";
   const globalConcurrency = localStorage.getItem("config_concurrency") || "1";
   const globalTemp = localStorage.getItem("config_temperature") || "0.7";
@@ -604,17 +800,14 @@ export function FileConfigModal({
     min?: number;
     max?: number;
     step?: number;
-    globalValue?: string;
+    globalValue?: string | number;
     helpText?: string;
     className?: string;
   }) => {
-    // Display logic for empty global values
-    const displayGlobalValue =
-      globalValue === "" || globalValue === undefined
-        ? t.notSet
-        : globalValue.length > 20
-          ? "..." + globalValue.slice(-20)
-          : globalValue;
+    const displayGlobalValue = formatGlobalValue(globalValue, t.notSet);
+    const resolvedPlaceholder = config.useGlobalDefaults
+      ? displayGlobalValue
+      : (placeholder ?? t.notSet);
 
     return (
       <div className={`space-y-1.5 ${className}`}>
@@ -640,11 +833,7 @@ export function FileConfigModal({
             type={type}
             value={config.useGlobalDefaults ? "" : (value ?? "")}
             onChange={(e) => onChange(e.target.value)}
-            placeholder={
-              config.useGlobalDefaults
-                ? globalValue || placeholder || t.notSet
-                : placeholder || t.notSet
-            }
+            placeholder={resolvedPlaceholder}
             disabled={config.useGlobalDefaults}
             min={min}
             max={max}
@@ -676,7 +865,7 @@ export function FileConfigModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -741,55 +930,59 @@ export function FileConfigModal({
             </div>
           )}
 
-          {/* 1. Prompt Preset Section - 最重要，放第一 */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label
-                className={`text-xs font-medium flex items-center gap-1.5 ${config.useGlobalDefaults ? "text-muted-foreground" : "text-foreground"}`}
-              >
-                <Settings className="w-3.5 h-3.5 shrink-0 opacity-70" />
-                {t.preset}
-                <UITooltip
-                  content={t.help?.preset}
+          {/* Strategy Section */}
+          <div className="space-y-4">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+              {t.sectionStrategy}
+            </h4>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label
+                  className={`text-xs font-medium flex items-center gap-1.5 ${config.useGlobalDefaults ? "text-muted-foreground" : "text-foreground"}`}
                 >
-                  <Info className="w-3 h-3 text-muted-foreground/50 hover:text-primary cursor-help" />
-                </UITooltip>
-              </label>
-              <span className="text-[10px] text-muted-foreground/50 tabular-nums">
-                {t.currentGlobal}: {globalPreset}
-              </span>
-            </div>
-            <select
-              value={
-                !config.useGlobalDefaults && config.preset ? config.preset : ""
-              }
-              disabled={config.useGlobalDefaults}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  preset: e.target.value || undefined,
-                }))
-              }
-              className={`
-                w-full h-8 px-2.5 text-sm rounded-md border transition-all outline-none
-                ${
-                  config.useGlobalDefaults
-                    ? "bg-secondary/30 border-transparent text-muted-foreground/50 cursor-not-allowed"
-                    : "bg-background/50 border-border focus:ring-2 focus:ring-primary/20 focus:border-primary/50"
+                  <Settings className="w-3.5 h-3.5 shrink-0 opacity-70" />
+                  {t.preset}
+                  <UITooltip content={t.help?.preset}>
+                    <Info className="w-3 h-3 text-muted-foreground/50 hover:text-primary cursor-help" />
+                  </UITooltip>
+                </label>
+                <span className="text-[10px] text-muted-foreground/50 tabular-nums">
+                  {t.currentGlobal}: {globalPreset}
+                </span>
+              </div>
+              <select
+                value={
+                  !config.useGlobalDefaults && config.preset ? config.preset : ""
                 }
-              `}
-            >
-              <option
-                value=""
-                disabled={!config.useGlobalDefaults && !config.preset}
+                disabled={config.useGlobalDefaults}
+                onChange={(e) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    preset: e.target.value || undefined,
+                  }))
+                }
+                className={`
+                  w-full h-8 px-2.5 text-sm rounded-md border transition-all outline-none
+                  ${
+                    config.useGlobalDefaults
+                      ? "bg-secondary/30 border-transparent text-muted-foreground/50 cursor-not-allowed"
+                      : "bg-background/50 border-border focus:ring-2 focus:ring-primary/20 focus:border-primary/50"
+                  }
+                `}
               >
-                {config.useGlobalDefaults ? globalPreset : t.notSet}
-              </option>
-              <option value="novel">{t.presetOptions.novel}</option>
-              <option value="script">{t.presetOptions.script}</option>
-              <option value="short">{t.presetOptions.short}</option>
-            </select>
-            <div className="space-y-1.5 pt-2">
+                <option
+                  value=""
+                  disabled={!config.useGlobalDefaults && !config.preset}
+                >
+                  {config.useGlobalDefaults ? globalPreset : t.notSet}
+                </option>
+                <option value="novel">{t.presetOptions.novel}</option>
+                <option value="script">{t.presetOptions.script}</option>
+                <option value="short">{t.presetOptions.short}</option>
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label
                   className={`text-xs font-medium flex items-center gap-1.5 ${config.useGlobalDefaults ? "text-muted-foreground" : "text-foreground"}`}
@@ -846,7 +1039,7 @@ export function FileConfigModal({
                   ))}
               </select>
             </div>
-            {/* 短句模式警告 */}
+
             {!config.useGlobalDefaults && config.preset === "short" && (
               <div className="flex items-start gap-1.5 p-2 rounded bg-amber-500/10 border border-amber-500/20">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
@@ -962,7 +1155,7 @@ export function FileConfigModal({
           {/* 2. Paths Section - 术语表和输出目录 */}
           <div className="space-y-4">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-              Paths & Directories
+              {t.sectionResources}
             </h4>
             <div className="grid grid-cols-1 gap-4">
               <InputRow
@@ -984,15 +1177,18 @@ export function FileConfigModal({
                   setConfig((prev) => ({ ...prev, outputDir: val }))
                 }
                 onBrowse={handleSelectOutputDir}
+                globalValue={globalOutputDir}
                 helpText={t.help?.outputDir}
               />
             </div>
           </div>
 
+          <div className="h-px bg-border/50" />
+
           {/* Core Params Section */}
           <div className="space-y-4">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-              Core Parameters
+              {t.sectionCoreParams}
             </h4>
             <div className="grid grid-cols-2 gap-4">
               <InputRow
@@ -1065,7 +1261,7 @@ export function FileConfigModal({
           {/* Advanced Params Section */}
           <div className="space-y-4">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-              Advanced Engine Tuning
+              {t.sectionEngineTuning}
             </h4>
             <div className="grid grid-cols-2 gap-4">
               <InputRow
@@ -1159,12 +1355,74 @@ export function FileConfigModal({
                   }))
                 }
                 type="number"
-                placeholder={
-                  config.useGlobalDefaults ? globalSeed || "Random" : "Random"
-                }
-                globalValue={globalSeed}
+                placeholder={t.random}
+                globalValue={globalSeed || t.random}
                 helpText={t.help?.seed}
               />
+
+              {/* Flash Attention */}
+              <div
+                className={`
+                  col-span-2 flex items-center justify-between p-3 rounded-lg border transition-colors
+                  ${
+                    config.useGlobalDefaults
+                      ? "bg-secondary/20 border-transparent opacity-60"
+                      : "bg-background/30 border-border"
+                  }
+                `}
+              >
+                <div className="flex items-center gap-2">
+                  <Zap
+                    className={`w-4 h-4 ${config.useGlobalDefaults ? "text-muted-foreground" : "text-amber-500"}`}
+                  />
+                  <span
+                    className={`text-sm font-medium ${config.useGlobalDefaults ? "text-muted-foreground" : "text-foreground"}`}
+                  >
+                    {t.flashAttn}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] text-muted-foreground">
+                    {t.currentGlobal}: {globalFlashAttn ? t.on : t.off}
+                  </span>
+                  <select
+                    className={`
+                      h-8 text-sm rounded-md border outline-none
+                      ${
+                        config.useGlobalDefaults
+                          ? "bg-transparent border-transparent text-muted-foreground cursor-not-allowed"
+                          : "bg-background/50 border-border focus:ring-2 focus:ring-primary/20"
+                      }
+                    `}
+                    value={
+                      config.useGlobalDefaults
+                        ? globalFlashAttn
+                          ? "true"
+                          : "false"
+                        : config.flashAttn === undefined
+                          ? "default"
+                          : config.flashAttn
+                            ? "true"
+                            : "false"
+                    }
+                    disabled={config.useGlobalDefaults}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setConfig((prev) => ({
+                        ...prev,
+                        flashAttn:
+                          val === "default" ? undefined : val === "true",
+                      }));
+                    }}
+                  >
+                    <option value="default" disabled>
+                      {t.notSet}
+                    </option>
+                    <option value="true">{t.on}</option>
+                    <option value="false">{t.off}</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1173,7 +1431,7 @@ export function FileConfigModal({
           {/* Features Section */}
           <div className="space-y-4">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-              Feature Toggles
+              {t.sectionFeatureToggles}
             </h4>
             <div className="grid grid-cols-2 gap-4">
               <div
@@ -1245,69 +1503,7 @@ export function FileConfigModal({
                   />
                 </div>
               </div>
-            </div>
 
-            {/* Flash Attention (Full Width or Grid) */}
-            <div
-              className={`
-                            flex items-center justify-between p-3 rounded-lg border transition-colors
-                            ${
-                              config.useGlobalDefaults
-                                ? "bg-secondary/20 border-transparent opacity-60"
-                                : "bg-background/30 border-border"
-                            }
-                        `}
-            >
-              <div className="flex items-center gap-2">
-                <Zap
-                  className={`w-4 h-4 ${config.useGlobalDefaults ? "text-muted-foreground" : "text-amber-500"}`}
-                />
-                <span
-                  className={`text-sm font-medium ${config.useGlobalDefaults ? "text-muted-foreground" : "text-foreground"}`}
-                >
-                  {t.flashAttn}
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-[10px] text-muted-foreground">
-                  {t.currentGlobal}: {globalFlashAttn ? t.on : t.off}
-                </span>
-                <select
-                  className={`
-                                        h-8 text-sm rounded-md border outline-none
-                                        ${
-                                          config.useGlobalDefaults
-                                            ? "bg-transparent border-transparent text-muted-foreground cursor-not-allowed"
-                                            : "bg-background/50 border-border focus:ring-2 focus:ring-primary/20"
-                                        }
-                                    `}
-                  value={
-                    config.useGlobalDefaults
-                      ? globalFlashAttn
-                        ? "true"
-                        : "false"
-                      : config.flashAttn === undefined
-                        ? "default"
-                        : config.flashAttn
-                          ? "true"
-                          : "false"
-                  }
-                  disabled={config.useGlobalDefaults}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setConfig((prev) => ({
-                      ...prev,
-                      flashAttn: val === "default" ? undefined : val === "true",
-                    }));
-                  }}
-                >
-                  <option value="default" disabled>
-                    {t.notSet}
-                  </option>
-                  <option value="true">{t.on}</option>
-                  <option value="false">{t.off}</option>
-                </select>
-              </div>
             </div>
           </div>
         </div>
@@ -1395,6 +1591,40 @@ export function LibraryView({
     return saved === "true";
   }); // Toggle for recursive scan
   const [isReordering, setIsReordering] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "pending" | "completed" | "failed"
+  >("all");
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importPreview, setImportPreview] =
+    useState<QueueImportPreview | null>(null);
+  const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
+  const [showWatchModal, setShowWatchModal] = useState(false);
+  const [watchFolders, setWatchFolders] = useState<WatchFolderConfig[]>(() => {
+    try {
+      const saved = localStorage.getItem(WATCH_FOLDERS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as WatchFolderConfig[];
+        if (Array.isArray(parsed)) {
+          return parsed.map((entry) => normalizeWatchFolderConfig(entry));
+        }
+      }
+    } catch (e) {
+      console.error("[LibraryView] Watch folders load failed:", e);
+    }
+    return [];
+  });
+  const createWatchDraft = (): WatchFolderConfig => ({
+    id: generateId(),
+    path: "",
+    includeSubdirs: false,
+    fileTypes: [],
+    enabled: true,
+    createdAt: new Date().toISOString(),
+  });
+  const [watchDraft, setWatchDraft] =
+    useState<WatchFolderConfig>(createWatchDraft);
+  const [knownModelNames, setKnownModelNames] = useState<string[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const pushNotice = useCallback(
@@ -1407,10 +1637,82 @@ export function LibraryView({
     },
     [],
   );
+  const watchNoticePrefix = t.watchNoticePrefix || "翻译监控: ";
+  const pushWatchNotice = useCallback(
+    (next: { type: "info" | "warning" | "error" | "success"; message: string }) =>
+      pushNotice({
+        ...next,
+        message: `${watchNoticePrefix}${next.message}`,
+      }),
+    [pushNotice, watchNoticePrefix],
+  );
+
+  const filteredQueue = useMemo(() => {
+    const keyword = searchQuery.trim().toLowerCase();
+    return queue.filter((item) => {
+      if (statusFilter !== "all" && item.status !== statusFilter) return false;
+      if (!keyword) return true;
+      return (
+        item.fileName.toLowerCase().includes(keyword) ||
+        item.path.toLowerCase().includes(keyword)
+      );
+    });
+  }, [queue, searchQuery, statusFilter]);
+
+  const importSummary = useMemo(() => {
+    if (!importPreview) return null;
+    const existing = new Set(queue.map((item) => item.path));
+    const duplicateExisting = importPreview.items.filter((item) =>
+      existing.has(item.path),
+    ).length;
+    const added =
+      importMode === "replace"
+        ? importPreview.items.length
+        : importPreview.items.length - duplicateExisting;
+    const duplicate =
+      importPreview.meta.duplicateInFile +
+      (importMode === "merge" ? duplicateExisting : 0);
+    return {
+      total: importPreview.meta.total,
+      added,
+      duplicate,
+      unsupported: importPreview.meta.unsupported,
+    };
+  }, [importMode, importPreview, queue]);
+
+  const isFilterActive =
+    statusFilter !== "all" || searchQuery.trim().length > 0;
 
   useEffect(() => {
     return () => {
       if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const loadModelNames = async () => {
+      const names = new Set<string>();
+      const addName = (value: string | null | undefined) => {
+        const name = getModelNameFromPath(value || "");
+        if (name) names.add(name);
+      };
+      addName(localStorage.getItem("config_model"));
+      addName(localStorage.getItem("config_remote_model"));
+      try {
+        const models = await window.api?.getModels?.();
+        if (Array.isArray(models)) {
+          models.forEach((model) => addName(model));
+        }
+      } catch {
+        // ignore
+      }
+      if (!alive) return;
+      setKnownModelNames(Array.from(names));
+    };
+    void loadModelNames();
+    return () => {
+      alive = false;
     };
   }, []);
 
@@ -1427,18 +1729,97 @@ export function LibraryView({
     }
   }, [queue]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(WATCH_FOLDERS_KEY, JSON.stringify(watchFolders));
+    } catch (e) {
+      console.error("[LibraryView] Watch folders save failed:", e);
+    }
+  }, [watchFolders]);
+
+  useEffect(() => {
+    if (!window.api?.watchFolderAdd) return;
+    let cancelled = false;
+    const bootstrapWatchFolders = async () => {
+      watchFolders.forEach((entry) => {
+        void window.api.watchFolderAdd(entry);
+      });
+
+      if (!window.api?.scanDirectory) return;
+      const targets = watchFolders.filter((entry) => entry.enabled && entry.path);
+      if (targets.length === 0) return;
+
+      try {
+        const results = await Promise.all(
+          targets.map(async (entry) => {
+            const files = await window.api!.scanDirectory(
+              entry.path,
+              entry.includeSubdirs,
+            );
+            return filterWatchFilesByTypes(
+              files || [],
+              entry.fileTypes,
+              SUPPORTED_EXTENSIONS,
+            );
+          }),
+        );
+        if (cancelled) return;
+        const merged = Array.from(new Set(results.flat()));
+        addFiles(merged, { source: "watch" });
+      } catch (e) {
+        if (cancelled) return;
+        console.error("[LibraryView] Watch folders initial scan failed:", e);
+        pushWatchNotice({
+          type: "error",
+          message: t.scanFailed.replace("{count}", String(targets.length)),
+        });
+      }
+    };
+    void bootstrapWatchFolders();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const buildModelNamesForFilter = useCallback(() => {
+    const names = new Set<string>();
+    const addName = (value: string | null | undefined) => {
+      const name = getModelNameFromPath(value || "");
+      if (name) names.add(name);
+    };
+    addName(localStorage.getItem("config_model"));
+    addName(localStorage.getItem("config_remote_model"));
+    knownModelNames.forEach((name) => addName(name));
+    return Array.from(names);
+  }, [knownModelNames]);
+
   // Add files
   const addFiles = useCallback(
-    (paths: string[]) => {
+    (
+      paths: string[],
+      options?: { source?: "manual" | "watch" },
+    ) => {
       const existingPaths = new Set(queue.map((q) => q.path));
       const newItems: QueueItem[] = [];
       let skippedUnsupported = 0;
       let skippedDuplicate = 0;
+      let skippedTranslated = 0;
+      const modelNames = buildModelNamesForFilter();
 
       for (const path of paths) {
         const ext = "." + path.split(".").pop()?.toLowerCase();
         if (!SUPPORTED_EXTENSIONS.includes(ext)) {
           skippedUnsupported += 1;
+          continue;
+        }
+        if (
+          isLikelyTranslatedOutput(
+            path,
+            modelNames,
+            SUPPORTED_EXTENSIONS,
+          )
+        ) {
+          skippedTranslated += 1;
           continue;
         }
         if (existingPaths.has(path)) {
@@ -1462,10 +1843,20 @@ export function LibraryView({
         setQueue((prev) => [...prev, ...newItems]);
       }
 
+      const prefix =
+        options?.source === "watch" ? watchNoticePrefix : "";
       const messages: string[] = [];
       if (newItems.length > 0) {
         messages.push(
           t.addedNotice.replace("{count}", String(newItems.length)),
+        );
+      }
+      if (skippedTranslated > 0) {
+        messages.push(
+          t.ignoredTranslated.replace(
+            "{count}",
+            String(skippedTranslated),
+          ),
         );
       }
       if (skippedUnsupported > 0) {
@@ -1484,16 +1875,37 @@ export function LibraryView({
 
       if (messages.length > 0) {
         const type =
-          skippedUnsupported > 0 || skippedDuplicate > 0
+          skippedUnsupported > 0 ||
+          skippedDuplicate > 0 ||
+          skippedTranslated > 0
             ? "warning"
             : "success";
-        pushNotice({ type, message: messages.join("，") });
+        pushNotice({ type, message: `${prefix}${messages.join("，")}` });
       } else {
-        pushNotice({ type: "info", message: t.noValidFiles });
+        pushNotice({
+          type: "info",
+          message: `${prefix}${t.noValidFiles}`,
+        });
       }
     },
-    [queue, pushNotice, t],
+    [
+      queue,
+      pushNotice,
+      t,
+      watchNoticePrefix,
+      buildModelNamesForFilter,
+    ],
   );
+
+  useEffect(() => {
+    const unsubscribe = window.api?.onWatchFolderFileAdded?.((payload) => {
+      if (!payload?.path) return;
+      addFiles([payload.path], { source: "watch" });
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, [addFiles]);
 
   const handleAddFiles = async () => {
     if (isRunning) {
@@ -1502,7 +1914,7 @@ export function LibraryView({
     }
     const files = await window.api?.selectFiles();
     if (files?.length) {
-      addFiles(files);
+      addFiles(files, { source: "manual" });
     } else {
       pushNotice({ type: "info", message: t.noValidFiles });
     }
@@ -1520,7 +1932,7 @@ export function LibraryView({
       try {
         const files = await window.api?.scanDirectory(path, scanSubdirs);
         if (files && files.length > 0) {
-          addFiles(files);
+          addFiles(files, { source: "manual" });
         } else {
           pushNotice({ type: "info", message: t.noValidFiles });
         }
@@ -1533,6 +1945,310 @@ export function LibraryView({
       }
     }
   };
+
+  const handleSelectWatchFolder = async () => {
+    const path = await window.api?.selectFolder?.({
+      title: t.watchFolderTitle,
+    });
+    if (!path) return;
+    setWatchDraft((prev) => ({ ...prev, path }));
+  };
+
+  const toggleWatchDraftType = (type: string) => {
+    setWatchDraft((prev) => {
+      const normalized = type.toLowerCase();
+      const exists = prev.fileTypes.includes(normalized);
+      const nextTypes = exists
+        ? prev.fileTypes.filter((t) => t !== normalized)
+        : [...prev.fileTypes, normalized];
+      return { ...prev, fileTypes: nextTypes };
+    });
+  };
+
+  const applyWatchFolderUpdate = async (
+    id: string,
+    update: Partial<WatchFolderConfig>,
+  ) => {
+    const current = watchFolders.find((entry) => entry.id === id);
+    if (!current) return;
+    const next = normalizeWatchFolderConfig({
+      ...current,
+      ...update,
+      fileTypes: update.fileTypes ?? current.fileTypes,
+    });
+    const result = await window.api?.watchFolderAdd?.(next);
+    if (!result?.ok) {
+      pushWatchNotice({
+        type: "error",
+        message: result?.error || t.watchFolderUpdateFail,
+      });
+      return;
+    }
+    setWatchFolders((prev) =>
+      prev.map((entry) => (entry.id === id ? next : entry)),
+    );
+  };
+
+  const handleToggleWatchFolder = async (id: string, enabled: boolean) => {
+    const result = await window.api?.watchFolderToggle?.(id, enabled);
+    if (!result?.ok) {
+      pushWatchNotice({
+        type: "error",
+        message: result?.error || t.watchFolderToggleFail,
+      });
+      return;
+    }
+    setWatchFolders((prev) =>
+      prev.map((entry) =>
+        entry.id === id ? { ...entry, enabled } : entry,
+      ),
+    );
+  };
+
+  const handleRemoveWatchFolder = async (id: string) => {
+    const result = await window.api?.watchFolderRemove?.(id);
+    if (!result?.ok) {
+      pushWatchNotice({
+        type: "error",
+        message: result?.error || t.watchFolderRemoveFail,
+      });
+      return;
+    }
+    setWatchFolders((prev) => prev.filter((entry) => entry.id !== id));
+  };
+
+  const handleAddWatchFolder = async () => {
+    const path = watchDraft.path.trim();
+    if (!path) {
+      pushWatchNotice({ type: "warning", message: t.watchFolderPathRequired });
+      return;
+    }
+    if (watchFolders.some((entry) => entry.path === path)) {
+      pushWatchNotice({ type: "warning", message: t.watchFolderDuplicate });
+      return;
+    }
+    const entry = normalizeWatchFolderConfig({
+      ...watchDraft,
+      path,
+      fileTypes: watchDraft.fileTypes,
+    });
+    const result = await window.api?.watchFolderAdd?.(entry);
+    if (!result?.ok) {
+      pushWatchNotice({
+        type: "error",
+        message: result?.error || t.watchFolderAddFail,
+      });
+      return;
+    }
+    setWatchFolders((prev) => [...prev, entry]);
+    setWatchDraft(createWatchDraft());
+
+    if (!entry.enabled || !window.api?.scanDirectory) return;
+    try {
+      const files = await window.api.scanDirectory(
+        entry.path,
+        entry.includeSubdirs,
+      );
+      const filtered = filterWatchFilesByTypes(
+        files || [],
+        entry.fileTypes,
+        SUPPORTED_EXTENSIONS,
+      );
+      addFiles(filtered, { source: "watch" });
+    } catch (e) {
+      console.error("Scan failed for", entry.path, e);
+      pushWatchNotice({
+        type: "error",
+        message: t.scanFailed.replace("{count}", "1"),
+      });
+    }
+  };
+
+  const buildQueueImportPreview = (exportQueue: {
+    queue: Array<{
+      path: string;
+      fileName?: string;
+      fileType?: QueueItem["fileType"];
+      addedAt?: string;
+      config?: FileConfig;
+    }>;
+  }): QueueImportPreview => {
+    const seen = new Set<string>();
+    let unsupported = 0;
+    let duplicateInFile = 0;
+    const items: QueueItem[] = [];
+
+    exportQueue.queue.forEach((entry) => {
+      const path = (entry.path || "").trim();
+      if (!path) {
+        duplicateInFile += 1;
+        return;
+      }
+      const lower = path.toLowerCase();
+      if (!SUPPORTED_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
+        unsupported += 1;
+        return;
+      }
+      if (seen.has(path)) {
+        duplicateInFile += 1;
+        return;
+      }
+      seen.add(path);
+      const config =
+        entry.config && typeof entry.config === "object"
+          ? { ...entry.config }
+          : { useGlobalDefaults: true };
+      if (config.useGlobalDefaults === undefined) {
+        config.useGlobalDefaults = true;
+      }
+      items.push({
+        id: generateId(),
+        path,
+        fileName: entry.fileName || path.split(/[/\\]/).pop() || path,
+        fileType: getFileType(path),
+        addedAt: entry.addedAt || new Date().toISOString(),
+        status: "pending",
+        config,
+      });
+    });
+
+    return {
+      items,
+      meta: {
+        total: exportQueue.queue.length,
+        unsupported,
+        duplicateInFile,
+      },
+    };
+  };
+
+  const handleExportQueue = useCallback(async () => {
+    if (queue.length === 0) {
+      pushNotice({ type: "info", message: t.emptyQueue });
+      return;
+    }
+    try {
+      const exportData = buildQueueExport(queue, APP_CONFIG.version);
+      const fileName = `queue_${new Date()
+        .toISOString()
+        .replace(/[:.]/g, "-")
+        .replace("T", "_")
+        .slice(0, 19)}.json`;
+      let defaultPath = "";
+      const candidates = [
+        localStorage.getItem("config_output_dir"),
+        localStorage.getItem("last_output_dir"),
+        localStorage.getItem("config_cache_dir"),
+        localStorage.getItem("last_input_path"),
+      ].filter(Boolean) as string[];
+      const resolveFolderFromPath = (value: string) => {
+        if (!value) return "";
+        const hasSlash = value.includes("/") || value.includes("\\");
+        const looksLikeFile = /\.[^\\/]+$/.test(value);
+        if (hasSlash && looksLikeFile) {
+          return value.replace(/[\\/][^\\/]+$/, "");
+        }
+        return value;
+      };
+      const folder = candidates
+        .map((item) => resolveFolderFromPath(item))
+        .find((item) => item && item.length > 0);
+      if (folder) {
+        const sep = folder.includes("\\") ? "\\" : "/";
+        const normalized = folder.endsWith("\\") || folder.endsWith("/")
+          ? folder.slice(0, -1)
+          : folder;
+        defaultPath = `${normalized}${sep}${fileName}`;
+      }
+      if (!defaultPath || (!defaultPath.includes("\\") && !defaultPath.includes("/"))) {
+        const modelsPath = await window.api?.getModelsPath?.();
+        if (modelsPath) {
+          const sep = modelsPath.includes("\\") ? "\\" : "/";
+          defaultPath = `${modelsPath}${sep}${fileName}`;
+        }
+      }
+      const filePath = await window.api?.saveFile?.({
+        title: t.exportQueue,
+        defaultPath: defaultPath || undefined,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!filePath) return;
+      let ok = false;
+      let writeError = "";
+      if (window.api?.writeFileVerbose) {
+        const result = await window.api.writeFileVerbose(
+          filePath,
+          JSON.stringify(exportData, null, 2),
+        );
+        ok = result?.ok === true;
+        writeError = result?.error || "";
+      } else {
+        ok = Boolean(
+          await window.api?.writeFile?.(
+            filePath,
+            JSON.stringify(exportData, null, 2),
+          ),
+        );
+      }
+      if (!ok) throw new Error(writeError || t.exportQueueFail);
+      pushNotice({ type: "success", message: t.exportQueueDone });
+      emitToast({ variant: "success", message: t.exportQueueDone });
+    } catch (e) {
+      pushNotice({ type: "error", message: String(e) });
+    }
+  }, [queue, pushNotice, t]);
+
+  const handleImportQueue = useCallback(async () => {
+    if (isRunning) {
+      pushNotice({ type: "warning", message: t.busyHint });
+      return;
+    }
+    try {
+      const filePath = await window.api?.selectFile?.({
+        title: t.importQueueSelectTitle,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!filePath) return;
+      const raw = await window.api?.readFile?.(filePath);
+      if (!raw) throw new Error(t.importQueueInvalid);
+      const parsed = parseQueueExport(raw);
+      if (parsed.error || !parsed.exportData) {
+        throw new Error(parsed.error || t.importQueueInvalid);
+      }
+      const preview = buildQueueImportPreview(parsed.exportData);
+      if (preview.items.length === 0) {
+        throw new Error(t.importQueueEmpty);
+      }
+      setImportPreview(preview);
+      setImportMode("merge");
+      setShowImportModal(true);
+    } catch (e) {
+      pushNotice({ type: "error", message: String(e) });
+    }
+  }, [isRunning, pushNotice, t]);
+
+  const applyImportQueue = useCallback(() => {
+    if (!importPreview) return;
+    const existingPaths = new Set(queue.map((q) => q.path));
+    const addedItems =
+      importMode === "replace"
+        ? importPreview.items
+        : importPreview.items.filter((item) => !existingPaths.has(item.path));
+    const nextQueue =
+      importMode === "replace" ? addedItems : [...queue, ...addedItems];
+    setQueue(nextQueue);
+    setSelectedItems(new Set());
+    pushNotice({
+      type: "success",
+      message: t.importQueueDone.replace("{count}", String(addedItems.length)),
+    });
+    emitToast({
+      variant: "success",
+      message: t.importQueueDone.replace("{count}", String(addedItems.length)),
+    });
+    setShowImportModal(false);
+    setImportPreview(null);
+  }, [importMode, importPreview, pushNotice, queue, t]);
 
   // Drag handlers
   const handleDragOver = useCallback(
@@ -1604,7 +2320,7 @@ export function LibraryView({
           });
         }
         if (finalPaths.length > 0) {
-          addFiles(finalPaths);
+          addFiles(finalPaths, { source: "manual" });
         } else if (scanErrors === 0) {
           pushNotice({ type: "info", message: t.noValidFiles });
         }
@@ -1749,24 +2465,37 @@ export function LibraryView({
   }, []);
 
   const handleSelectAll = useCallback(() => {
-    if (selectedItems.size === queue.length) setSelectedItems(new Set());
-    else setSelectedItems(new Set(queue.map((q) => q.id)));
-  }, [queue, selectedItems]);
+    if (filteredQueue.length === 0) return;
+    const allVisibleSelected = filteredQueue.every((q) =>
+      selectedItems.has(q.id),
+    );
+    if (allVisibleSelected) {
+      const next = new Set(selectedItems);
+      filteredQueue.forEach((q) => next.delete(q.id));
+      setSelectedItems(next);
+    } else {
+      const next = new Set(selectedItems);
+      filteredQueue.forEach((q) => next.add(q.id));
+      setSelectedItems(next);
+    }
+  }, [filteredQueue, selectedItems]);
 
   const handleInvertSelection = useCallback(() => {
     setSelectedItems((prev) => {
-      const next = new Set<string>();
-      queue.forEach((item) => {
-        if (!prev.has(item.id)) next.add(item.id);
+      if (filteredQueue.length === 0) return prev;
+      const next = new Set(prev);
+      filteredQueue.forEach((item) => {
+        if (next.has(item.id)) next.delete(item.id);
+        else next.add(item.id);
       });
       return next;
     });
-  }, [queue]);
+  }, [filteredQueue]);
 
   // Drag reorder
   const handleDragStart = useCallback(
     (e: React.DragEvent, index: number) => {
-      if (isRunning) {
+      if (isRunning || isFilterActive) {
         e.preventDefault();
         return;
       }
@@ -1775,7 +2504,7 @@ export function LibraryView({
       e.dataTransfer.effectAllowed = "move";
       // Create a custom drag image or hide it if needed, but default is usually fine
     },
-    [isRunning],
+    [isRunning, isFilterActive],
   );
 
   const handleDragEnd = useCallback(() => {
@@ -1786,6 +2515,7 @@ export function LibraryView({
   const handleReorderDrop = useCallback(
     (e: React.DragEvent, targetIndex: number) => {
       e.preventDefault();
+      if (isFilterActive) return;
       const sourceIndexStr = e.dataTransfer.getData("text/plain");
       if (!sourceIndexStr) return;
 
@@ -1799,8 +2529,12 @@ export function LibraryView({
         return newQueue;
       });
     },
-    [],
+    [isFilterActive],
   );
+
+  const allVisibleSelected =
+    filteredQueue.length > 0 &&
+    filteredQueue.every((item) => selectedItems.has(item.id));
 
   // Config save
   const handleSaveConfig = useCallback((itemId: string, config: FileConfig) => {
@@ -1884,7 +2618,11 @@ export function LibraryView({
         if (!outputDir && item.config?.useGlobalDefaults) {
           outputDir = localStorage.getItem("config_output_dir") || undefined;
         }
-        targetPath = getCachePath(item.path, outputDir);
+        let modelPath = item.config?.model;
+        if (!modelPath) {
+          modelPath = localStorage.getItem("config_model") || undefined;
+        }
+        targetPath = getCachePath(item.path, outputDir, modelPath);
       }
 
       console.log("[Proofread] Resolved target:", targetPath);
@@ -2002,6 +2740,38 @@ export function LibraryView({
 
             <div className="w-px h-4 bg-border/40 mx-1" />
 
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleImportQueue}
+              disabled={isRunning}
+              className={`h-7 text-xs font-medium px-3 hover:bg-primary/10 hover:text-primary transition-colors border-none shadow-none ${isRunning ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              <Upload className="w-3.5 h-3.5 mr-1" />
+              {t.importQueue}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleExportQueue}
+              disabled={queue.length === 0}
+              className={`h-7 text-xs font-medium px-3 hover:bg-primary/10 hover:text-primary transition-colors border-none shadow-none ${queue.length === 0 ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              <Download className="w-3.5 h-3.5 mr-1" />
+              {t.exportQueue}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowWatchModal(true)}
+              className="h-7 text-xs font-medium px-3 hover:bg-primary/10 hover:text-primary transition-colors border-none shadow-none"
+            >
+              <Eye className="w-3.5 h-3.5 mr-1" />
+              {t.watchFolder}
+            </Button>
+
+            <div className="w-px h-4 bg-border/40 mx-1" />
+
             <div className="flex items-center gap-2 px-1.5">
               <Switch
                 checked={scanSubdirs}
@@ -2047,9 +2817,7 @@ export function LibraryView({
                 onClick={handleSelectAll}
                 className="h-7 text-[11px] font-medium text-muted-foreground hover:text-primary hover:bg-primary/5 transition-all rounded-md px-3 border-border/50 hover:border-primary/30"
               >
-                {selectedItems.size === queue.length
-                  ? t.deselectAll
-                  : t.selectAll}
+                {allVisibleSelected ? t.deselectAll : t.selectAll}
               </Button>
 
               <Button
@@ -2104,11 +2872,44 @@ export function LibraryView({
         <Card className="flex-1 flex flex-col overflow-hidden border-border/50 shadow-sm bg-card/30">
           {/* Queue Header - More minimal */}
           {queue.length > 0 && (
-            <div className="px-4 py-2 border-b border-border/40 flex items-center justify-between shrink-0 bg-secondary/5">
-              <div className="flex items-center gap-3">
+            <div className="px-4 py-2 border-b border-border/40 flex items-center justify-between shrink-0 bg-secondary/5 gap-3">
+              <div className="flex items-center gap-2">
                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider pl-2">
                   {t.queueTitle}
                 </span>
+                <span className="text-[10px] text-muted-foreground/70">
+                  {filteredQueue.length}/{queue.length}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-muted-foreground/60 absolute left-2 top-1/2 -translate-y-1/2" />
+                  <Input
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={t.searchPlaceholder}
+                    className="h-7 w-[200px] text-xs pl-7 pr-6 bg-background/80"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                  className="h-7 text-xs rounded-md border border-border/40 bg-background/80 px-2 text-muted-foreground hover:text-foreground"
+                >
+                  <option value="all">{t.filterAll}</option>
+                  <option value="pending">{t.filterPending}</option>
+                  <option value="completed">{t.filterCompleted}</option>
+                  <option value="failed">{t.filterFailed}</option>
+                </select>
               </div>
             </div>
           )}
@@ -2174,12 +2975,34 @@ export function LibraryView({
                   </div>
                 </div>
               </div>
+            ) : filteredQueue.length === 0 ? (
+              <div className="absolute inset-0 flex items-center justify-center p-8">
+                <div className="text-center text-muted-foreground">
+                  <p className="text-sm font-medium">{t.noMatch}</p>
+                  <div className="mt-3">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setSearchQuery("");
+                        setStatusFilter("all");
+                      }}
+                      className="h-7 text-xs"
+                    >
+                      {t.reset}
+                    </Button>
+                  </div>
+                </div>
+              </div>
             ) : (
               <div className="divide-y divide-border/30">
-                {queue.map((item, index) => (
-                  <div
-                    key={item.id}
-                    className={`
+                {filteredQueue.map((item) => {
+                  const queueIndex = queue.findIndex((q) => q.id === item.id);
+                  if (queueIndex < 0) return null;
+                  return (
+                    <div
+                      key={item.id}
+                      className={`
                                             flex items-center gap-3 px-4 py-3 transition-all group
                                             ${
                                               selectedItems.has(item.id)
@@ -2187,12 +3010,12 @@ export function LibraryView({
                                                 : "hover:bg-secondary/30"
                                             }
                                         `}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = "move";
-                    }}
-                    onDrop={(e) => handleReorderDrop(e, index)}
-                  >
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={(e) => handleReorderDrop(e, queueIndex)}
+                    >
                     {/* Checkbox */}
                     <input
                       type="checkbox"
@@ -2203,9 +3026,13 @@ export function LibraryView({
 
                     {/* Drag Handle - Larger Hit Area */}
                     <div
-                      className={`p-2 -m-1 rounded shrink-0 transition-colors ${isRunning ? "opacity-20 cursor-not-allowed" : "hover:bg-secondary cursor-grab active:cursor-grabbing text-muted-foreground/30 hover:text-foreground"}`}
-                      draggable={!isRunning}
-                      onDragStart={(e) => handleDragStart(e, index)}
+                      className={`p-2 -m-1 rounded shrink-0 transition-colors ${
+                        isRunning || isFilterActive
+                          ? "opacity-20 cursor-not-allowed"
+                          : "hover:bg-secondary cursor-grab active:cursor-grabbing text-muted-foreground/30 hover:text-foreground"
+                      }`}
+                      draggable={!isRunning && !isFilterActive}
+                      onDragStart={(e) => handleDragStart(e, queueIndex)}
                       onDragEnd={handleDragEnd}
                       title={t.dragToReorder}
                     >
@@ -2286,7 +3113,8 @@ export function LibraryView({
                       </UITooltip>
                     </div>
                   </div>
-                ))}
+                );
+                })}
               </div>
             )}
           </div>
@@ -2304,6 +3132,303 @@ export function LibraryView({
             onClose={() => setConfigItem(null)}
             remoteRuntime={remoteRuntime}
           />
+        )}
+
+        {showImportModal && importPreview && importSummary && (
+          <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="w-full max-w-lg rounded-xl border border-border bg-background shadow-xl overflow-hidden">
+              <div className="px-5 py-4 border-b flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-semibold">
+                    {t.importQueueTitle}
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {t.importQueueDesc}
+                  </p>
+                </div>
+                <button
+                  className="p-1.5 hover:bg-muted rounded-md"
+                  onClick={() => setShowImportModal(false)}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-5 space-y-4">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setImportMode("merge")}
+                    className={`flex-1 px-3 py-2 rounded-md border text-xs font-medium transition-all ${
+                      importMode === "merge"
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-border/60 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {t.importQueueMerge}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImportMode("replace")}
+                    className={`flex-1 px-3 py-2 rounded-md border text-xs font-medium transition-all ${
+                      importMode === "replace"
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-border/60 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {t.importQueueReplace}
+                  </button>
+                </div>
+
+                <div className="rounded-lg border border-border/50 bg-muted/20 p-3 text-xs text-muted-foreground">
+                  {t.importQueueSummary
+                    .replace("{total}", String(importSummary.total))
+                    .replace("{added}", String(importSummary.added))
+                    .replace("{duplicate}", String(importSummary.duplicate))
+                    .replace("{unsupported}", String(importSummary.unsupported))}
+                </div>
+              </div>
+              <div className="px-5 py-3 border-t flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowImportModal(false)}
+                >
+                  {t.cancel}
+                </Button>
+                <Button size="sm" onClick={applyImportQueue}>
+                  {t.importQueueApply}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showWatchModal && (
+          <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="w-full max-w-3xl rounded-xl border border-border bg-background shadow-xl overflow-hidden">
+              <div className="px-5 py-4 border-b flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-semibold">
+                    {t.watchFolderTitle}
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {t.watchFolderDesc}
+                  </p>
+                </div>
+                <button
+                  className="p-1.5 hover:bg-muted rounded-md"
+                  onClick={() => setShowWatchModal(false)}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-5 space-y-5">
+                <div className="rounded-xl border border-border/50 bg-muted/20 p-4 space-y-4">
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <div className="flex-1 min-w-[220px]">
+                      <Input
+                        value={watchDraft.path}
+                        onChange={(e) =>
+                          setWatchDraft((prev) => ({
+                            ...prev,
+                            path: e.target.value,
+                          }))
+                        }
+                        placeholder={t.watchFolderBrowse}
+                        className="h-9 text-xs"
+                      />
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSelectWatchFolder}
+                      className="h-9 text-xs"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5 mr-1" />
+                      {t.watchFolderBrowse}
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={handleAddWatchFolder}
+                      className="h-9 text-xs"
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" />
+                      {t.watchFolderAdd}
+                    </Button>
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-muted-foreground">
+                      {t.watchFolderTypes}（{t.watchFolderTypesHint}）
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setWatchDraft((prev) => ({
+                            ...prev,
+                            fileTypes: [],
+                          }))
+                        }
+                        className={`px-2.5 py-1 rounded-full border text-[11px] font-medium transition-all ${
+                          watchDraft.fileTypes.length === 0
+                            ? "border-primary/40 bg-primary/10 text-primary"
+                            : "border-border/60 text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {t.watchFolderAllTypes}
+                      </button>
+                      {WATCH_FILE_TYPES.map((type) => {
+                        const active = watchDraft.fileTypes.includes(type);
+                        return (
+                          <button
+                            key={type}
+                            type="button"
+                            onClick={() => toggleWatchDraftType(type)}
+                            className={`px-2.5 py-1 rounded-full border text-[11px] font-medium transition-all uppercase ${
+                              active
+                                ? "border-primary/40 bg-primary/10 text-primary"
+                                : "border-border/60 text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            .{type}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-4">
+                    <label className="flex items-center gap-2 text-[11px] text-muted-foreground/80 hover:text-foreground cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={watchDraft.includeSubdirs}
+                        onChange={(e) =>
+                          setWatchDraft((prev) => ({
+                            ...prev,
+                            includeSubdirs: e.target.checked,
+                          }))
+                        }
+                        className="w-4 h-4 rounded border-border accent-primary"
+                      />
+                      {t.watchFolderIncludeSubdirs}
+                    </label>
+                    <label className="flex items-center gap-2 text-[11px] text-muted-foreground/80 hover:text-foreground cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={watchDraft.enabled}
+                        onChange={(e) =>
+                          setWatchDraft((prev) => ({
+                            ...prev,
+                            enabled: e.target.checked,
+                          }))
+                        }
+                        className="w-4 h-4 rounded border-border accent-primary"
+                      />
+                      {t.watchFolderEnabled}
+                    </label>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {watchFolders.length === 0 ? (
+                    <div className="text-xs text-muted-foreground text-center py-4 border border-dashed rounded-lg">
+                      {t.watchFolderEmpty}
+                    </div>
+                  ) : (
+                    watchFolders.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="rounded-xl border border-border/50 bg-background p-4 shadow-sm"
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-foreground truncate">
+                              {entry.path}
+                            </div>
+                            <div className="flex flex-wrap gap-2 mt-3">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  applyWatchFolderUpdate(entry.id, {
+                                    fileTypes: [],
+                                  })
+                                }
+                                className={`px-2 py-0.5 rounded-full border text-[10px] font-medium transition-all ${
+                                  entry.fileTypes.length === 0
+                                    ? "border-primary/40 bg-primary/10 text-primary"
+                                    : "border-border/60 text-muted-foreground hover:text-foreground"
+                                }`}
+                              >
+                                {t.watchFolderAllTypes}
+                              </button>
+                              {WATCH_FILE_TYPES.map((type) => {
+                                const active = entry.fileTypes.includes(type);
+                                return (
+                                  <button
+                                    key={type}
+                                    type="button"
+                                    onClick={() => {
+                                      const next = active
+                                        ? entry.fileTypes.filter((t) => t !== type)
+                                        : [...entry.fileTypes, type];
+                                      applyWatchFolderUpdate(entry.id, {
+                                        fileTypes: next,
+                                      });
+                                    }}
+                                    className={`px-2 py-0.5 rounded-full border text-[10px] font-medium transition-all uppercase ${
+                                      active
+                                        ? "border-primary/40 bg-primary/10 text-primary"
+                                        : "border-border/60 text-muted-foreground hover:text-foreground"
+                                    }`}
+                                  >
+                                    .{type}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div className="shrink-0 flex items-center gap-4">
+                            <label className="flex items-center gap-2 text-[11px] text-muted-foreground/80 hover:text-foreground cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={entry.includeSubdirs}
+                                onChange={(e) =>
+                                  applyWatchFolderUpdate(entry.id, {
+                                    includeSubdirs: e.target.checked,
+                                  })
+                                }
+                                className="w-4 h-4 rounded border-border accent-primary"
+                              />
+                              {t.watchFolderIncludeSubdirs}
+                            </label>
+                            <label className="flex items-center gap-2 text-[11px] text-muted-foreground/80 hover:text-foreground cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={entry.enabled}
+                                onChange={(e) =>
+                                  handleToggleWatchFolder(entry.id, e.target.checked)
+                                }
+                                className="w-4 h-4 rounded border-border accent-primary"
+                              />
+                              {t.watchFolderEnabled}
+                            </label>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleRemoveWatchFolder(entry.id)}
+                              className="w-7 h-7"
+                            >
+                              <Trash2 className="w-4 h-4 text-muted-foreground hover:text-red-500" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
         )}
         <AlertModal {...alertProps} />
       </div>

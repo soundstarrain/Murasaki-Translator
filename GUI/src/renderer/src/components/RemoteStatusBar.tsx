@@ -165,7 +165,10 @@ export function RemoteStatusBar({ remote, lang }: RemoteStatusBarProps) {
     : t.communicationHttp;
 
   return (
-    <div className="fixed z-[999] pointer-events-none" style={wrapperStyle}>
+    <div
+      className="fixed z-[var(--z-floating)] pointer-events-none"
+      style={wrapperStyle}
+    >
       <div
         ref={panelRef}
         className={`pointer-events-auto w-[min(480px,calc(100vw-1.5rem))] rounded-lg border bg-card/95 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/80 ${

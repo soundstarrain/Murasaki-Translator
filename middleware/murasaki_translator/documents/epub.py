@@ -197,6 +197,51 @@ class EpubDocument(BaseDocument):
                     continue
                 id_to_text[uid] = (match.group(2) or "").strip()
 
+            # Final fallback: handle cases where @id is missing but @end=UID@ exists.
+            if expected_uids:
+                expected_uid_set = set(expected_uids)
+                marker_re = re.compile(r"@(?:id|end)=(\d+)@")
+                current_uid = None
+                current_start = None
+                cursor = 0
+                for m in marker_re.finditer(normalized):
+                    try:
+                        uid = int(m.group(1))
+                    except:
+                        cursor = m.end()
+                        continue
+                    if uid not in expected_uid_set:
+                        cursor = m.end()
+                        continue
+
+                    marker = normalized[m.start():m.end()]
+                    if marker.startswith("@id="):
+                        if current_uid is not None and current_uid not in id_to_text and current_start is not None:
+                            seg = normalized[current_start:m.start()].strip()
+                            if seg:
+                                id_to_text[current_uid] = seg
+                        current_uid = uid
+                        current_start = m.end()
+                    else:
+                        if current_uid == uid and current_start is not None:
+                            if uid not in id_to_text:
+                                seg = normalized[current_start:m.start()].strip()
+                                if seg:
+                                    id_to_text[uid] = seg
+                            current_uid = None
+                            current_start = None
+                        else:
+                            if uid not in id_to_text:
+                                seg = normalized[cursor:m.start()].strip()
+                                if seg:
+                                    id_to_text[uid] = seg
+                    cursor = m.end()
+
+                if current_uid is not None and current_uid not in id_to_text and current_start is not None:
+                    seg = normalized[current_start:].strip()
+                    if seg:
+                        id_to_text[current_uid] = seg
+
         try:
             with zipfile.ZipFile(self.path, 'r') as in_zip, \
                  zipfile.ZipFile(output_path, 'w', compression=zipfile.ZIP_DEFLATED) as out_zip:

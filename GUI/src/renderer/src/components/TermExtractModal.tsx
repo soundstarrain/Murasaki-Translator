@@ -16,6 +16,7 @@ import {
 import { Button, Card, CardContent, CardHeader, CardTitle } from "./ui/core";
 import { AlertModal } from "./ui/AlertModal";
 import { translations, Language } from "../lib/i18n";
+import { emitToast } from "../lib/toast";
 
 interface TermItem {
   src: string;
@@ -199,6 +200,7 @@ export function TermExtractModal({
     a.download = `${originalName}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    emitToast({ variant: "success", message: tt.exportSuccess });
   };
 
   const handleImportToGlossary = () => {
@@ -265,7 +267,7 @@ export function TermExtractModal({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in">
+    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in">
       <Card className="w-[900px] max-h-[85vh] flex flex-col bg-card border-border/50 shadow-2xl rounded-2xl overflow-hidden">
         {/* Header */}
         <CardHeader className="py-4 px-6 border-b border-border/50 bg-gradient-to-r from-primary/5 to-transparent flex flex-row items-center justify-between shrink-0">

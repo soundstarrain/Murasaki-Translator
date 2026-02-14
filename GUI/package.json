@@ -1,6 +1,6 @@
 {
   "name": "murasaki-translator",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "main": "./out/main/index.js",
   "author": "soundstarrain",
   "description": "Murasaki Local AI Translator",
@@ -11,6 +11,8 @@
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint . --ext .js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "build:win": "npm run build && electron-builder --win --x64",
@@ -92,17 +94,24 @@
           "!**/*.bat",
           "!**/llama-b*-bin-*/**",
           "!**/server.log",
-          "!**/test_*.py"
+          "!**/test_*.py",
+          "!**/tests/**",
+          "!**/__tests__/**",
+          "!**/*.test.*"
         ]
       }
     ],
     "afterPack": "./scripts/afterPack.js"
   },
   "dependencies": {
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/view": "^6.39.14",
     "@electron-toolkit/preload": "^3.0.0",
     "@electron-toolkit/utils": "^3.0.0",
     "@radix-ui/react-progress": "^1.1.8",
     "@radix-ui/react-slot": "^1.2.4",
+    "@uiw/react-codemirror": "^4.25.4",
+    "chokidar": "^3.6.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.562.0",
@@ -132,6 +141,7 @@
     "prettier": "^3.2.4",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.3.3",
-    "vite": "^5.0.12"
+    "vite": "^5.0.12",
+    "vitest": "^1.6.0"
   }
 }

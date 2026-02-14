@@ -16,6 +16,33 @@ module.exports = {
         "2xl": "1400px",
       },
     },
+    fontFamily: {
+      sans: [
+        "\"Helvetica Neue\"",
+        "\"PingFang SC\"",
+        "\"Hiragino Sans GB\"",
+        "\"Segoe UI\"",
+        "\"Microsoft YaHei\"",
+        "\"Noto Sans CJK SC\"",
+        "\"Noto Sans\"",
+        "Arial",
+        "sans-serif",
+        "\"Apple Color Emoji\"",
+        "\"Segoe UI Emoji\"",
+        "\"Segoe UI Symbol\"",
+        "\"Noto Color Emoji\"",
+      ],
+      mono: [
+        "\"SF Mono\"",
+        "SFMono-Regular",
+        "Menlo",
+        "Monaco",
+        "Consolas",
+        "\"Liberation Mono\"",
+        "\"Courier New\"",
+        "monospace",
+      ],
+    },
     extend: {
       colors: {
         border: "hsl(var(--border))",

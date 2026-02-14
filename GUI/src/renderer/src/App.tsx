@@ -117,7 +117,6 @@ function AppContent() {
           active={view === "dashboard"}
           onRunningChange={setIsRunning}
           remoteRuntime={remoteRuntime}
-          onNavigate={handleSwitchView}
         />
       </div>
       {view === "settings" && <SettingsView lang={lang} />}
@@ -141,7 +140,9 @@ function AppContent() {
       {view === "pre" && <RuleEditor lang={lang} mode="pre" />}
       {view === "post" && <RuleEditor lang={lang} mode="post" />}
       {view === "advanced" && <AdvancedView lang={lang} />}
-      {view === "history" && <HistoryView lang={lang} />}
+      {view === "history" && (
+        <HistoryView lang={lang} onNavigate={handleSwitchView} />
+      )}
       {view === "proofread" && (
         <div className="flex-1 min-w-0 overflow-hidden">
           <ProofreadView

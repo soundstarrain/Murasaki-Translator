@@ -8,7 +8,8 @@ import {
   nativeTheme,
 } from "electron";
 import type { Event as ElectronEvent } from "electron";
-import { join, basename, resolve, relative, isAbsolute, dirname } from "path";
+import { join, basename, resolve, relative, isAbsolute, dirname, parse } from "path";
+import chokidar from "chokidar";
 import { electronApp, optimizer, is } from "@electron-toolkit/utils";
 import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
@@ -46,6 +47,22 @@ let envCheckCache:
   | null = null;
 const ENV_CHECK_CACHE_TTL_MS = 12000;
 
+type WatchFolderConfig = {
+  id: string;
+  path: string;
+  includeSubdirs: boolean;
+  fileTypes: string[];
+  enabled: boolean;
+  createdAt?: string;
+};
+
+type WatchFolderEntry = {
+  config: WatchFolderConfig;
+  watcher?: chokidar.FSWatcher;
+};
+
+const watchFolderEntries = new Map<string, WatchFolderEntry>();
+
 // 主进程日志缓冲区 - 用于调试工具箱查看完整终端日志
 const mainProcessLogs: string[] = [];
 const MAX_MAIN_LOGS = 1000;
@@ -55,6 +72,131 @@ const originalConsoleLog = console.log;
 const originalConsoleWarn = console.warn;
 const originalConsoleError = console.error;
 
+type LogLevel = "debug" | "info" | "warn" | "error" | "critical";
+type LogMeta = {
+  level?: LogLevel;
+  source?: string;
+  runId?: string | null;
+  taskId?: string | null;
+};
+
+const normalizeLogLines = (message: string): string[] =>
+  message
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+const buildLogEnvelope = (message: string, meta: LogMeta) => {
+  const resolvedRunId = meta.runId ?? activeRunId ?? undefined;
+  const resolvedTaskId = meta.taskId ?? undefined;
+  return {
+    ts: new Date().toISOString(),
+    level: meta.level ?? "info",
+    source: meta.source ?? "main",
+    runId: resolvedRunId || undefined,
+    taskId: resolvedTaskId || undefined,
+    message,
+  };
+};
+
+const enrichJsonEventLine = (line: string, meta: LogMeta): string => {
+  const match = line.match(/^(JSON_[A-Z_]+:)/);
+  if (!match) return line;
+  const prefix = match[1];
+  const payloadStr = line.slice(prefix.length);
+  try {
+    const payload = JSON.parse(payloadStr);
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      const resolvedRunId = meta.runId ?? activeRunId ?? undefined;
+      const resolvedTaskId = meta.taskId ?? undefined;
+      const resolvedSource = meta.source ?? "main";
+      const enriched: Record<string, unknown> = { ...payload };
+      if (!("ts" in enriched)) enriched.ts = new Date().toISOString();
+      if (resolvedRunId && !("runId" in enriched)) enriched.runId = resolvedRunId;
+      if (resolvedTaskId && !("taskId" in enriched)) enriched.taskId = resolvedTaskId;
+      if (resolvedSource && !("source" in enriched))
+        enriched.source = resolvedSource;
+      if (meta.level && !("level" in enriched)) enriched.level = meta.level;
+      return `${prefix}${JSON.stringify(enriched)}`;
+    }
+  } catch {
+    // ignore JSON parse errors
+  }
+  return line;
+};
+
+const emitLogUpdate = (
+  send: (payload: string) => void,
+  message: string,
+  meta: LogMeta = {},
+) => {
+  for (const line of normalizeLogLines(message)) {
+    if (line.startsWith("JSON_")) {
+      send(`${enrichJsonEventLine(line, meta)}\n`);
+      continue;
+    }
+    if (line.includes("JSON_PREVIEW_BLOCK:")) {
+      send(`${line}\n`);
+      continue;
+    }
+    const envelope = buildLogEnvelope(line, meta);
+    send(`${JSON.stringify(envelope)}\n`);
+  }
+};
+
+const emitJsonLog = (
+  send: (payload: string) => void,
+  prefix: string,
+  payload: Record<string, unknown>,
+  meta: LogMeta = {},
+) => {
+  const resolvedRunId = meta.runId ?? activeRunId ?? undefined;
+  const resolvedTaskId = meta.taskId ?? undefined;
+  const resolvedSource = meta.source ?? "main";
+  const enriched: Record<string, unknown> = { ...payload };
+  if (!("ts" in enriched)) enriched.ts = new Date().toISOString();
+  if (resolvedRunId && !("runId" in enriched)) enriched.runId = resolvedRunId;
+  if (resolvedTaskId && !("taskId" in enriched)) enriched.taskId = resolvedTaskId;
+  if (resolvedSource && !("source" in enriched)) enriched.source = resolvedSource;
+  if (meta.level && !("level" in enriched)) enriched.level = meta.level;
+  send(`${prefix}${JSON.stringify(enriched)}\n`);
+};
+
+const replyLogUpdate = (
+  event: ElectronEvent,
+  message: string,
+  meta: LogMeta = {},
+) => {
+  emitLogUpdate((payload) => event.reply("log-update", payload), message, meta);
+};
+
+const replyJsonLog = (
+  event: ElectronEvent,
+  prefix: string,
+  payload: Record<string, unknown>,
+  meta: LogMeta = {},
+) => {
+  emitJsonLog(
+    (payloadLine) => event.reply("log-update", payloadLine),
+    prefix,
+    payload,
+    meta,
+  );
+};
+
+const sendLogUpdateToWindow = (
+  window: BrowserWindow | null,
+  message: string,
+  meta: LogMeta = {},
+) => {
+  if (!window) return;
+  emitLogUpdate(
+    (payload) => window.webContents.send("log-update", payload),
+    message,
+    meta,
+  );
+};
+
 const requestRemoteTaskCancel = (reason?: string): boolean => {
   if (!remoteTranslationBridge) return false;
   translationStopRequested = true;
@@ -62,10 +204,11 @@ const requestRemoteTaskCancel = (reason?: string): boolean => {
   bridge.cancelRequested = true;
   const reasonTag = reason ? ` (${reason})` : "";
   console.log(`[Stop] Cancelling remote task${reasonTag}: ${bridge.taskId}`);
-  mainWindow?.webContents.send(
-    "log-update",
-    `System: Cancelling remote task${reasonTag}...\n`,
-  );
+  sendLogUpdateToWindow(mainWindow, `System: Cancelling remote task${reasonTag}...`, {
+    level: "info",
+    source: "remote",
+    taskId: bridge.taskId,
+  });
   const cancellingTaskId = bridge.taskId;
   setTimeout(() => {
     if (
@@ -87,9 +230,14 @@ const requestRemoteTaskCancel = (reason?: string): boolean => {
   }, 8000);
   void bridge.client.cancelTask(bridge.taskId).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
-    mainWindow?.webContents.send(
-      "log-update",
-      `ERR: Failed to cancel remote task immediately: ${message}\n`,
+    sendLogUpdateToWindow(
+      mainWindow,
+      `ERR: Failed to cancel remote task immediately: ${message}`,
+      {
+        level: "error",
+        source: "remote",
+        taskId: bridge.taskId,
+      },
     );
   });
   return true;
@@ -233,6 +381,8 @@ async function cleanupProcesses(): Promise<void> {
     remoteTranslationBridge = null;
     void bridge.client.cancelTask(bridge.taskId).catch(() => undefined);
   }
+
+  await closeAllWatchFolders();
 }
 
 /**
@@ -259,7 +409,12 @@ function cleanupTempDirectory(): void {
     if (fs.existsSync(middlewareDir)) {
       const files = fs.readdirSync(middlewareDir);
       for (const file of files) {
-        if (!/^temp_rules_(pre|post)_[\w-]+\.json$/i.test(file)) continue;
+        if (
+          !/^(temp_rules_(pre|post)_[\w-]+\.json|temp_protect_patterns_[\w-]+\.txt)$/i.test(
+            file,
+          )
+        )
+          continue;
         try {
           fs.unlinkSync(join(middlewareDir, file));
         } catch { }
@@ -586,6 +741,91 @@ const ensureLocalFilePathForUserOperation = (targetPath: string): string => {
     return resolvedPath;
   }
   return ensurePathWithinUserData(resolvedPath);
+};
+
+const ensureDirExists = async (targetPath: string) => {
+  const dirPath = dirname(targetPath);
+  const root = parse(dirPath).root;
+  if (dirPath === root || dirPath === `${root}`) return;
+  if (fs.existsSync(dirPath)) return;
+  await fs.promises.mkdir(dirPath, { recursive: true });
+};
+
+const normalizeWatchFileTypes = (types: string[]) =>
+  (types || [])
+    .map((t) => t.trim().toLowerCase().replace(/^\./, ""))
+    .filter(Boolean);
+
+const isSupportedWatchFile = (filePath: string, types: string[]) => {
+  const ext = filePath.split(".").pop()?.toLowerCase() || "";
+  if (!ext) return false;
+  return types.length === 0 ? true : types.includes(ext);
+};
+
+const normalizeWatchConfig = (config: WatchFolderConfig): WatchFolderConfig => ({
+  ...config,
+  includeSubdirs: Boolean(config.includeSubdirs),
+  enabled: config.enabled !== false,
+  fileTypes: normalizeWatchFileTypes(
+    Array.isArray(config.fileTypes) ? config.fileTypes : [],
+  ),
+});
+
+const closeWatchEntry = async (entry: WatchFolderEntry) => {
+  if (!entry.watcher) return;
+  try {
+    await entry.watcher.close();
+  } catch (e) {
+    console.error("[WatchFolder] close error:", e);
+  } finally {
+    entry.watcher = undefined;
+  }
+};
+
+const validateWatchFolderPath = (targetPath: string): string => {
+  if (!targetPath) throw new Error("Watch folder path is required");
+  const safePath = ensureLocalFilePathForUserOperation(targetPath);
+  if (!fs.existsSync(safePath)) {
+    throw new Error("Watch folder path does not exist");
+  }
+  const stats = fs.statSync(safePath);
+  if (!stats.isDirectory()) {
+    throw new Error("Watch folder path must be a directory");
+  }
+  return safePath;
+};
+
+const createWatcher = (entry: WatchFolderEntry) => {
+  const { config } = entry;
+  const safePath = validateWatchFolderPath(config.path);
+  const watcher = chokidar.watch(safePath, {
+    ignoreInitial: true,
+    depth: config.includeSubdirs ? undefined : 0,
+    awaitWriteFinish: {
+      stabilityThreshold: 500,
+      pollInterval: 100,
+    },
+  });
+  watcher.on("add", (filePath) => {
+    if (!isSupportedWatchFile(filePath, config.fileTypes)) return;
+    mainWindow?.webContents.send("watch-folder-file-added", {
+      watchId: config.id,
+      path: filePath,
+      addedAt: new Date().toISOString(),
+    });
+  });
+  watcher.on("error", (err) => {
+    console.error("[WatchFolder] error:", err);
+  });
+  entry.watcher = watcher;
+};
+
+const closeAllWatchFolders = async () => {
+  const entries = Array.from(watchFolderEntries.values());
+  for (const entry of entries) {
+    await closeWatchEntry(entry);
+  }
+  watchFolderEntries.clear();
 };
 
 // Ensure User Data Dirs Exist
@@ -1541,6 +1781,97 @@ ipcMain.handle(
     }
   },
 );
+
+// --- Watch Folder IPC ---
+ipcMain.handle("watch-folder-add", async (_event, config: WatchFolderConfig) => {
+  try {
+    if (!config || !config.id || !config.path) {
+      return { ok: false, error: "Invalid watch folder config" };
+    }
+    const normalized = normalizeWatchConfig(config);
+    if (normalized.enabled) {
+      validateWatchFolderPath(normalized.path);
+    }
+
+    const existing = watchFolderEntries.get(normalized.id);
+    if (existing) {
+      await closeWatchEntry(existing);
+      existing.config = normalized;
+      if (normalized.enabled) {
+        createWatcher(existing);
+      }
+      return { ok: true };
+    }
+
+    const entry: WatchFolderEntry = { config: normalized };
+    watchFolderEntries.set(normalized.id, entry);
+    if (normalized.enabled) {
+      createWatcher(entry);
+    }
+    return { ok: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: message };
+  }
+});
+
+ipcMain.handle(
+  "watch-folder-toggle",
+  async (_event, payload: { id: string; enabled: boolean }) => {
+    let prevEnabled: boolean | null = null;
+    try {
+      if (!payload?.id) {
+        return { ok: false, error: "Watch folder id is required" };
+      }
+      const entry = watchFolderEntries.get(payload.id);
+      if (!entry) {
+        return { ok: false, error: "Watch folder not found" };
+      }
+      const enabled = Boolean(payload.enabled);
+      prevEnabled = entry.config.enabled;
+      entry.config.enabled = enabled;
+      await closeWatchEntry(entry);
+      if (enabled) {
+        createWatcher(entry);
+      }
+      return { ok: true };
+    } catch (e) {
+      const entry = payload?.id ? watchFolderEntries.get(payload.id) : null;
+      if (entry && prevEnabled !== null) {
+        entry.config.enabled = prevEnabled;
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: message };
+    }
+  },
+);
+
+ipcMain.handle("watch-folder-remove", async (_event, id: string) => {
+  try {
+    if (!id) return { ok: false, error: "Watch folder id is required" };
+    const entry = watchFolderEntries.get(id);
+    if (!entry) return { ok: false, error: "Watch folder not found" };
+    await closeWatchEntry(entry);
+    watchFolderEntries.delete(id);
+    return { ok: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: message };
+  }
+});
+
+ipcMain.handle("watch-folder-list", async () => {
+  try {
+    const entries = Array.from(watchFolderEntries.values()).map((entry) => ({
+      config: entry.config,
+      active: Boolean(entry.watcher),
+    }));
+    return { ok: true, entries };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: message };
+  }
+});
 
 // --- Update System IPC ---
 ipcMain.handle("check-update", async () => {
@@ -2908,7 +3239,7 @@ ipcMain.handle("read-file", async (_event, path: string) => {
 ipcMain.handle("write-file", async (_event, path: string, content: string) => {
   try {
     const safePath = ensureLocalFilePathForUserOperation(path);
-    await fs.promises.mkdir(dirname(safePath), { recursive: true });
+    await ensureDirExists(safePath);
     await fs.promises.writeFile(safePath, content, "utf-8");
     return true;
   } catch (e) {
@@ -2916,6 +3247,22 @@ ipcMain.handle("write-file", async (_event, path: string, content: string) => {
     return false;
   }
 });
+
+ipcMain.handle(
+  "write-file-verbose",
+  async (_event, path: string, content: string) => {
+    try {
+      const safePath = ensureLocalFilePathForUserOperation(path);
+      await ensureDirExists(safePath);
+      await fs.promises.writeFile(safePath, content, "utf-8");
+      return { ok: true };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("write-file-verbose error:", e);
+      return { ok: false, error: message };
+    }
+  },
+);
 
 // 加载翻译缓存（用于校对界面）
 ipcMain.handle("load-cache", async (_event, cachePath: string) => {
@@ -3009,6 +3356,7 @@ ipcMain.handle(
   "retranslate-block",
   async (event, { src, index, modelPath, config }) => {
     const middlewareDir = getMiddlewarePath();
+    const tempArtifacts: string[] = [];
     const scriptPath = join(middlewareDir, "murasaki_translator", "main.py");
     const pythonCmd = getPythonPath(); // Use the same python as main translation
 
@@ -3068,6 +3416,9 @@ ipcMain.handle(
       if (config.repPenaltyStep)
         args.push("--rep-penalty-step", config.repPenaltyStep.toString());
       if (config.preset) args.push("--preset", config.preset);
+      if (config.strictMode) {
+        args.push("--strict-mode", config.strictMode);
+      }
 
       // Force f16 KV Cache for single block re-translation (Quality Priority)
       args.push("--kv-cache-type", "f16");
@@ -3078,6 +3429,24 @@ ipcMain.handle(
       }
 
       // Retry Strategy for Single Block
+      if (config.lineCheck) {
+        args.push("--line-check");
+        args.push(
+          "--line-tolerance-abs",
+          (config.lineToleranceAbs ?? 10).toString(),
+        );
+        args.push(
+          "--line-tolerance-pct",
+          ((config.lineTolerancePct ?? 20) / 100).toString(),
+        );
+      }
+      if (config.anchorCheck) {
+        args.push("--anchor-check");
+        args.push(
+          "--anchor-check-retries",
+          String(config.anchorCheckRetries || 1),
+        );
+      }
       if (config.maxRetries !== undefined) {
         args.push("--max-retries", config.maxRetries.toString());
       }
@@ -3086,18 +3455,48 @@ ipcMain.handle(
       }
       if (config.retryPromptFeedback) {
         args.push("--retry-prompt-feedback");
+      } else if (config.retryPromptFeedback === false) {
+        args.push("--no-retry-prompt-feedback");
       }
-      if (config.outputHitThreshold !== undefined) {
+      if (config.coverageCheck === false) {
+        args.push("--output-hit-threshold", "0");
+        args.push("--cot-coverage-threshold", "0");
+        args.push("--coverage-retries", "0");
+      } else if (config.outputHitThreshold !== undefined) {
         args.push(
           "--output-hit-threshold",
           config.outputHitThreshold.toString(),
         );
+        if (config.cotCoverageThreshold !== undefined) {
+          args.push(
+            "--cot-coverage-threshold",
+            config.cotCoverageThreshold.toString(),
+          );
+        }
+        if (config.coverageRetries !== undefined) {
+          args.push(
+            "--coverage-retries",
+            config.coverageRetries.toString(),
+          );
+        }
       }
-      if (config.cotCoverageThreshold !== undefined) {
-        args.push(
-          "--cot-coverage-threshold",
-          config.cotCoverageThreshold.toString(),
-        );
+      if (config.textProtect) {
+        args.push("--text-protect");
+      }
+      if (config.protectPatterns && String(config.protectPatterns).trim()) {
+        const rawPatterns = String(config.protectPatterns).trim();
+        if (fs.existsSync(rawPatterns)) {
+          args.push("--protect-patterns", rawPatterns);
+        } else {
+          const uid = require("crypto").randomUUID().slice(0, 8);
+          const protectPath = join(
+            middlewareDir,
+            `temp_protect_patterns_${uid}.txt`,
+          );
+          fs.writeFileSync(protectPath, rawPatterns, "utf8");
+          args.push("--protect-patterns", protectPath);
+          tempArtifacts.push(protectPath);
+        }
       }
     }
 
@@ -3170,6 +3569,11 @@ ipcMain.handle(
       }
 
       proc.on("close", (code) => {
+        for (const path of tempArtifacts) {
+          try {
+            fs.unlinkSync(path);
+          } catch (_) {}
+        }
         if (code !== 0) {
           resolve({
             success: false,
@@ -3435,6 +3839,12 @@ const sanitizeRemoteConfig = (config: any, externalRemote: boolean) => {
   if ("cacheDir" in next) {
     delete next.cacheDir;
   }
+  if ("gpuDeviceId" in next) {
+    delete next.gpuDeviceId;
+  }
+  if ("deviceMode" in next) {
+    delete next.deviceMode;
+  }
   return next;
 };
 
@@ -3524,6 +3934,7 @@ const buildRemoteTranslateOptionsFromConfig = (
 
   const parsedGpuLayers = toInt(config?.gpuLayers, -1);
   const parsedSeed = Number.parseInt(String(config?.seed ?? ""), 10);
+  const coverageEnabled = config?.coverageCheck !== false;
 
   return {
     filePath: remoteFilePath,
@@ -3534,12 +3945,14 @@ const buildRemoteTranslateOptionsFromConfig = (
     chunkSize: toInt(config?.chunkSize, 1000),
     ctx: toInt(config?.ctxSize, 8192),
     gpuLayers: config?.deviceMode === "cpu" ? 0 : parsedGpuLayers,
-    temperature: toFloat(config?.temperature, 0.3),
+    temperature: toFloat(config?.temperature, 0.7),
     lineFormat: config?.lineFormat || "single",
     strictMode: config?.strictMode || "off",
     lineCheck: config?.lineCheck !== false,
     lineToleranceAbs: toInt(config?.lineToleranceAbs, 10),
     lineTolerancePct: normalizeLineTolerancePct(config?.lineTolerancePct, 0.2),
+    anchorCheck: config?.anchorCheck !== false,
+    anchorCheckRetries: toInt(config?.anchorCheckRetries, 1),
     traditional: config?.traditional === true,
     saveCot: config?.saveCot === true,
     saveSummary: config?.saveSummary === true,
@@ -3553,9 +3966,13 @@ const buildRemoteTranslateOptionsFromConfig = (
     repPenaltyMax: toFloat(config?.repPenaltyMax, 1.5),
     repPenaltyStep: toFloat(config?.repPenaltyStep, 0.1),
     maxRetries: toInt(config?.maxRetries, 3),
-    outputHitThreshold: toFloat(config?.outputHitThreshold, 60),
-    cotCoverageThreshold: toFloat(config?.cotCoverageThreshold, 80),
-    coverageRetries: toInt(config?.coverageRetries, 3),
+    outputHitThreshold: coverageEnabled
+      ? toFloat(config?.outputHitThreshold, 60)
+      : 0,
+    cotCoverageThreshold: coverageEnabled
+      ? toFloat(config?.cotCoverageThreshold, 80)
+      : 0,
+    coverageRetries: coverageEnabled ? toInt(config?.coverageRetries, 1) : 0,
     retryTempBoost: toFloat(config?.retryTempBoost, 0.05),
     retryPromptFeedback: config?.retryPromptFeedback !== false,
     balanceEnable: config?.balanceEnable !== false,
@@ -3564,7 +3981,7 @@ const buildRemoteTranslateOptionsFromConfig = (
     parallel: Math.max(1, toInt(config?.concurrency, 1)),
     flashAttn: config?.flashAttn === true,
     kvCacheType: String(config?.kvCacheType || "f16"),
-    useLargeBatch: config?.useLargeBatch === true,
+    useLargeBatch: config?.useLargeBatch !== false,
     batchSize:
       toInt(config?.physicalBatchSize, 0) > 0
         ? toInt(config?.physicalBatchSize, 0)
@@ -3639,6 +4056,23 @@ const runTranslationViaRemoteApi = async (
   let lastProgressSeenAt = 0;
   let lastWsLogAt = 0;
 
+  const emitRemoteLog = (message: string, level: LogLevel = "info") => {
+    replyLogUpdate(event, message, {
+      level,
+      source: "remote",
+      runId,
+      taskId,
+    });
+  };
+
+  const emitRemoteJson = (prefix: string, payload: Record<string, unknown>) => {
+    replyJsonLog(event, prefix, payload, {
+      source: "remote",
+      runId,
+      taskId,
+    });
+  };
+
   const handleRemoteLogLine = (logLine: string, source: "ws" | "poll") => {
     if (!logLine) return;
     if (logLine.includes("JSON_PROGRESS:")) {
@@ -3647,7 +4081,18 @@ const runTranslationViaRemoteApi = async (
     if (source === "ws") {
       lastWsLogAt = Date.now();
     }
-    event.reply("log-update", `${logLine}\n`);
+    const upper = logLine.toUpperCase();
+    const inferredLevel =
+      upper.includes("CRITICAL")
+        ? "critical"
+        : logLine.startsWith("ERR:") || upper.includes("ERROR")
+          ? "error"
+          : upper.includes("[WARN]") || upper.includes("WARN")
+            ? "warn"
+            : upper.includes("DEBUG")
+              ? "debug"
+              : "info";
+    emitRemoteLog(logLine, inferredLevel);
     appendRemoteMirrorMessage({
       taskId,
       serverUrl,
@@ -3658,7 +4103,7 @@ const runTranslationViaRemoteApi = async (
   const emitRemoteTroubleshootingHint = () => {
     const hint =
       "System: 远程排查：服务管理 → 远程运行详情 可打开网络日志/任务镜像日志（可按任务ID过滤）";
-    event.reply("log-update", `${hint}\n`);
+    emitRemoteLog(hint, "info");
     appendRemoteMirrorMessage({
       taskId,
       serverUrl,
@@ -3674,7 +4119,7 @@ const runTranslationViaRemoteApi = async (
     } catch {
       // ignore health fetch failure
     }
-    event.reply("log-update", `System: Execution mode remote-api (${sourceLabel})\n`);
+    emitRemoteLog(`System: Execution mode remote-api (${sourceLabel})`, "info");
     // [Feature] 发送远程执行信息供 Dashboard 记录到翻译历史
     const remoteInfoPayload = {
       executionMode: "remote-api",
@@ -3683,7 +4128,7 @@ const runTranslationViaRemoteApi = async (
       model: effectiveModelPath,
       serverVersion,
     };
-    event.reply("log-update", `JSON_REMOTE_INFO:${JSON.stringify(remoteInfoPayload)}\n`);
+    emitRemoteJson("JSON_REMOTE_INFO:", remoteInfoPayload);
     if (serverVersion) {
       appendRemoteMirrorMessage({
         taskId,
@@ -3692,7 +4137,7 @@ const runTranslationViaRemoteApi = async (
         message: `System: Remote server version v${serverVersion}`,
       });
     }
-    event.reply("log-update", "System: Uploading source file to remote server...\n");
+    emitRemoteLog("System: Uploading source file to remote server...", "info");
     appendRemoteMirrorMessage({
       taskId,
       serverUrl,
@@ -3700,7 +4145,7 @@ const runTranslationViaRemoteApi = async (
       message: "System: Uploading source file to remote server...",
     });
     const uploaded = await client.uploadFile(inputFile);
-    event.reply("log-update", `System: Upload completed (${uploaded.fileId})\n`);
+    emitRemoteLog(`System: Upload completed (${uploaded.fileId})`, "info");
     appendRemoteMirrorMessage({
       taskId,
       serverUrl,
@@ -3711,7 +4156,7 @@ const runTranslationViaRemoteApi = async (
     let glossaryPathToUse = sanitizedConfig?.glossaryPath;
     const localGlossaryPath = resolveLocalGlossaryPath(glossaryPathToUse);
     if (localGlossaryPath) {
-      event.reply("log-update", "System: Uploading glossary to remote server...\n");
+      emitRemoteLog("System: Uploading glossary to remote server...", "info");
       appendRemoteMirrorMessage({
         taskId,
         serverUrl,
@@ -3720,7 +4165,10 @@ const runTranslationViaRemoteApi = async (
       });
       const uploadedGlossary = await client.uploadFile(localGlossaryPath);
       glossaryPathToUse = uploadedGlossary.serverPath;
-      event.reply("log-update", `System: Glossary upload completed (${uploadedGlossary.fileId})\n`);
+      emitRemoteLog(
+        `System: Glossary upload completed (${uploadedGlossary.fileId})`,
+        "info",
+      );
       appendRemoteMirrorMessage({
         taskId,
         serverUrl,
@@ -3742,20 +4190,17 @@ const runTranslationViaRemoteApi = async (
       taskId,
       cancelRequested: false,
     };
-    event.reply("log-update", `System: Remote task created (${taskId})\n`);
+    emitRemoteLog(`System: Remote task created (${taskId})`, "info");
     appendRemoteMirrorMessage({
       taskId,
       serverUrl,
       model: effectiveModelPath,
       message: `System: Remote task created (${taskId})`,
     });
-    event.reply(
-      "log-update",
-      `JSON_REMOTE_INFO:${JSON.stringify({
-        ...remoteInfoPayload,
-        taskId,
-      })}\n`,
-    );
+    emitRemoteJson("JSON_REMOTE_INFO:", {
+      ...remoteInfoPayload,
+      taskId,
+    });
 
     try {
       wsClient = client.connectWebSocket(taskId, {
@@ -3823,7 +4268,7 @@ const runTranslationViaRemoteApi = async (
         };
         const progressSig = `${progressPayload.current}/${progressPayload.total}/${progressPayload.percent}`;
         if (progressSig !== lastProgressSig) {
-          event.reply("log-update", `JSON_PROGRESS:${JSON.stringify(progressPayload)}\n`);
+          emitRemoteJson("JSON_PROGRESS:", progressPayload);
           lastProgressSig = progressSig;
         }
       }
@@ -3857,13 +4302,16 @@ const runTranslationViaRemoteApi = async (
           model: effectiveModelPath,
           message: `System: Remote task completed (${taskId})`,
         });
-        event.reply("log-update", `JSON_OUTPUT_PATH:${JSON.stringify({ path: outputPath })}\n`);
+        emitRemoteJson("JSON_OUTPUT_PATH:", { path: outputPath });
         event.reply("process-exit", { code: 0, signal: null, stopRequested: false, runId });
         return;
       }
 
       if (status.status === "failed") {
-        event.reply("log-update", `ERR: ${status.error || "Remote translation failed"}\n`);
+        emitRemoteLog(
+          `ERR: ${status.error || "Remote translation failed"}`,
+          "error",
+        );
         appendRemoteMirrorMessage({
           taskId,
           serverUrl,
@@ -3877,7 +4325,7 @@ const runTranslationViaRemoteApi = async (
       }
 
       if (status.status === "cancelled") {
-        event.reply("log-update", "[WARN] Remote translation cancelled by user\n");
+        emitRemoteLog("[WARN] Remote translation cancelled by user", "warn");
         appendRemoteMirrorMessage({
           taskId,
           serverUrl,
@@ -3900,7 +4348,7 @@ const runTranslationViaRemoteApi = async (
     if (taskId && !remoteTranslationBridge && stopRequested) {
       return;
     }
-    event.reply("log-update", `ERR: Remote translation failed. ${message}\n`);
+    emitRemoteLog(`ERR: Remote translation failed. ${message}`, "error");
     emitRemoteTroubleshootingHint();
     appendRemoteMirrorMessage({
       taskId,
@@ -3947,7 +4395,10 @@ ipcMain.on(
   const scriptPath = join(middlewareDir, "murasaki_translator", "main.py");
 
   if (!fs.existsSync(scriptPath)) {
-    event.reply("log-update", `ERR: Script not found at ${scriptPath}`);
+    replyLogUpdate(event, `ERR: Script not found at ${scriptPath}`, {
+      level: "error",
+      source: "main",
+    });
     activeRunId = null;
     return;
   }
@@ -3959,14 +4410,18 @@ ipcMain.on(
   let serverExePath: string;
   try {
     const platformInfo = detectPlatform();
-    event.reply(
-      "log-update",
+    replyLogUpdate(
+      event,
       `System: Platform ${platformInfo.os}/${platformInfo.arch}, Backend: ${platformInfo.backend}`,
+      { level: "info", source: "main" },
     );
     serverExePath = getLlamaServerPath();
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
-    event.reply("log-update", `ERR: ${errorMsg}`);
+    replyLogUpdate(event, `ERR: ${errorMsg}`, {
+      level: "error",
+      source: "main",
+    });
     activeRunId = null;
     return;
   }
@@ -4011,16 +4466,14 @@ ipcMain.on(
     remoteExecutionSource = "configured-remote-url";
   }
 
-  const effectiveRemoteModelPath = (
-    (typeof config?.remoteModel === "string" && config.remoteModel.trim()
+  const configuredRemoteModel =
+    typeof config?.remoteModel === "string" && config.remoteModel.trim()
       ? config.remoteModel.trim()
-      : null) ||
-    (typeof config?.modelPath === "string" && config.modelPath.trim()
+      : "";
+  const configuredLocalModel =
+    typeof config?.modelPath === "string" && config.modelPath.trim()
       ? config.modelPath.trim()
-      : null) ||
-    modelPath ||
-    ""
-  ).trim();
+      : "";
 
   const isExternalRemote = (() => {
     if (remoteSession?.source === "local-daemon") return false;
@@ -4035,6 +4488,12 @@ ipcMain.on(
     }
     return true;
   })();
+
+  const effectiveRemoteModelPath = (
+    isExternalRemote
+      ? configuredRemoteModel
+      : configuredRemoteModel || configuredLocalModel || modelPath || ""
+  ).trim();
 
   if (remoteExecutionClient) {
     await runTranslationViaRemoteApi(event, {
@@ -4102,7 +4561,10 @@ ipcMain.on(
 
   if (!effectiveModelPath || !fs.existsSync(effectiveModelPath)) {
     console.error("[start-translation] Model not found, returning early");
-    event.reply("log-update", `ERR: Model not found at ${effectiveModelPath}`);
+    replyLogUpdate(event, `ERR: Model not found at ${effectiveModelPath}`, {
+      level: "error",
+      source: "main",
+    });
     return;
   }
 
@@ -4142,12 +4604,20 @@ ipcMain.on(
       args.push("--server", `http://127.0.0.1:${status.port}`);
       args.push("--no-server-spawn");
       console.log("[start-translation] Using local daemon server on port", status.port);
-      event.reply("log-update", `System: Connected to local daemon on port ${status.port}`);
+      replyLogUpdate(
+        event,
+        `System: Connected to local daemon on port ${status.port}`,
+        { level: "info", source: "main" },
+      );
     } else if (status.running && status.mode === "api_v1") {
       // api_v1 daemon：API server 端口与 llama-server 协议不兼容，
       // 回退到标准 spawn（main.py 自行启动 llama-server）
       console.log("[start-translation] api_v1 daemon detected, using direct spawn for performance.");
-      event.reply("log-update", "System: Local daemon(api_v1) detected, using direct spawn mode for best performance.");
+      replyLogUpdate(
+        event,
+        "System: Local daemon(api_v1) detected, using direct spawn mode for best performance.",
+        { level: "info", source: "main" },
+      );
       args.push("--server", serverExePath);
     } else {
       // Daemon 未运行，回退到标准 spawn
@@ -4272,11 +4742,18 @@ ipcMain.on(
       args.push("--line-check");
       args.push(
         "--line-tolerance-abs",
-        (config.lineToleranceAbs || 20).toString(),
+        (config.lineToleranceAbs ?? 20).toString(),
       );
       args.push(
         "--line-tolerance-pct",
-        ((config.lineTolerancePct || 20) / 100).toString(),
+        ((config.lineTolerancePct ?? 20) / 100).toString(),
+      );
+    }
+    if (config.anchorCheck) {
+      args.push("--anchor-check");
+      args.push(
+        "--anchor-check-retries",
+        String(config.anchorCheckRetries || 1),
       );
     }
     if (config.repPenaltyBase !== undefined) {
@@ -4293,7 +4770,12 @@ ipcMain.on(
     }
 
     // Glossary Coverage Check（术语覆盖率检测）
-    if (config.coverageCheck) {
+    if (config.coverageCheck === false) {
+      // Explicitly disable coverage retries on backend defaults
+      args.push("--output-hit-threshold", "0");
+      args.push("--cot-coverage-threshold", "0");
+      args.push("--coverage-retries", "0");
+    } else {
       args.push(
         "--output-hit-threshold",
         (config.outputHitThreshold || 60).toString(),
@@ -4302,7 +4784,7 @@ ipcMain.on(
         "--cot-coverage-threshold",
         (config.cotCoverageThreshold || 80).toString(),
       );
-      args.push("--coverage-retries", (config.coverageRetries || 3).toString());
+      args.push("--coverage-retries", (config.coverageRetries || 1).toString());
     }
 
     // Incremental Translation（增量翻译）
@@ -4311,6 +4793,24 @@ ipcMain.on(
     }
 
     // Text Protection（文本保护）
+    if (config.textProtect) {
+      args.push("--text-protect");
+    }
+    if (config.protectPatterns && String(config.protectPatterns).trim()) {
+      const rawPatterns = String(config.protectPatterns).trim();
+      if (fs.existsSync(rawPatterns)) {
+        args.push("--protect-patterns", rawPatterns);
+      } else {
+        const uid = require("crypto").randomUUID().slice(0, 8);
+        const protectPath = join(
+          middlewareDir,
+          `temp_protect_patterns_${uid}.txt`,
+        );
+        fs.writeFileSync(protectPath, rawPatterns, "utf8");
+        args.push("--protect-patterns", protectPath);
+        tempRuleFiles.push(protectPath);
+      }
+    }
 
     // Dynamic Retry Strategy（动态重试策略）
     if (config.retryTempBoost !== undefined) {
@@ -4318,6 +4818,8 @@ ipcMain.on(
     }
     if (config.retryPromptFeedback) {
       args.push("--retry-prompt-feedback");
+    } else if (config.retryPromptFeedback === false) {
+      args.push("--no-retry-prompt-feedback");
     }
 
     // Save Cache（默认启用，用于校对界面）
@@ -4331,11 +4833,18 @@ ipcMain.on(
   }
 
   console.log("Spawning:", pythonCmd, args.join(" "), "in", middlewareDir);
-  event.reply("log-update", `System: CMD: ${pythonCmd} ${args.join(" ")}`);
-  event.reply("log-update", `System: CWD: ${middlewareDir}`);
-  event.reply(
-    "log-update",
+  replyLogUpdate(event, `System: CMD: ${pythonCmd} ${args.join(" ")}`, {
+    level: "info",
+    source: "main",
+  });
+  replyLogUpdate(event, `System: CWD: ${middlewareDir}`, {
+    level: "info",
+    source: "main",
+  });
+  replyLogUpdate(
+    event,
     `System: Config - CTX: ${config?.ctxSize || "4096"}, Concurrency: ${config?.concurrency || "1"}, KV: ${config?.kvCacheType || "f16"}`,
+    { level: "info", source: "main" },
   );
 
   // Set GPU ID if specified and not in CPU mode
@@ -4343,9 +4852,10 @@ ipcMain.on(
   if (config?.deviceMode !== "cpu" && config?.gpuDeviceId) {
     customEnv["CUDA_VISIBLE_DEVICES"] = config.gpuDeviceId;
     console.log(`Setting CUDA_VISIBLE_DEVICES=${config.gpuDeviceId}`);
-    event.reply(
-      "log-update",
+    replyLogUpdate(
+      event,
       `System: CUDA_VISIBLE_DEVICES=${config.gpuDeviceId}`,
+      { level: "info", source: "main" },
     );
   }
 
@@ -4356,11 +4866,73 @@ ipcMain.on(
       stdio: ["ignore", "pipe", "pipe"],
     });
 
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    const flushBufferedLines = (
+      buffer: string,
+      onLine: (line: string) => void,
+    ): { buffer: string } => {
+      const lines = buffer.split(/\r?\n/);
+      const remaining = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        onLine(line);
+      }
+      return { buffer: remaining };
+    };
+
+    const emitLlamaLogLine = (line: string) => {
+      replyJsonLog(
+        event,
+        "JSON_LLAMA_LOG:",
+        { line },
+        { level: "info", source: "llama" },
+      );
+    };
+
+    const handleStdoutLine = (line: string) => {
+      replyLogUpdate(event, line, { level: "info", source: "python" });
+    };
+
+    const handleStderrLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      // Filter out noisy llama-server logs
+      if (
+        trimmed === "." ||
+        trimmed.includes("llama_") ||
+        trimmed.includes("common_init") ||
+        trimmed.includes("srv ") ||
+        trimmed.startsWith("slot ") ||
+        trimmed.includes("sched_reserve")
+      ) {
+        emitLlamaLogLine(trimmed);
+        return;
+      }
+
+      console.error("STDERR:", trimmed);
+      // If it's still informational (e.g. from llama-server or python logging that wasn't redirected)
+      if (trimmed.includes("INFO") || trimmed.includes("WARN")) {
+        const level = trimmed.includes("WARN") ? "warn" : "info";
+        replyLogUpdate(event, `System: ${trimmed}`, {
+          level,
+          source: "python",
+        });
+      } else {
+        replyLogUpdate(event, `ERR: ${trimmed}`, {
+          level: "error",
+          source: "python",
+        });
+      }
+    };
+
     pythonProcess.on("error", (err) => {
       console.error("Spawn Error:", err);
-      event.reply(
-        "log-update",
+      replyLogUpdate(
+        event,
         `CRITICAL ERROR: Failed to spawn python. ${err.message}`,
+        { level: "critical", source: "main" },
       );
       translationStopRequested = false;
       pythonProcess = null;
@@ -4370,47 +4942,28 @@ ipcMain.on(
       pythonProcess.stdout.on("data", (data) => {
         const str = data.toString();
         console.log("STDOUT:", str);
-        event.reply("log-update", str);
+        stdoutBuffer += str;
+        const flushed = flushBufferedLines(stdoutBuffer, handleStdoutLine);
+        stdoutBuffer = flushed.buffer;
       });
     }
 
     if (pythonProcess.stderr) {
-      const emitLlamaLog = (raw: string) => {
-        const lines = raw
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean);
-        for (const line of lines) {
-          event.reply("log-update", `JSON_LLAMA_LOG:${JSON.stringify({ line })}\n`);
-        }
-      };
       pythonProcess.stderr.on("data", (data) => {
         const str = data.toString();
-
-        // Filter out noisy llama-server logs
-        if (
-          str.trim() === "." ||
-          str.includes("llama_") ||
-          str.includes("common_init") ||
-          str.includes("srv ") ||
-          str.startsWith("slot ") ||
-          str.includes("sched_reserve")
-        ) {
-          emitLlamaLog(str);
-          return;
-        }
-
-        console.error("STDERR:", str);
-        // If it's still informational (e.g. from llama-server or python logging that wasn't redirected)
-        if (str.includes("INFO") || str.includes("WARN")) {
-          event.reply("log-update", `System: ${str}`);
-        } else {
-          event.reply("log-update", `ERR: ${str}`);
-        }
+        stderrBuffer += str;
+        const flushed = flushBufferedLines(stderrBuffer, handleStderrLine);
+        stderrBuffer = flushed.buffer;
       });
     }
 
     pythonProcess.on("close", (code, signal) => {
+      if (stdoutBuffer.trim()) {
+        flushBufferedLines(`${stdoutBuffer}\n`, handleStdoutLine);
+      }
+      if (stderrBuffer.trim()) {
+        flushBufferedLines(`${stderrBuffer}\n`, handleStderrLine);
+      }
       const stopRequested = translationStopRequested;
       translationStopRequested = false;
       const exitRunId = activeRunId;
@@ -4434,7 +4987,10 @@ ipcMain.on(
     });
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
-    event.reply("log-update", `Exception: ${errorMsg}`);
+    replyLogUpdate(event, `Exception: ${errorMsg}`, {
+      level: "error",
+      source: "main",
+    });
     console.error(e);
   }
 });

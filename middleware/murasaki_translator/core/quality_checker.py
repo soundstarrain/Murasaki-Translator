@@ -317,8 +317,8 @@ def calculate_glossary_coverage(
     
     # 2. CoT 检查
     cot_coverage = 0.0
+    cot_hit_count = 0
     if cot_text:
-        cot_hit_count = 0
         for src_term in relevant_terms.keys():
             # Check if source term appears in CoT (Model noticed the term)
             if src_term in cot_text:

@@ -25,6 +25,8 @@ export interface TranslateOptions {
   lineCheck?: boolean;
   lineToleranceAbs?: number;
   lineTolerancePct?: number;
+  anchorCheck?: boolean;
+  anchorCheckRetries?: number;
   traditional?: boolean;
   saveCot?: boolean;
   saveSummary?: boolean;
@@ -355,8 +357,10 @@ export class RemoteClient {
       line_format: options.lineFormat || "single",
       strict_mode: options.strictMode || "off",
       line_check: options.lineCheck ?? true,
-      line_tolerance_abs: options.lineToleranceAbs ?? 20,
+      line_tolerance_abs: options.lineToleranceAbs ?? 10,
       line_tolerance_pct: normalizedLineTolerancePct,
+      anchor_check: options.anchorCheck ?? true,
+      anchor_check_retries: options.anchorCheckRetries ?? 1,
       traditional: options.traditional ?? false,
       save_cot: options.saveCot ?? false,
       save_summary: options.saveSummary ?? false,
@@ -374,16 +378,16 @@ export class RemoteClient {
       max_retries: options.maxRetries ?? 3,
       output_hit_threshold: options.outputHitThreshold ?? 60,
       cot_coverage_threshold: options.cotCoverageThreshold ?? 80,
-      coverage_retries: options.coverageRetries ?? 3,
+      coverage_retries: options.coverageRetries ?? 1,
       retry_temp_boost: options.retryTempBoost ?? 0.05,
       retry_prompt_feedback: options.retryPromptFeedback ?? true,
-      balance_enable: options.balanceEnable ?? false,
+      balance_enable: options.balanceEnable ?? true,
       balance_threshold: options.balanceThreshold ?? 0.6,
       balance_count: options.balanceCount ?? 3,
       parallel: options.parallel ?? 1,
       flash_attn: options.flashAttn ?? false,
       kv_cache_type: options.kvCacheType || "f16",
-      use_large_batch: options.useLargeBatch ?? false,
+      use_large_batch: options.useLargeBatch ?? true,
       batch_size: options.batchSize,
       seed: options.seed,
       text_protect: options.textProtect ?? false,

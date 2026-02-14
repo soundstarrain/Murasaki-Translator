@@ -8,6 +8,8 @@ import {
   AlertCircle,
   CheckCircle,
   XCircle,
+  Copy,
+  RotateCw,
   Download,
   FolderOpen,
   ExternalLink,
@@ -16,6 +18,13 @@ import { Card, CardContent, CardHeader, CardTitle, Tooltip } from "./ui/core";
 import { Button } from "./ui/core";
 import { AlertModal } from "./ui/AlertModal";
 import { translations, Language } from "../lib/i18n";
+import { emitToast } from "../lib/toast";
+import {
+  FileConfig,
+  QueueItem,
+  generateId,
+  getFileType,
+} from "../types/common";
 
 // ============================================================================
 // Types - Translation History Data Structures
@@ -33,6 +42,7 @@ export interface TriggerEvent {
     | "empty_retry"
     | "rep_penalty_increase"
     | "line_mismatch"
+    | "anchor_missing"
     | "parse_fallback"
     | "kana_residue"
     | "hangeul_residue"
@@ -54,6 +64,17 @@ export interface TriggerEvent {
  * Complete record of a translation task, including configuration, statistics, and logs.
  * Stored in localStorage and displayed in the History view.
  */
+type HistoryConfig = Omit<FileConfig, "ctxSize" | "contextSize"> & {
+  ctxSize?: number | string;
+  contextSize?: number | string;
+  chunkSize?: number | string;
+  modelPath?: string;
+  rulesPre?: any[];
+  rulesPost?: any[];
+  textProtect?: boolean;
+  protectPatterns?: string;
+};
+
 export interface TranslationRecord {
   /** Unique identifier (timestamp-based) */
   id: string;
@@ -97,14 +118,8 @@ export interface TranslationRecord {
     model?: string;
     serverVersion?: string;
   };
-  /** Configuration used for this translation */
-  config: {
-    temperature: number;
-    lineCheck: boolean;
-    repPenaltyBase: number;
-    maxRetries: number;
-    concurrency?: number;
-  };
+  /** Configuration used for this translation (may be partial for old records) */
+  config?: HistoryConfig;
   /** Trigger events recorded during translation */
   triggers: TriggerEvent[];
   /** Log lines (last 100 kept) */
@@ -116,6 +131,14 @@ export interface TranslationRecord {
 // ============================================================================
 // Storage Functions - localStorage-based history management
 // ============================================================================
+
+const AUTO_START_QUEUE_KEY = "murasaki_auto_start_queue";
+const CONFIG_SYNC_KEY = "murasaki_pending_config_sync";
+
+interface HistoryViewProps {
+  lang: Language;
+  onNavigate?: (view: string) => void;
+}
 
 /** Maximum number of history records to keep */
 const MAX_HISTORY_RECORDS = 50;
@@ -346,6 +369,9 @@ function RecordDetailContent({
     triggers: detail.triggers,
     llamaLogs: detail.llamaLogs || [],
   };
+  const config = fullRecord.config || {};
+  const formatMaybe = (value: any, fallback = t.none) =>
+    value === undefined || value === null || value === "" ? fallback : value;
 
   // Trigger events collapse state
   const COLLAPSE_THRESHOLD = 10;
@@ -410,13 +436,13 @@ function RecordDetailContent({
             <p className="text-muted-foreground text-xs">
               {t.historyView.stats.concurrency}
             </p>
-            <p className="font-medium">{fullRecord.config.concurrency || 1}</p>
+            <p className="font-medium">{config.concurrency ?? 1}</p>
           </div>
           <div>
             <p className="text-muted-foreground text-xs">
               {t.historyView.stats.temperature}
             </p>
-            <p className="font-medium">{fullRecord.config.temperature}</p>
+            <p className="font-medium">{formatMaybe(config.temperature, "-")}</p>
           </div>
           <div>
             <p className="text-muted-foreground text-xs">
@@ -428,6 +454,7 @@ function RecordDetailContent({
                   (tr) =>
                     tr.type === "empty_retry" ||
                     tr.type === "line_mismatch" ||
+                    tr.type === "anchor_missing" ||
                     tr.type === "rep_penalty_increase" ||
                     tr.type === "glossary_missed",
                 ).length
@@ -620,7 +647,7 @@ function RecordDetailContent({
  * History view component displaying all past translation records.
  * Features: expandable cards, detailed logs, trigger events, statistics.
  */
-export function HistoryView({ lang }: { lang: Language }) {
+export function HistoryView({ lang, onNavigate }: HistoryViewProps) {
   const t = translations[lang];
   const [records, setRecords] = useState<TranslationRecord[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -703,6 +730,155 @@ export function HistoryView({ lang }: { lang: Language }) {
     setRecords([]);
   };
 
+  const applyHistoryConfig = (
+    record: TranslationRecord,
+    options?: { silent?: boolean },
+  ) => {
+    const config = record.config;
+    if (!config) {
+      emitToast({
+        variant: "warning",
+        message: t.historyView.applyConfigEmpty,
+      });
+      return false;
+    }
+
+    const setString = (key: string, value?: string) => {
+      if (value !== undefined) localStorage.setItem(key, String(value));
+    };
+    const setNumber = (key: string, value?: number) => {
+      if (value !== undefined && Number.isFinite(value)) {
+        localStorage.setItem(key, String(value));
+      }
+    };
+    const setBool = (key: string, value?: boolean) => {
+      if (value !== undefined) localStorage.setItem(key, String(value));
+    };
+
+    const modelPath =
+      (config as any).modelPath || config.model || record.modelName;
+    if (modelPath) localStorage.setItem("config_model", modelPath);
+    if (config.remoteModel) {
+      localStorage.setItem("config_remote_model", config.remoteModel);
+    }
+
+    setString("config_output_dir", config.outputDir);
+    setString("config_glossary_path", config.glossaryPath);
+    setString("config_preset", config.preset);
+
+    setNumber("config_gpu", config.gpuLayers);
+    if (config.ctxSize !== undefined) {
+      localStorage.setItem("config_ctx", String(config.ctxSize));
+    }
+    setNumber("config_concurrency", config.concurrency);
+    setBool("config_flash_attn", config.flashAttn);
+    setString("config_kv_cache_type", config.kvCacheType);
+    setBool("config_use_large_batch", config.useLargeBatch);
+    setNumber("config_physical_batch_size", config.physicalBatchSize);
+    if (config.seed !== undefined) {
+      localStorage.setItem("config_seed", String(config.seed));
+    }
+
+    setString("config_device_mode", config.deviceMode);
+    setString("config_gpu_device_id", config.gpuDeviceId);
+
+    setNumber("config_temperature", config.temperature);
+    setBool("config_line_check", config.lineCheck);
+    setNumber("config_line_tolerance_abs", config.lineToleranceAbs);
+    setNumber("config_line_tolerance_pct", config.lineTolerancePct);
+    setBool("config_anchor_check", config.anchorCheck);
+    setNumber("config_anchor_check_retries", config.anchorCheckRetries);
+    setNumber("config_rep_penalty_base", config.repPenaltyBase);
+    setNumber("config_rep_penalty_max", config.repPenaltyMax);
+    setNumber("config_rep_penalty_step", config.repPenaltyStep);
+    setNumber("config_max_retries", config.maxRetries);
+    setString("config_strict_mode", config.strictMode);
+
+
+    setBool("config_balance_enable", config.balanceEnable);
+    setNumber("config_balance_threshold", config.balanceThreshold);
+    setNumber("config_balance_count", config.balanceCount);
+
+    setNumber("config_retry_temp_boost", config.retryTempBoost);
+    setBool("config_retry_prompt_feedback", config.retryPromptFeedback);
+
+    setBool("config_coverage_check", config.coverageCheck);
+    setNumber("config_output_hit_threshold", config.outputHitThreshold);
+    setNumber("config_cot_coverage_threshold", config.cotCoverageThreshold);
+    setNumber("config_coverage_retries", config.coverageRetries);
+
+    setBool("config_alignment_mode", config.alignmentMode);
+    setBool("config_save_cot", config.saveCot);
+    setBool("config_resume", config.resume);
+    setBool("config_daemon_mode", config.daemonMode);
+
+    setString("config_cache_dir", config.cacheDir);
+
+    const rulesPre = (config as any).rulesPre;
+    if (Array.isArray(rulesPre)) {
+      localStorage.setItem("config_rules_pre", JSON.stringify(rulesPre));
+    }
+    const rulesPost = (config as any).rulesPost;
+    if (Array.isArray(rulesPost)) {
+      localStorage.setItem("config_rules_post", JSON.stringify(rulesPost));
+    }
+
+    localStorage.setItem(CONFIG_SYNC_KEY, Date.now().toString());
+
+    if (!options?.silent) {
+      emitToast({
+        variant: "success",
+        message: t.historyView.applyConfigDone,
+      });
+    }
+    return true;
+  };
+
+  const handleRerun = (record: TranslationRecord) => {
+    const ok = applyHistoryConfig(record, { silent: true });
+    if (!ok) return;
+
+    let queue: QueueItem[] = [];
+    try {
+      const saved = localStorage.getItem("library_queue");
+      if (saved) queue = JSON.parse(saved);
+    } catch (e) {
+      console.error("Failed to load queue:", e);
+    }
+
+    if (queue.some((q) => q.path === record.filePath)) {
+      emitToast({
+        variant: "warning",
+        message: t.historyView.rerunAlreadyQueued,
+      });
+      return;
+    }
+
+    const item: QueueItem = {
+      id: generateId(),
+      path: record.filePath,
+      fileName: record.fileName || record.filePath.split(/[/\\]/).pop() || "",
+      fileType: getFileType(record.filePath),
+      addedAt: new Date().toISOString(),
+      status: "pending",
+      config: { useGlobalDefaults: true },
+    };
+    const nextQueue = [...queue, item];
+    localStorage.setItem("library_queue", JSON.stringify(nextQueue));
+    localStorage.setItem(
+      "file_queue",
+      JSON.stringify(nextQueue.map((q) => q.path)),
+    );
+    localStorage.setItem(AUTO_START_QUEUE_KEY, "true");
+    localStorage.setItem(CONFIG_SYNC_KEY, Date.now().toString());
+
+    emitToast({
+      variant: "success",
+      message: t.historyView.rerunQueued,
+    });
+    onNavigate?.("dashboard");
+  };
+
   /**
    * Export detailed log for a specific record as text file
    */
@@ -719,6 +895,9 @@ export function HistoryView({ lang }: { lang: Language }) {
       triggers: detail.triggers,
       llamaLogs: detail.llamaLogs || [],
     };
+    const config = fullRecord.config || {};
+    const formatMaybe = (value: any, fallback = t.none) =>
+      value === undefined || value === null || value === "" ? fallback : value;
 
     const e = t.historyView.export;
     const lines = [
@@ -746,11 +925,17 @@ export function HistoryView({ lang }: { lang: Language }) {
       `${e.avgSpeed} ${Number(fullRecord.avgSpeed || 0).toFixed(1)} ${lang === "en" ? "chars/s" : t.dashboard.charPerSec}`,
       ``,
       e.configTitle,
-      `${e.temp} ${fullRecord.config.temperature}`,
-      `${e.lineCheck} ${fullRecord.config.lineCheck ? t.historyView.toggleOn : t.historyView.toggleOff}`,
-      `${e.repPenalty} ${fullRecord.config.repPenaltyBase}`,
-      `${e.maxRetries} ${fullRecord.config.maxRetries}`,
-      `${e.concurrency} ${fullRecord.config.concurrency || 1}`,
+      `${e.temp} ${formatMaybe(config.temperature)}`,
+      `${e.lineCheck} ${
+        config.lineCheck === undefined
+          ? t.none
+          : config.lineCheck
+            ? t.historyView.toggleOn
+            : t.historyView.toggleOff
+      }`,
+      `${e.repPenalty} ${formatMaybe(config.repPenaltyBase)}`,
+      `${e.maxRetries} ${formatMaybe(config.maxRetries)}`,
+      `${e.concurrency} ${formatMaybe(config.concurrency ?? 1)}`,
       ``,
     ];
 
@@ -829,6 +1014,7 @@ export function HistoryView({ lang }: { lang: Language }) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    emitToast({ variant: "success", message: t.historyView.exportLogDone });
   };
 
   const formatDate = (iso: string) => {
@@ -942,33 +1128,63 @@ export function HistoryView({ lang }: { lang: Language }) {
                           )}
                         </span>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleExpand(record.id)}
-                      >
-                        {expandedId === record.id ? (
-                          <ChevronDown className="w-4 h-4" />
-                        ) : (
-                          <ChevronRight className="w-4 h-4" />
-                        )}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleExportLog(record)}
-                        title={t.historyView.exportLog}
-                      >
-                        <Download className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleDelete(record.id)}
-                        className="text-red-500 hover:text-red-600"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                      <div className="flex items-center gap-1 rounded-lg border border-border/50 bg-transparent px-1 py-0.5">
+                        <Tooltip content={t.historyView.applyConfig}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-secondary/70"
+                            onClick={() => applyHistoryConfig(record)}
+                          >
+                            <Copy className="w-4 h-4" />
+                          </Button>
+                        </Tooltip>
+                        <Tooltip content={t.historyView.rerun}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-secondary/70"
+                            onClick={() => handleRerun(record)}
+                          >
+                            <RotateCw className="w-4 h-4" />
+                          </Button>
+                        </Tooltip>
+                        <Tooltip content={t.historyView.exportLog}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-secondary/70"
+                            onClick={() => handleExportLog(record)}
+                          >
+                            <Download className="w-4 h-4" />
+                          </Button>
+                        </Tooltip>
+                        <Tooltip content={t.historyView.deleteRecord}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                            onClick={() => handleDelete(record.id)}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </Tooltip>
+                      </div>
+                      <div className="w-px h-4 bg-border" />
+                      <Tooltip content={t.historyView.toggleExpand}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-secondary/70"
+                          onClick={() => handleExpand(record.id)}
+                        >
+                          {expandedId === record.id ? (
+                            <ChevronDown className="w-4 h-4" />
+                          ) : (
+                            <ChevronRight className="w-4 h-4" />
+                          )}
+                        </Button>
+                      </Tooltip>
                     </div>
                   </div>
                 </CardHeader>

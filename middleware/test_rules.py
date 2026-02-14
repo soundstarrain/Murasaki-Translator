@@ -45,6 +45,15 @@ def main():
         for i, rule in enumerate(rules):
             if not rule.get('active', True):
                 continue
+
+            if rule.get('type') == 'protect':
+                steps.append({
+                    "label": "text_protect",
+                    "text": current_text,
+                    "changed": False,
+                    "error": None,
+                })
+                continue
             
             # Create a single-rule processor to capture step-by-step
             p = RuleProcessor([rule])

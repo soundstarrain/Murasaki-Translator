@@ -4,11 +4,12 @@ This module provides text transformation capabilities with support for:
 - Simple string replacement
 - Regular expression substitution (with validation and safety checks)
 - Predefined format transformers
-- User-provided python scripts
+- User-provided python scripts (`def transform(...)`)
 """
 
 import re
 import ast
+import inspect
 import threading
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -115,6 +116,7 @@ class RuleProcessor:
     - 'regex': Regular expression substitution (with validation)
     - 'format': Predefined formatters (clean_empty, smart_quotes, full_to_half_punct)
     - 'python': User script executed with input text, returns output text
+      (requires `def transform(...)`)
     
     Example usage:
         rules = [
@@ -208,6 +210,57 @@ class RuleProcessor:
                     return False, f"Call blocked: {func.id}"
         return True, ""
 
+    def _script_defines_transform(self, script: str) -> bool:
+        try:
+            tree = ast.parse(script, mode="exec")
+        except Exception:
+            return False
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "transform":
+                return True
+        return False
+
+    def _call_python_func(
+        self,
+        func: Any,
+        text: str,
+        src_text: Optional[str],
+        protector: Any,
+    ) -> Any:
+        try:
+            signature = inspect.signature(func)
+        except (TypeError, ValueError):
+            return func(text, src_text, protector)
+
+        params = list(signature.parameters.values())
+        has_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
+        has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
+        positional = [
+            p
+            for p in params
+            if p.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+
+        if has_varargs:
+            return func(text, src_text, protector)
+        if positional:
+            count = len(positional)
+            if count >= 3:
+                return func(text, src_text, protector)
+            if count == 2:
+                return func(text, src_text)
+            if count == 1:
+                return func(text)
+        if has_varkw or any(
+            p.kind == inspect.Parameter.KEYWORD_ONLY for p in params
+        ):
+            return func(text=text, src_text=src_text, protector=protector)
+        return func()
+
     def _normalize_python_script(self, script: str) -> str:
         if "\\n" not in script:
             return script
@@ -248,25 +301,27 @@ class RuleProcessor:
             self._set_python_script_error(script, reason)
             return None
 
-        func_name = "__murasaki_user_rule"
-        indented = "\n".join([f"    {line}" for line in working_script.splitlines()])
-        wrapper = f"def {func_name}(text, src_text=None, protector=None):\n"
-        wrapper += "    output = text\n"
-        wrapper += indented + "\n" if indented.strip() else "    pass\n"
-        wrapper += "    return output\n"
+        if not self._script_defines_transform(working_script):
+            err_msg = "Missing transform() definition"
+            logger.error(f"[RuleProcessor] {err_msg}")
+            self._compiled_python_scripts[script] = None
+            self._set_python_script_error(script, err_msg)
+            return None
 
         try:
             scope: Dict[str, Any] = {
                 "__builtins__": PYTHON_SCRIPT_SAFE_BUILTINS,
                 "re": re,
             }
-            local_scope: Dict[str, Any] = {}
-            exec(wrapper, scope, local_scope)
-            func = local_scope.get(func_name)
+            exec(working_script, scope, scope)
+            func = scope.get("transform")
             if callable(func):
                 self._compiled_python_scripts[script] = func
                 self._set_python_script_error(script, None)
                 return func
+            err_msg = "Missing transform() definition"
+            logger.error(f"[RuleProcessor] {err_msg}")
+            self._set_python_script_error(script, err_msg)
         except Exception as e:
             err_msg = f"Compile error: {e}"
             logger.error(f"[RuleProcessor] Python script compile error: {e}")
@@ -286,7 +341,12 @@ class RuleProcessor:
 
         def runner():
             try:
-                result_holder["value"] = func(text, src_text, protector)
+                result_holder["value"] = self._call_python_func(
+                    func,
+                    text,
+                    src_text,
+                    protector,
+                )
             except Exception as e:
                 result_holder["error"] = e
             finally:
@@ -368,7 +428,11 @@ class RuleProcessor:
                                 logger.warning(f"[RuleProcessor] Skipping 'regex' rule {pattern} because it changes line count in strict mode.")
                             else:
                                 current_text = new_text
-                        
+
+                elif r_type == 'protect':
+                    # Config-only rule for text protection; no direct text mutation here.
+                    continue
+                
                 elif r_type == 'format':
                     options = rule.get('options', {})
                     current_text = self._apply_format(
