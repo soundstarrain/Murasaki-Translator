@@ -17,7 +17,7 @@ class HardwareMonitor:
         self.name = "Unknown GPU"
         self._pynvml = None
         self._handle = None
-        
+
         self._init_backend()
     
     def _init_backend(self):
@@ -54,7 +54,7 @@ class HardwareMonitor:
         return False
     
     def _init_macos(self):
-        """初始化 macOS 后端 (使用 powermetrics 需要 sudo，改用基础检测)"""
+        """初始化 macOS 后端"""
         try:
             result = subprocess.run(
                 ['system_profiler', 'SPDisplaysDataType', '-json'],
@@ -128,11 +128,16 @@ class HardwareMonitor:
     def _get_macos_status(self):
         """
         获取 macOS GPU 状态
-        注意：macOS 不提供标准方法获取 GPU 使用率
-        Apple Silicon 使用统一内存，显存 = 系统内存
+        - 使用 vm_stat 获取系统内存使用情况（统一内存）
+        - 使用 powermetrics 获取 GPU 使用率（需要 sudo）
+
+        注意：Apple Silicon 使用统一内存架构，CPU 和 GPU 共享内存
         """
+        # 尝试使用 powermetrics 获取 GPU 使用率
+        gpu_util = self._get_gpu_util_powermetrics()
+
+        # 使用 vm_stat 获取内存使用情况
         try:
-            # 获取系统内存使用情况作为替代
             result = subprocess.run(
                 ['vm_stat'],
                 capture_output=True,
@@ -140,14 +145,13 @@ class HardwareMonitor:
                 timeout=2
             )
             if result.returncode == 0:
-                # 解析 vm_stat 输出
                 lines = result.stdout.split('\n')
-                page_size = 16384  # macOS 默认 page size
-                
+                page_size = 16384
+
                 free_pages = 0
                 active_pages = 0
                 wired_pages = 0
-                
+
                 for line in lines:
                     if 'Pages free' in line:
                         free_pages = int(line.split(':')[1].strip().rstrip('.'))
@@ -155,29 +159,69 @@ class HardwareMonitor:
                         active_pages = int(line.split(':')[1].strip().rstrip('.'))
                     elif 'Pages wired' in line:
                         wired_pages = int(line.split(':')[1].strip().rstrip('.'))
-                
+
                 used_gb = (active_pages + wired_pages) * page_size / (1024**3)
                 total_gb = self._get_macos_total_ram()
-                
+
                 return {
                     "name": self.name,
                     "vram_used_gb": round(used_gb, 2),
                     "vram_total_gb": round(total_gb, 2),
                     "vram_percent": round(used_gb / total_gb * 100, 1) if total_gb > 0 else 0,
-                    "gpu_util": -1,  # macOS 不提供 GPU 使用率
+                    "gpu_util": gpu_util,  # 有 sudo: 真实值；无 sudo: -1
                     "mem_util": round(used_gb / total_gb * 100, 1) if total_gb > 0 else 0
                 }
         except Exception:
             pass
-        
+
+        # 如果 vm_stat 失败，返回基础信息
+        total_gb = self._get_macos_total_ram()
         return {
             "name": self.name,
             "vram_used_gb": 0,
-            "vram_total_gb": 0,
+            "vram_total_gb": round(total_gb, 2),
             "vram_percent": 0,
-            "gpu_util": -1,
+            "gpu_util": gpu_util,
             "mem_util": 0
         }
+
+    def _get_gpu_util_powermetrics(self):
+        """
+        尝试通过 powermetrics 获取 GPU 使用率（需要 sudo）
+        使用 plist 格式输出，解析更可靠
+
+        Returns:
+            float: GPU 使用率百分比 (0-100)，失败或无权限返回 -1
+        """
+        try:
+            # 测试是否有 powermetrics 的免密 sudo 权限
+            test = subprocess.run(
+                ['sudo', '-n', 'powermetrics', '--help'],
+                capture_output=True,
+                timeout=2
+            )
+            if test.returncode != 0:
+                return -1  # 无 sudo 权限
+
+            # 运行 powermetrics，使用 plist 格式输出
+            result = subprocess.run(
+                ['sudo', '-n', 'powermetrics', '--samplers', 'gpu_power', '-i', '500', '-n', '1', '-f', 'plist'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            if result.returncode == 0:
+                import plistlib
+                data = plistlib.loads(result.stdout.encode('utf-8'))
+                gpu = data.get('gpu', {})
+                idle_ratio = gpu.get('idle_ratio', 1.0)
+                active_percent = (1.0 - idle_ratio) * 100
+                return round(active_percent, 1)
+        except Exception:
+            pass
+
+        return -1
     
     def _get_macos_total_ram(self):
         """获取 macOS 总内存"""

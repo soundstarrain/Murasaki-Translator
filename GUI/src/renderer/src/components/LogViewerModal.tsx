@@ -179,7 +179,7 @@ export function LogViewerModal({
         <div className="flex-1 overflow-hidden bg-slate-950 relative">
           <pre
             ref={logContainerRef}
-            className="h-full max-h-[65vh] overflow-auto p-4 text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap break-all"
+            className="h-full max-h-[65vh] overflow-auto p-4 log-text text-slate-300 leading-relaxed whitespace-pre-wrap break-all"
           >
             {loading && !logs ? (
               <div className="flex items-center gap-2 text-muted-foreground">
