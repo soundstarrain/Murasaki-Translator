@@ -2348,7 +2348,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                           )}
                         </div>
                         {/* 原文 */}
-                        <div className="flex-1 px-4 py-3 text-sm leading-[1.75] border-r border-border/20 text-muted-foreground/80 break-words whitespace-pre-wrap">
+                        <div className="flex-1 px-4 py-3 text-sm leading-[1.75] border-r border-border/20 text-muted-foreground/80 break-words whitespace-pre-wrap translation-text">
                           {srcLine ? (
                             highlightLineCommonCJK(srcLine, outLine, true)
                           ) : (
@@ -2356,7 +2356,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                           )}
                         </div>
                         {/* 译文 (恢复原背景色) */}
-                        <div className="flex-1 px-4 py-3 text-sm leading-[1.75] font-medium text-foreground break-words whitespace-pre-wrap bg-primary/[0.03]">
+                        <div className="flex-1 px-4 py-3 text-sm leading-[1.75] font-medium text-foreground break-words whitespace-pre-wrap bg-primary/[0.03] translation-text">
                           {outLine ? (
                             highlightLineCommonCJK(outLine, srcLine, false)
                           ) : (
@@ -3334,7 +3334,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           </div>
 
           {!logsCollapsed && (
-            <div className="flex-1 overflow-y-auto px-4 py-2 font-mono text-[10px] text-muted-foreground bg-secondary/20">
+            <div className="flex-1 overflow-y-auto px-4 py-2 log-text text-muted-foreground bg-secondary/20">
               {displayedLogs.length === 0 ? (
                 <span className="italic opacity-50">
                   {t.dashboard.waitingLog}

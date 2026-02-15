@@ -15,6 +15,33 @@
       }
     })();
   </script>
+  <script>
+    // Initialize font settings before React loads to prevent FOUC
+    (function () {
+      var root = document.documentElement;
+      var sansFallback = '-apple-system, BlinkMacSystemFont, "Hiragino Sans", "PingFang SC", "PingFang TC", "Segoe UI", "Microsoft YaHei", "Meiryo", "Noto Sans CJK SC", "Ubuntu", sans-serif';
+      var monoFallback = '"SF Mono", "Menlo", "Cascadia Mono", "Consolas", "Meiryo", "MS Gothic", "SimSun", "Ubuntu Mono", "Noto Sans Mono CJK SC", monospace';
+      function buildFont(name, fallback) {
+        if (!name) return '';
+        var q = name.indexOf(' ') >= 0 ? '"' + name + '"' : name;
+        return q + ', ' + fallback;
+      }
+      var fontUI = localStorage.getItem('config_font_ui');
+      var fontLog = localStorage.getItem('config_font_log');
+      var fontLogSize = localStorage.getItem('config_font_log_size');
+      var fontTranslation = localStorage.getItem('config_font_translation');
+      var fontTranslationSize = localStorage.getItem('config_font_translation_size');
+      if (fontUI) root.style.setProperty('--font-ui', buildFont(fontUI, sansFallback));
+      var fontUISize = localStorage.getItem('config_font_ui_size');
+      if (fontUISize && fontUISize !== '14px') root.style.setProperty('font-size', fontUISize);
+      var logCSS = buildFont(fontLog, monoFallback);
+      if (logCSS) root.style.setProperty('--font-log', logCSS);
+      if (fontLogSize) root.style.setProperty('--font-log-size', fontLogSize);
+      var transCSS = buildFont(fontTranslation, monoFallback);
+      if (transCSS) root.style.setProperty('--font-translation', transCSS);
+      if (fontTranslationSize) root.style.setProperty('--font-translation-size', fontTranslationSize);
+    })();
+  </script>
 </head>
 
 <body>

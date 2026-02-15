@@ -1736,8 +1736,8 @@ export default function ProofreadView({
                     paddingRight: "12px",
                     lineHeight: "20px",
                     fontFamily:
-                      '"Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace',
-                    fontSize: "13px",
+                      'var(--font-translation, "Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace)',
+                    fontSize: "var(--font-translation-size, 13px)",
                     wordBreak: "break-all",
                   };
                   const srcCellStyle: React.CSSProperties = {
@@ -1785,8 +1785,8 @@ export default function ProofreadView({
                     paddingRight: "12px",
                     lineHeight: "20px",
                     fontFamily:
-                      '"Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace',
-                    fontSize: "13px",
+                      'var(--font-translation, "Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace)',
+                    fontSize: "var(--font-translation-size, 13px)",
                     wordBreak: "break-all",
                   };
                   const dstCellStyle: React.CSSProperties = {
@@ -1852,8 +1852,8 @@ export default function ProofreadView({
                         paddingRight: "12px",
                         lineHeight: "20px",
                         fontFamily:
-                          '"Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace',
-                        fontSize: "13px",
+                          'var(--font-translation, "Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace)',
+                        fontSize: "var(--font-translation-size, 13px)",
                         wordBreak: "break-all",
                         whiteSpace: "pre-wrap",
                       }}

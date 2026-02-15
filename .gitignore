@@ -9,7 +9,6 @@ venv-gpu/
 .env
 
 # IDE
-.vscode/
 .idea/
 
 demo/
@@ -90,3 +89,6 @@ AGENTS.md
 middleware/remote-sync
 middleware/uploads
 middleware/outputs
+
+.claude
+local

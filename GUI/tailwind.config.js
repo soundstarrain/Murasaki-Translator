@@ -44,6 +44,33 @@ module.exports = {
       ],
     },
     extend: {
+      fontFamily: {
+        sans: [
+          "-apple-system",
+          "BlinkMacSystemFont",
+          '"Hiragino Sans"',
+          '"PingFang SC"',
+          '"PingFang TC"',
+          '"Segoe UI"',
+          '"Microsoft YaHei"',
+          '"Meiryo"',
+          '"Noto Sans CJK SC"',
+          '"Ubuntu"',
+          "sans-serif",
+        ],
+        mono: [
+          '"SF Mono"',
+          '"Menlo"',
+          '"Cascadia Mono"',
+          '"Consolas"',
+          '"Meiryo"',
+          '"MS Gothic"',
+          '"SimSun"',
+          '"Ubuntu Mono"',
+          '"Noto Sans Mono CJK SC"',
+          "monospace",
+        ],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

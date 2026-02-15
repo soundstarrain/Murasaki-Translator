@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Save,
   Settings,
@@ -26,6 +26,8 @@ import {
   AlertCircle,
   Info,
   Server,
+  Type,
+  ChevronDown,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, Tooltip } from "./ui/core";
 import { Button } from "./ui/core";
@@ -36,6 +38,167 @@ import { cn } from "../lib/utils";
 import { buildConfigSnapshot, parseConfigSnapshot } from "../lib/configSnapshot";
 import { LogViewerModal } from "./LogViewerModal";
 import { EnvFixerModal } from "./EnvFixerModal";
+
+function FontPicker({
+  fonts,
+  fontsLoaded,
+  value,
+  onChange,
+  defaultLabel,
+  searchPlaceholder,
+  loadingText,
+  noResultsText,
+  errorText,
+}: {
+  fonts: string[];
+  fontsLoaded: boolean;
+  value: string;
+  onChange: (val: string) => void;
+  defaultLabel: string;
+  searchPlaceholder: string;
+  loadingText: string;
+  noResultsText: string;
+  errorText: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+  const searchRef = React.useRef<HTMLInputElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setSearch("");
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  // Auto-focus search when dropdown opens
+  useEffect(() => {
+    if (open && searchRef.current) {
+      searchRef.current.focus();
+    }
+  }, [open]);
+
+  const filtered = search
+    ? fonts.filter((f) => f.toLowerCase().includes(search.toLowerCase()))
+    : fonts;
+
+  const hasFonts = fonts.length > 0;
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <button
+        onClick={() => setOpen(!open)}
+        className={cn(
+          "w-full flex items-center justify-between px-3 py-2 rounded-md border text-sm transition-colors text-left",
+          open
+            ? "border-primary ring-1 ring-primary/20"
+            : "border-border hover:border-primary/50",
+          value ? "text-foreground" : "text-muted-foreground",
+        )}
+        style={value ? { fontFamily: `"${value}", sans-serif` } : undefined}
+      >
+        <span className="truncate">{value || defaultLabel}</span>
+        <ChevronDown
+          className={cn(
+            "w-4 h-4 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-180",
+          )}
+        />
+      </button>
+
+      {open && (
+        <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-lg animate-in fade-in slide-in-from-top-1 duration-150">
+          {/* Search */}
+          <div className="p-2 border-b">
+            <input
+              ref={searchRef}
+              type="text"
+              className="w-full px-2 py-1.5 text-sm rounded border border-border bg-background focus:outline-none focus:border-primary"
+              placeholder={searchPlaceholder}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+
+          {/* Font list */}
+          <div className="max-h-60 overflow-y-auto p-1">
+            {/* System Default option */}
+            <button
+              className={cn(
+                "w-full text-left px-3 py-2 text-sm rounded-sm transition-colors",
+                !value
+                  ? "bg-primary/10 text-primary font-medium"
+                  : "hover:bg-muted text-foreground",
+              )}
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+                setSearch("");
+              }}
+            >
+              {defaultLabel}
+            </button>
+
+            {!fontsLoaded ? (
+              <div className="px-3 py-4 text-xs text-muted-foreground text-center">
+                <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-2" />
+                {loadingText}
+              </div>
+            ) : !hasFonts ? (
+              <div className="px-3 py-3 text-xs text-muted-foreground text-center italic">
+                {errorText}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-muted-foreground text-center italic">
+                {noResultsText}
+              </div>
+            ) : (
+              filtered.slice(0, 200).map((font) => (
+                <button
+                  key={font}
+                  className={cn(
+                    "w-full text-left px-3 py-1.5 text-sm rounded-sm transition-colors truncate",
+                    value === font
+                      ? "bg-primary/10 text-primary font-medium"
+                      : "hover:bg-muted text-foreground",
+                  )}
+                  style={{ fontFamily: `"${font}", sans-serif` }}
+                  onClick={() => {
+                    onChange(font);
+                    setOpen(false);
+                    setSearch("");
+                  }}
+                >
+                  {font}
+                </button>
+              ))
+            )}
+          </div>
+
+          {/* Fallback: manual input when no fonts enumerated */}
+          {fontsLoaded && !hasFonts && (
+            <div className="p-2 border-t">
+              <input
+                type="text"
+                className="w-full px-2 py-1.5 text-sm rounded border border-border bg-background"
+                placeholder={searchPlaceholder}
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function SettingsView({ lang }: { lang: Language }) {
   const t = translations[lang];
@@ -50,6 +213,16 @@ export function SettingsView({ lang }: { lang: Language }) {
 
   // Storage Config
   const [cacheDir, setCacheDir] = useState("");
+
+  // Font Config
+  const [fontUI, setFontUI] = useState("");
+  const [fontUISize, setFontUISize] = useState("14px");
+  const [fontLog, setFontLog] = useState("");
+  const [fontLogSize, setFontLogSize] = useState("10px");
+  const [fontTranslation, setFontTranslation] = useState("");
+  const [fontTranslationSize, setFontTranslationSize] = useState("13px");
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [fontsLoaded, setFontsLoaded] = useState(false);
 
   const [saved, setSaved] = useState(false);
 
@@ -346,6 +519,30 @@ export function SettingsView({ lang }: { lang: Language }) {
 
     setCacheDir(localStorage.getItem("config_cache_dir") || "");
 
+    // Load font settings
+    setFontUI(localStorage.getItem("config_font_ui") || "");
+    setFontUISize(localStorage.getItem("config_font_ui_size") || "14px");
+    setFontLog(localStorage.getItem("config_font_log") || "");
+    setFontLogSize(localStorage.getItem("config_font_log_size") || "10px");
+    setFontTranslation(localStorage.getItem("config_font_translation") || "");
+    setFontTranslationSize(localStorage.getItem("config_font_translation_size") || "13px");
+
+    // Enumerate system fonts via queryLocalFonts() API
+    (async () => {
+      try {
+        // @ts-ignore - queryLocalFonts is a Chromium API
+        const fonts: { family: string }[] = await window.queryLocalFonts();
+        const families = [...new Set(fonts.map((f) => f.family))].sort(
+          (a, b) => a.localeCompare(b),
+        );
+        setSystemFonts(families);
+      } catch (e) {
+        console.warn("Failed to enumerate system fonts:", e);
+        setSystemFonts([]);
+      }
+      setFontsLoaded(true);
+    })();
+
     // Auto-load diagnostics on mount
     loadDiagnostics();
   }, []);
@@ -409,6 +606,61 @@ export function SettingsView({ lang }: { lang: Language }) {
     }
   };
 
+  // Fallback font stacks (same as tailwind.config.js)
+  const SANS_FALLBACK = '-apple-system, BlinkMacSystemFont, "Hiragino Sans", "PingFang SC", "PingFang TC", "Segoe UI", "Microsoft YaHei", "Meiryo", "Noto Sans CJK SC", "Ubuntu", sans-serif';
+  const MONO_FALLBACK = '"SF Mono", "Menlo", "Cascadia Mono", "Consolas", "Meiryo", "MS Gothic", "SimSun", "Ubuntu Mono", "Noto Sans Mono CJK SC", monospace';
+
+  const buildFontCSS = (fontName: string, fallback: string): string => {
+    if (!fontName) return "";
+    const q = fontName.includes(" ") ? `"${fontName}"` : fontName;
+    return `${q}, ${fallback}`;
+  };
+
+  const applyFontSettings = (opts?: {
+    ui?: string; uiSize?: string; log?: string; logSize?: string;
+    translation?: string; translationSize?: string;
+  }) => {
+    const root = document.documentElement;
+    const uiName = opts?.ui ?? fontUI;
+    const uiSizeVal = opts?.uiSize ?? fontUISize;
+    const logName = opts?.log ?? fontLog;
+    const logSizeVal = opts?.logSize ?? fontLogSize;
+    const translationName = opts?.translation ?? fontTranslation;
+    const translationSizeVal = opts?.translationSize ?? fontTranslationSize;
+
+    // UI font: set --font-ui CSS variable, consumed by .font-sans override in index.css
+    const uiCSS = buildFontCSS(uiName, SANS_FALLBACK);
+    if (uiCSS) {
+      root.style.setProperty("--font-ui", uiCSS);
+    } else {
+      root.style.removeProperty("--font-ui");
+    }
+    // UI font size: set on <html> root to scale all rem-based Tailwind utilities
+    if (uiSizeVal && uiSizeVal !== "14px") {
+      root.style.setProperty("font-size", uiSizeVal);
+    } else {
+      root.style.removeProperty("font-size");
+    }
+
+    // Log font
+    const logCSS = buildFontCSS(logName, MONO_FALLBACK);
+    if (logCSS) {
+      root.style.setProperty("--font-log", logCSS);
+    } else {
+      root.style.removeProperty("--font-log");
+    }
+    root.style.setProperty("--font-log-size", logSizeVal);
+
+    // Translation font
+    const translationCSS = buildFontCSS(translationName, MONO_FALLBACK);
+    if (translationCSS) {
+      root.style.setProperty("--font-translation", translationCSS);
+    } else {
+      root.style.removeProperty("--font-translation");
+    }
+    root.style.setProperty("--font-translation-size", translationSizeVal);
+  };
+
   const handleSelectDir = async () => {
     // @ts-ignore
     const path = await window.api.selectDirectory();
@@ -423,6 +675,29 @@ export function SettingsView({ lang }: { lang: Language }) {
     localStorage.setItem("config_auto_epub", String(autoEpub));
 
     localStorage.setItem("config_cache_dir", cacheDir);
+
+    // Persist font settings (store font family name only)
+    if (fontUI) {
+      localStorage.setItem("config_font_ui", fontUI);
+    } else {
+      localStorage.removeItem("config_font_ui");
+    }
+    localStorage.setItem("config_font_ui_size", fontUISize);
+    if (fontLog) {
+      localStorage.setItem("config_font_log", fontLog);
+    } else {
+      localStorage.removeItem("config_font_log");
+    }
+    localStorage.setItem("config_font_log_size", fontLogSize);
+    if (fontTranslation) {
+      localStorage.setItem("config_font_translation", fontTranslation);
+    } else {
+      localStorage.removeItem("config_font_translation");
+    }
+    localStorage.setItem("config_font_translation_size", fontTranslationSize);
+
+    // Re-apply to DOM to ensure consistency
+    applyFontSettings();
 
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -1449,6 +1724,196 @@ export function SettingsView({ lang }: { lang: Language }) {
                     {settingsText.snapshotImport}
                   </Button>
                 </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Font Settings Card */}
+        <Card className="mt-3">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Type className="w-4 h-4 text-primary" />
+              {settingsText.fontSettings.title}
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">{settingsText.fontSettings.description}</p>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* UI Font */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium block">{settingsText.fontSettings.uiFont}</label>
+                  <p className="text-xs text-muted-foreground">{settingsText.fontSettings.uiFontDesc}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-muted-foreground">{settingsText.fontSettings.fontSize}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => {
+                      const current = parseInt(fontUISize);
+                      if (current > 12) setFontUISize((current - 1) + "px");
+                    }}
+                    disabled={parseInt(fontUISize) <= 12}
+                  >
+                    -
+                  </Button>
+                  <span className="text-xs font-mono w-10 text-center font-semibold">{fontUISize}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => {
+                      const current = parseInt(fontUISize);
+                      if (current < 20) setFontUISize((current + 1) + "px");
+                    }}
+                    disabled={parseInt(fontUISize) >= 20}
+                  >
+                    +
+                  </Button>
+                </div>
+              </div>
+              <FontPicker
+                fonts={systemFonts}
+                fontsLoaded={fontsLoaded}
+                value={fontUI}
+                onChange={(val) => setFontUI(val)}
+                defaultLabel={settingsText.fontSettings.systemDefault}
+                searchPlaceholder={settingsText.fontSettings.searchPlaceholder}
+                loadingText={settingsText.fontSettings.loadingFonts}
+                noResultsText={settingsText.fontSettings.noFontsFound}
+                errorText={settingsText.fontSettings.fontLoadError}
+              />
+              <div
+                className="p-3 rounded-md border bg-muted/30"
+                style={{
+                  fontFamily: fontUI ? buildFontCSS(fontUI, SANS_FALLBACK) : undefined,
+                  fontSize: fontUISize,
+                }}
+              >
+                {settingsText.fontSettings.previewUI}
+              </div>
+            </div>
+
+            <div className="h-px bg-border" />
+
+            {/* Log Font */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium block">{settingsText.fontSettings.logFont}</label>
+                  <p className="text-xs text-muted-foreground">{settingsText.fontSettings.logFontDesc}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-muted-foreground">{settingsText.fontSettings.fontSize}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => {
+                      const current = parseInt(fontLogSize);
+                      if (current > 8) setFontLogSize((current - 1) + "px");
+                    }}
+                    disabled={parseInt(fontLogSize) <= 8}
+                  >
+                    -
+                  </Button>
+                  <span className="text-xs font-mono w-10 text-center font-semibold">{fontLogSize}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => {
+                      const current = parseInt(fontLogSize);
+                      if (current < 18) setFontLogSize((current + 1) + "px");
+                    }}
+                    disabled={parseInt(fontLogSize) >= 18}
+                  >
+                    +
+                  </Button>
+                </div>
+              </div>
+              <FontPicker
+                fonts={systemFonts}
+                fontsLoaded={fontsLoaded}
+                value={fontLog}
+                onChange={(val) => setFontLog(val)}
+                defaultLabel={settingsText.fontSettings.systemDefault}
+                searchPlaceholder={settingsText.fontSettings.searchPlaceholder}
+                loadingText={settingsText.fontSettings.loadingFonts}
+                noResultsText={settingsText.fontSettings.noFontsFound}
+                errorText={settingsText.fontSettings.fontLoadError}
+              />
+              <pre
+                className="p-3 rounded-md border bg-slate-950 text-slate-300 whitespace-pre-wrap"
+                style={{
+                  fontFamily: fontLog ? buildFontCSS(fontLog, MONO_FALLBACK) : undefined,
+                  fontSize: fontLogSize,
+                }}
+              >
+                {settingsText.fontSettings.previewLog}
+              </pre>
+            </div>
+
+            <div className="h-px bg-border" />
+
+            {/* Translation Font */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium block">{settingsText.fontSettings.translationFont}</label>
+                  <p className="text-xs text-muted-foreground">{settingsText.fontSettings.translationFontDesc}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-muted-foreground">{settingsText.fontSettings.fontSize}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => {
+                      const current = parseInt(fontTranslationSize);
+                      if (current > 10) setFontTranslationSize((current - 1) + "px");
+                    }}
+                    disabled={parseInt(fontTranslationSize) <= 10}
+                  >
+                    -
+                  </Button>
+                  <span className="text-xs font-mono w-10 text-center font-semibold">{fontTranslationSize}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 p-0"
+                    onClick={() => {
+                      const current = parseInt(fontTranslationSize);
+                      if (current < 24) setFontTranslationSize((current + 1) + "px");
+                    }}
+                    disabled={parseInt(fontTranslationSize) >= 24}
+                  >
+                    +
+                  </Button>
+                </div>
+              </div>
+              <FontPicker
+                fonts={systemFonts}
+                fontsLoaded={fontsLoaded}
+                value={fontTranslation}
+                onChange={(val) => setFontTranslation(val)}
+                defaultLabel={settingsText.fontSettings.systemDefault}
+                searchPlaceholder={settingsText.fontSettings.searchPlaceholder}
+                loadingText={settingsText.fontSettings.loadingFonts}
+                noResultsText={settingsText.fontSettings.noFontsFound}
+                errorText={settingsText.fontSettings.fontLoadError}
+              />
+              <div
+                className="p-3 rounded-md border bg-muted/30 whitespace-pre-wrap"
+                style={{
+                  fontFamily: fontTranslation ? buildFontCSS(fontTranslation, MONO_FALLBACK) : undefined,
+                  fontSize: fontTranslationSize,
+                }}
+              >
+                {settingsText.fontSettings.previewTranslation}
               </div>
             </div>
           </CardContent>

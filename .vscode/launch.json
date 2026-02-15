@@ -1,0 +1,86 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Attach to Electron Main",
+      "type": "node",
+      "request": "attach",
+      "port": 5858,
+      "outFiles": ["${workspaceFolder}/GUI/out/main/**/*.js"],
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Debug Python (CLI)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/middleware/.venv/bin/python3",
+      "program": "${workspaceFolder}/middleware/murasaki_translator/main.py",
+      "args": [
+        "--file",
+        "${input:inputFile}",
+        "--model",
+        "${input:modelPath}",
+        "--server",
+        "${input:serverPath}"
+      ],
+      "cwd": "${workspaceFolder}/middleware",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Attach to Python (spawn)",
+      "type": "debugpy",
+      "request": "attach",
+      "connect": {
+        "host": "127.0.0.1",
+        "port": 5678
+      }
+    },
+    {
+      "name": "Debug Python API Server",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/middleware/.venv/bin/python3",
+      "program": "${workspaceFolder}/middleware/server/api_server.py",
+      "args": [
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--model",
+        "${input:modelPath}",
+        "--api-key",
+        "dev123",
+        "--reload"
+      ],
+      "cwd": "${workspaceFolder}/middleware",
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full Stack Debug",
+      "configurations": ["Attach to Electron Main", "Attach to Python (spawn)"]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "inputFile",
+      "type": "promptString",
+      "description": "Path to the input file (epub/txt) to translate",
+      "default": "test.epub"
+    },
+    {
+      "id": "modelPath",
+      "type": "promptString",
+      "description": "Path to the GGUF model file",
+      "default": "models/ACGN-8B-Step150-Q4_K_M.gguf"
+    },
+    {
+      "id": "serverPath",
+      "type": "promptString",
+      "description": "Path to the llama-server binary",
+      "default": "bin/darwin-metal/llama-server"
+    }
+  ]
+}
