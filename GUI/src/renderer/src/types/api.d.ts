@@ -225,7 +225,16 @@ export interface RemoteDiagnostics {
 }
 
 export interface RemoteHfDownloadStatus {
-  status: "starting" | "checking" | "connecting" | "downloading" | "resuming" | "complete" | "skipped" | "error" | "cancelled";
+  status:
+    | "starting"
+    | "checking"
+    | "connecting"
+    | "downloading"
+    | "resuming"
+    | "complete"
+    | "skipped"
+    | "error"
+    | "cancelled";
   percent: number;
   speed?: string;
   downloaded?: string;
@@ -316,11 +325,16 @@ export interface ElectronAPI {
     kind: string,
     id: string,
     yamlText: string,
-  ) => Promise<{ ok: boolean; id?: string; error?: string; warnings?: string[] }>;
+  ) => Promise<{
+    ok: boolean;
+    id?: string;
+    error?: string;
+    warnings?: string[];
+  }>;
   pipelineV2ProfilesDelete: (
     kind: string,
     id: string,
-  ) => Promise<{ ok: boolean }>;
+  ) => Promise<{ ok: boolean; error?: string }>;
   pipelineV2Status: () => Promise<{
     mode: "server" | "local";
     ok: boolean;
@@ -337,6 +351,7 @@ export interface ElectronAPI {
     baseUrl: string;
     apiKey?: string;
     timeoutMs?: number;
+    model?: string;
   }) => Promise<{
     ok: boolean;
     status?: number;
@@ -345,12 +360,42 @@ export interface ElectronAPI {
     message?: string;
     modelCount?: number;
   }>;
+  pipelineV2ApiModels: (payload: {
+    baseUrl: string;
+    apiKey?: string;
+    timeoutMs?: number;
+  }) => Promise<{
+    ok: boolean;
+    status?: number;
+    url?: string;
+    message?: string;
+    models?: string[];
+  }>;
+  pipelineV2ApiConcurrencyTest: (payload: {
+    baseUrl: string;
+    apiKey?: string;
+    timeoutMs?: number;
+    maxConcurrency?: number;
+  }) => Promise<{
+    ok: boolean;
+    maxConcurrency?: number;
+    url?: string;
+    message?: string;
+    statusCounts?: Record<string, number>;
+    latencyMs?: number;
+  }>;
   pipelineV2Run: (payload: {
     filePath: string;
     pipelineId: string;
     profilesDir: string;
     outputPath?: string;
-  }) => Promise<{ ok: boolean; runId: string; code?: number }>;
+    rulesPrePath?: string;
+    rulesPostPath?: string;
+    glossaryPath?: string;
+    sourceLang?: string;
+    enableQuality?: boolean;
+    textProtect?: boolean;
+  }) => Promise<{ ok: boolean; runId: string; code?: number; error?: any }>;
   stopTranslation: () => void;
   retranslateBlock: (options: {
     src: string;
@@ -360,9 +405,15 @@ export interface ElectronAPI {
   }) => Promise<any>;
   onLogUpdate: (callback: (chunk: string) => void) => Unsubscribe;
   onPipelineV2Log: (
-    callback: (data: { runId: string; message: string; level?: string }) => void,
+    callback: (data: {
+      runId: string;
+      message: string;
+      level?: string;
+    }) => void,
   ) => Unsubscribe;
-  onProcessExit: (callback: (payload: ProcessExitPayload) => void) => Unsubscribe;
+  onProcessExit: (
+    callback: (payload: ProcessExitPayload) => void,
+  ) => Unsubscribe;
 
   // Retranslate Progress
   onRetranslateLog: (
@@ -528,7 +579,10 @@ export interface ElectronAPI {
     error?: string;
   }>;
   getMainProcessLogs: () => Promise<string[]>;
-  readTextTail: (path: string, options?: { maxBytes?: number; lineCount?: number }) => Promise<{
+  readTextTail: (
+    path: string,
+    options?: { maxBytes?: number; lineCount?: number },
+  ) => Promise<{
     exists: boolean;
     path?: string;
     lineCount?: number;
@@ -545,16 +599,18 @@ export interface ElectronAPI {
     id: string,
     enabled: boolean,
   ) => Promise<{ ok: boolean; error?: string }>;
-  watchFolderRemove: (
-    id: string,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  watchFolderRemove: (id: string) => Promise<{ ok: boolean; error?: string }>;
   watchFolderList: () => Promise<{
     ok: boolean;
     entries?: WatchFolderEntry[];
     error?: string;
   }>;
   onWatchFolderFileAdded: (
-    callback: (payload: { watchId: string; path: string; addedAt: string }) => void,
+    callback: (payload: {
+      watchId: string;
+      path: string;
+      addedAt: string;
+    }) => void,
   ) => Unsubscribe;
 
   // Rule System
@@ -589,7 +645,9 @@ export interface ElectronAPI {
     limit?: number,
   ) => Promise<RemoteApiResponse<RemoteNetworkEvent[]>>;
   remoteDiagnostics: () => Promise<RemoteApiResponse<RemoteDiagnostics>>;
-  remoteHfCheckNetwork: () => Promise<RemoteApiResponse<{ status: string; message?: string }>>;
+  remoteHfCheckNetwork: () => Promise<
+    RemoteApiResponse<{ status: string; message?: string }>
+  >;
   remoteHfListRepos: (orgName: string) => Promise<RemoteApiResponse<any>>;
   remoteHfListFiles: (repoId: string) => Promise<RemoteApiResponse<any>>;
   remoteHfDownloadStart: (

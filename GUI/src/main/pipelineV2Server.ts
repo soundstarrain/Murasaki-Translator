@@ -96,7 +96,9 @@ const waitForHealth = async (baseUrl: string, timeoutMs = 8000) => {
   throw new Error("Pipeline V2 server health check failed");
 };
 
-export const ensurePipelineV2Server = async (deps: ServerDeps): Promise<string> => {
+export const ensurePipelineV2Server = async (
+  deps: ServerDeps,
+): Promise<string> => {
   if (state.baseUrl) return state.baseUrl;
   if (state.starting) return state.starting;
 
@@ -104,13 +106,27 @@ export const ensurePipelineV2Server = async (deps: ServerDeps): Promise<string> 
     const python = deps.getPythonPath();
     const middlewarePath = deps.getMiddlewarePath();
     const profilesDir = deps.getProfilesDir();
-    const scriptPath = join(middlewarePath, "murasaki_flow_v2", "api_server.py");
+    const scriptPath = join(
+      middlewarePath,
+      "murasaki_flow_v2",
+      "api_server.py",
+    );
     const port = await pickFreePort();
     const host = "127.0.0.1";
     const baseUrl = `http://${host}:${port}`;
 
-    const args = [
+    const scriptArgs = [
       scriptPath,
+      "--profiles-dir",
+      profilesDir,
+      "--host",
+      host,
+      "--port",
+      String(port),
+    ];
+    const moduleArgs = [
+      "-m",
+      "murasaki_flow_v2.api_server",
       "--profiles-dir",
       profilesDir,
       "--host",
@@ -122,8 +138,8 @@ export const ensurePipelineV2Server = async (deps: ServerDeps): Promise<string> 
     let stderrBuffer = "";
     const child =
       python.type === "bundle"
-        ? spawn(python.path, args.slice(1))
-        : spawn(python.path, args, { cwd: middlewarePath });
+        ? spawn(python.path, scriptArgs.slice(1))
+        : spawn(python.path, moduleArgs, { cwd: middlewarePath });
 
     state.proc = child;
     state.baseUrl = baseUrl;

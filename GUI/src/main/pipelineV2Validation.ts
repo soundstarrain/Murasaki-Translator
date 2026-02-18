@@ -1,0 +1,320 @@
+import { existsSync } from "fs";
+import { readdir, readFile } from "fs/promises";
+import { basename, extname, join } from "path";
+import yaml from "js-yaml";
+
+export type ProfileKind =
+  | "api"
+  | "prompt"
+  | "parser"
+  | "policy"
+  | "chunk"
+  | "pipeline";
+
+type ValidationResult = {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+};
+
+const safeLoadYaml = (raw: string): Record<string, any> | null => {
+  try {
+    const data = yaml.load(raw);
+    if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+    return data as Record<string, any>;
+  } catch {
+    return null;
+  }
+};
+
+const listProfileFiles = async (dir: string) =>
+  (await readdir(dir).catch(() => [])).filter(
+    (name) =>
+      name.toLowerCase().endsWith(".yaml") ||
+      name.toLowerCase().endsWith(".yml"),
+  );
+
+const resolveProfilePath = async (
+  profilesDir: string,
+  kind: ProfileKind,
+  ref: string,
+) => {
+  if (!ref) return null;
+  if (existsSync(ref)) return ref;
+  if (ref.endsWith(".yaml") || ref.endsWith(".yml")) {
+    const direct = join(profilesDir, kind, ref);
+    if (existsSync(direct)) return direct;
+  }
+  const directYaml = join(profilesDir, kind, `${ref}.yaml`);
+  if (existsSync(directYaml)) return directYaml;
+  const directYml = join(profilesDir, kind, `${ref}.yml`);
+  if (existsSync(directYml)) return directYml;
+  const dir = join(profilesDir, kind);
+  const files = await listProfileFiles(dir);
+  for (const file of files) {
+    const raw = await readFile(join(dir, file), "utf-8").catch(() => "");
+    const data = safeLoadYaml(raw);
+    if (data?.id && String(data.id) === ref) {
+      return join(dir, file);
+    }
+  }
+  return null;
+};
+
+const loadProfile = async (
+  profilesDir: string,
+  kind: ProfileKind,
+  ref: string,
+) => {
+  const path = await resolveProfilePath(profilesDir, kind, ref);
+  if (!path) return null;
+  const raw = await readFile(path, "utf-8").catch(() => "");
+  const data = safeLoadYaml(raw);
+  if (!data) return null;
+  const id = String(data.id || basename(path, extname(path)));
+  const name = String(data.name || id);
+  return { id, name, data };
+};
+
+const collectPromptText = (prompt: Record<string, any>) => {
+  const parts = [
+    prompt.persona,
+    prompt.style_rules,
+    prompt.output_rules,
+    prompt.system_template,
+    prompt.user_template,
+  ];
+  return parts
+    .filter((item) => typeof item === "string")
+    .join("\n")
+    .toLowerCase();
+};
+
+const hasSourcePlaceholder = (prompt: Record<string, any>) => {
+  const userTemplate = String(prompt.user_template || "");
+  if (!userTemplate.trim()) return true;
+  return userTemplate.includes("{{source}}");
+};
+
+const validatePromptParserPair = (
+  prompt: Record<string, any>,
+  parser: Record<string, any>,
+  result: ValidationResult,
+) => {
+  const parserType = String(parser.type || "");
+  const promptText = collectPromptText(prompt);
+  if (parserType === "tagged_line") {
+    if (!promptText.includes("@@") && !promptText.includes("[[")) {
+      result.errors.push("parser_requires_tagged_prompt");
+    }
+  }
+  if (parserType === "json_object" || parserType === "json_array") {
+    if (!promptText.includes("json")) {
+      result.errors.push("parser_requires_json_prompt");
+    }
+  }
+  if (parserType === "jsonl") {
+    if (!promptText.includes("jsonl") && !promptText.includes("json lines") && !promptText.includes("jsonline")) {
+      result.errors.push("parser_requires_jsonl_prompt");
+    }
+  }
+};
+
+export const validateProfileLocal = async (
+  kind: ProfileKind,
+  data: Record<string, any>,
+  profilesDir: string,
+): Promise<ValidationResult> => {
+  const result: ValidationResult = { ok: false, errors: [], warnings: [] };
+  if (!data || typeof data !== "object") {
+    result.errors.push("invalid_yaml");
+    return result;
+  }
+
+  if (!data.id) {
+    result.errors.push("missing_id");
+  }
+
+  if (kind === "prompt") {
+    if (!hasSourcePlaceholder(data)) {
+      result.errors.push("prompt_missing_source");
+    }
+  }
+
+  if (kind === "api") {
+    const apiType = String(data.type || data.provider || "openai_compat");
+    if (apiType === "openai_compat") {
+      if (!data.base_url) result.errors.push("missing_base_url");
+      if (!data.model) result.errors.push("missing_model");
+    } else if (apiType === "pool") {
+      const endpoints = data.endpoints;
+      const members = data.members;
+      let hasEndpoints = false;
+      let missingModel = false;
+      if (Array.isArray(endpoints)) {
+        for (const item of endpoints) {
+          if (!item || typeof item !== "object") continue;
+          if (item.base_url || item.baseUrl) {
+            hasEndpoints = true;
+            if (!item.model) missingModel = true;
+          }
+        }
+      }
+      const hasMembers = Array.isArray(members) && members.length > 0;
+      if (!hasEndpoints && !hasMembers) {
+        result.errors.push("missing_pool_endpoints");
+      }
+      if (hasEndpoints && missingModel) {
+        result.errors.push("missing_pool_model");
+      }
+      if (hasMembers) {
+        for (const member of members) {
+          const memberId = String(member || "");
+          if (!memberId) continue;
+          const exists = await resolveProfilePath(profilesDir, "api", memberId);
+          if (!exists) {
+            result.errors.push(`missing_reference:api:${memberId}`);
+          }
+        }
+      }
+    } else {
+      result.warnings.push(`unsupported_type:${apiType}`);
+    }
+    if (data.rpm !== undefined && data.rpm !== null && data.rpm !== "") {
+      const rpmValue = Number.parseInt(String(data.rpm), 10);
+      if (!Number.isFinite(rpmValue) || rpmValue < 1) {
+        result.errors.push("invalid_rpm");
+      }
+    }
+  }
+
+  if (kind === "parser") {
+    const parserType = String(data.type || "");
+    if (!parserType) result.errors.push("missing_field:type");
+    if (parserType === "regex") {
+      if (!data.options?.pattern) result.errors.push("missing_pattern");
+    }
+    if (parserType === "json_object") {
+      if (!data.options?.path && !data.options?.key) {
+        result.errors.push("missing_json_path");
+      }
+    }
+    if (parserType === "jsonl") {
+      if (data.options && !data.options.path && !data.options.key) {
+        result.warnings.push("missing_json_path");
+      }
+    }
+    if (parserType === "any") {
+      const parsers = data.options?.parsers || data.options?.candidates;
+      if (!Array.isArray(parsers) || !parsers.length) {
+        result.errors.push("missing_any_parsers");
+      }
+    }
+  }
+
+  if (kind === "policy") {
+    const policyType = String(data.type || "");
+    if (!policyType) result.errors.push("missing_field:type");
+    if (policyType && !["strict", "tolerant"].includes(policyType)) {
+      result.warnings.push(`unsupported_type:${policyType}`);
+    }
+  }
+
+  if (kind === "chunk") {
+    const chunkType = String(data.chunk_type || data.type || "");
+    if (!chunkType) result.errors.push("missing_field:chunk_type");
+    if (chunkType && !["legacy", "line"].includes(chunkType)) {
+      result.warnings.push(`unsupported_type:${chunkType}`);
+    }
+  }
+
+  if (kind === "pipeline") {
+    for (const field of ["provider", "prompt", "parser", "chunk_policy"]) {
+      if (!data[field]) {
+        result.errors.push(`missing_field:${field}`);
+      }
+    }
+    if (data.apply_line_policy && !data.line_policy) {
+      result.errors.push("missing_field:line_policy");
+    }
+    if (data.settings && data.settings.concurrency !== undefined) {
+      const raw = Number.parseInt(String(data.settings.concurrency), 10);
+      if (!Number.isFinite(raw) || raw < 0) {
+        result.errors.push("invalid_concurrency");
+      }
+    }
+
+    const refs: Array<[string, ProfileKind]> = [
+      ["provider", "api"],
+      ["prompt", "prompt"],
+      ["parser", "parser"],
+      ["line_policy", "policy"],
+      ["chunk_policy", "chunk"],
+    ];
+    for (const [field, refKind] of refs) {
+      const refId = String(data[field] || "");
+      if (!refId) continue;
+      const exists = await resolveProfilePath(profilesDir, refKind, refId);
+      if (!exists) {
+        result.errors.push(`missing_reference:${refKind}:${refId}`);
+      }
+    }
+
+    const chunkRef = String(data.chunk_policy || "");
+    if (chunkRef) {
+      const chunkProfile = await loadProfile(profilesDir, "chunk", chunkRef);
+      const chunkType = String(
+        chunkProfile?.data?.chunk_type || chunkProfile?.data?.type || "",
+      );
+      if (data.apply_line_policy && chunkType && chunkType !== "line") {
+        result.errors.push("line_policy_requires_line_chunk");
+      }
+      if (chunkType === "line" && !data.line_policy) {
+        result.errors.push("line_chunk_missing_line_policy");
+      }
+    }
+
+    const promptRef = String(data.prompt || "");
+    const parserRef = String(data.parser || "");
+    if (promptRef && parserRef) {
+      const promptProfile = await loadProfile(profilesDir, "prompt", promptRef);
+      const parserProfile = await loadProfile(profilesDir, "parser", parserRef);
+      if (promptProfile?.data && parserProfile?.data) {
+        if (!hasSourcePlaceholder(promptProfile.data)) {
+          result.errors.push("prompt_missing_source");
+        }
+        validatePromptParserPair(
+          promptProfile.data,
+          parserProfile.data,
+          result,
+        );
+      }
+    }
+  }
+
+  result.ok = result.errors.length === 0;
+  return result;
+};
+
+export const validatePipelineRun = async (
+  profilesDir: string,
+  pipelineId: string,
+): Promise<ValidationResult> => {
+  const pipelineProfile = await loadProfile(
+    profilesDir,
+    "pipeline",
+    pipelineId,
+  );
+  if (!pipelineProfile?.data) {
+    return {
+      ok: false,
+      errors: [`missing_reference:pipeline:${pipelineId}`],
+      warnings: [],
+    };
+  }
+  return await validateProfileLocal(
+    "pipeline",
+    pipelineProfile.data,
+    profilesDir,
+  );
+};

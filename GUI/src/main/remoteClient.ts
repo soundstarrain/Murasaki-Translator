@@ -192,12 +192,20 @@ export class RemoteClient {
     message: string;
     version?: string;
   }> {
-    this.emitNetworkEvent({ kind: "connection", phase: "start", path: "/health" });
+    this.emitNetworkEvent({
+      kind: "connection",
+      phase: "start",
+      path: "/health",
+    });
     try {
       const response = await this.fetch("/health");
       if (response.status === "ok") {
         await this.fetch("/api/v1/status");
-        this.emitNetworkEvent({ kind: "connection", phase: "success", path: "/api/v1/status" });
+        this.emitNetworkEvent({
+          kind: "connection",
+          phase: "success",
+          path: "/api/v1/status",
+        });
         return { ok: true, message: "Connected", version: response.version };
       }
       this.emitNetworkEvent({
@@ -213,7 +221,13 @@ export class RemoteClient {
         status === 401 || status === 403
           ? "Authentication failed: missing or invalid API key"
           : this.normalizeErrorMessage(error);
-      this.emitNetworkEvent({ kind: "connection", phase: "error", path: "/health", statusCode: status ?? undefined, message });
+      this.emitNetworkEvent({
+        kind: "connection",
+        phase: "error",
+        path: "/health",
+        statusCode: status ?? undefined,
+        message,
+      });
       return { ok: false, message };
     }
   }
@@ -242,7 +256,9 @@ export class RemoteClient {
     currentModel?: string;
     activeTasks: number;
   }> {
-    const response = (await this.fetch("/api/v1/status")) as RemoteServerStatusRaw;
+    const response = (await this.fetch(
+      "/api/v1/status",
+    )) as RemoteServerStatusRaw;
     return {
       status: response.status,
       modelLoaded: response.model_loaded,
@@ -255,7 +271,9 @@ export class RemoteClient {
    * 获取可用模型列表
    */
   async listModels(): Promise<ModelInfo[]> {
-    const response = (await this.fetch("/api/v1/models")) as RemoteModelInfoRaw[];
+    const response = (await this.fetch(
+      "/api/v1/models",
+    )) as RemoteModelInfoRaw[];
     return response.map((item) => ({
       name: item.name,
       path: item.path,
@@ -277,7 +295,11 @@ export class RemoteClient {
     return this.fetch(`/api/v1/models/hf/files?${query.toString()}`);
   }
 
-  async startHfDownload(repoId: string, fileName: string, mirror: string = "direct"): Promise<{ downloadId: string }> {
+  async startHfDownload(
+    repoId: string,
+    fileName: string,
+    mirror: string = "direct",
+  ): Promise<{ downloadId: string }> {
     const response = await this.fetch("/api/v1/models/hf/download", {
       method: "POST",
       body: JSON.stringify({
@@ -336,7 +358,8 @@ export class RemoteClient {
   ): Promise<{ taskId: string; status: string }> {
     const normalizedLineTolerancePct = (() => {
       const raw = options.lineTolerancePct;
-      if (raw === undefined || raw === null || !Number.isFinite(raw)) return 0.2;
+      if (raw === undefined || raw === null || !Number.isFinite(raw))
+        return 0.2;
       const numeric = Number(raw);
       if (numeric > 1) return numeric / 100;
       if (numeric < 0) return 0;
@@ -441,7 +464,10 @@ export class RemoteClient {
   /**
    * 获取任务状态
    */
-  async getTaskStatus(taskId: string, query?: TaskStatusQuery): Promise<TranslateTask> {
+  async getTaskStatus(
+    taskId: string,
+    query?: TaskStatusQuery,
+  ): Promise<TranslateTask> {
     let path = `/api/v1/translate/${taskId}`;
     if (query) {
       const params = new URLSearchParams();
@@ -578,14 +604,24 @@ export class RemoteClient {
         }
       } catch (e) {
         const message = String(e);
-        this.emitNetworkEvent({ kind: "ws", phase: "error", path: wsPath, message });
+        this.emitNetworkEvent({
+          kind: "ws",
+          phase: "error",
+          path: wsPath,
+          message,
+        });
         callbacks.onError?.(message);
       }
     };
 
     ws.onerror = (error) => {
       const message = String(error);
-      this.emitNetworkEvent({ kind: "ws", phase: "error", path: wsPath, message });
+      this.emitNetworkEvent({
+        kind: "ws",
+        phase: "error",
+        path: wsPath,
+        message,
+      });
       callbacks.onError?.(message);
     };
 
@@ -654,7 +690,10 @@ export class RemoteClient {
     return Math.min(1800, 400 * Math.pow(2, attempt - 1) + 100 * (attempt - 1));
   }
 
-  private shouldRetryByMethod(method: string, retryOverride?: boolean): boolean {
+  private shouldRetryByMethod(
+    method: string,
+    retryOverride?: boolean,
+  ): boolean {
     if (typeof retryOverride === "boolean") return retryOverride;
     return ["GET", "HEAD", "OPTIONS", "DELETE"].includes(method);
   }
@@ -672,7 +711,10 @@ export class RemoteClient {
   }
 
   private shouldRetryByError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    const message =
+      error instanceof Error
+        ? error.message.toLowerCase()
+        : String(error).toLowerCase();
     return (
       message.includes("timeout") ||
       message.includes("network") ||
@@ -706,7 +748,13 @@ export class RemoteClient {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const startedAt = Date.now();
-      this.emitNetworkEvent({ kind: "http", phase: "start", method, path, attempt });
+      this.emitNetworkEvent({
+        kind: "http",
+        phase: "start",
+        method,
+        path,
+        attempt,
+      });
       try {
         const response = await this.fetchWithTimeout(url, {
           ...options,
@@ -719,7 +767,9 @@ export class RemoteClient {
         if (!response.ok) {
           const text = await response.text();
           const canRetry =
-            allowRetry && attempt < maxAttempts && this.shouldRetryByStatus(response.status);
+            allowRetry &&
+            attempt < maxAttempts &&
+            this.shouldRetryByStatus(response.status);
           if (canRetry) {
             this.emitNetworkEvent({
               kind: "retry",
@@ -820,7 +870,9 @@ export class RemoteClient {
   private async fetchFormData(path: string, form: FormData): Promise<unknown> {
     const url = this.config.url + path;
     const headers: Record<string, string> = {
-      ...(typeof (form as any).getHeaders === "function" ? (form as any).getHeaders() : {}),
+      ...(typeof (form as any).getHeaders === "function"
+        ? (form as any).getHeaders()
+        : {}),
     };
 
     if (this.config.apiKey) {
@@ -830,7 +882,13 @@ export class RemoteClient {
     const maxAttempts = 2;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const startedAt = Date.now();
-      this.emitNetworkEvent({ kind: "upload", phase: "start", method: "POST", path, attempt });
+      this.emitNetworkEvent({
+        kind: "upload",
+        phase: "start",
+        method: "POST",
+        path,
+        attempt,
+      });
       try {
         const response = await this.fetchWithTimeout(url, {
           method: "POST",
@@ -868,7 +926,8 @@ export class RemoteClient {
         return response.json();
       } catch (error: unknown) {
         const durationMs = Date.now() - startedAt;
-        const canRetry = attempt < maxAttempts && this.shouldRetryByError(error);
+        const canRetry =
+          attempt < maxAttempts && this.shouldRetryByError(error);
         if (canRetry) {
           this.emitNetworkEvent({
             kind: "retry",
@@ -911,7 +970,13 @@ export class RemoteClient {
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const startedAt = Date.now();
-      this.emitNetworkEvent({ kind: "download", phase: "start", method: "GET", path, attempt });
+      this.emitNetworkEvent({
+        kind: "download",
+        phase: "start",
+        method: "GET",
+        path,
+        attempt,
+      });
       try {
         const response = await this.fetchWithTimeout(url, {
           method: "GET",
@@ -966,7 +1031,8 @@ export class RemoteClient {
         return Buffer.from(arrayBuffer);
       } catch (error: unknown) {
         const durationMs = Date.now() - startedAt;
-        const canRetry = attempt < maxAttempts && this.shouldRetryByError(error);
+        const canRetry =
+          attempt < maxAttempts && this.shouldRetryByError(error);
         if (canRetry) {
           this.emitNetworkEvent({
             kind: "retry",

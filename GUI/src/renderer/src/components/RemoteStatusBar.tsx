@@ -38,10 +38,7 @@ const formatAgo = (t: RemoteStatusText, timestamp?: number): string => {
       "{count}",
       String(Math.floor(deltaSeconds / 60)),
     );
-  return t.agoHours.replace(
-    "{count}",
-    String(Math.floor(deltaSeconds / 3600)),
-  );
+  return t.agoHours.replace("{count}", String(Math.floor(deltaSeconds / 3600)));
 };
 
 export function RemoteStatusBar({ remote, lang }: RemoteStatusBarProps) {
@@ -217,7 +214,9 @@ export function RemoteStatusBar({ remote, lang }: RemoteStatusBarProps) {
               onClick={() => void remote.refresh(true)}
               title={t.refreshTitle}
             >
-              <RefreshCw className={`w-3 h-3 ${remote.refreshing ? "animate-spin" : ""}`} />
+              <RefreshCw
+                className={`w-3 h-3 ${remote.refreshing ? "animate-spin" : ""}`}
+              />
               <span>{t.refresh}</span>
             </button>
           </div>
@@ -269,8 +268,7 @@ export function RemoteStatusBar({ remote, lang }: RemoteStatusBarProps) {
         {expanded && (
           <div className="border-t border-border px-3 py-2 text-[10px] bg-secondary/20 space-y-1.5">
             <div className="text-muted-foreground">
-              {t.runtimeSource}{" "}
-              <span className="font-mono">{sourceLabel}</span>
+              {t.runtimeSource} <span className="font-mono">{sourceLabel}</span>
             </div>
             <div className="text-muted-foreground">
               {t.runtimeMode}{" "}
@@ -282,7 +280,9 @@ export function RemoteStatusBar({ remote, lang }: RemoteStatusBarProps) {
             </div>
             <div className="text-muted-foreground">
               {t.mirrorPath}{" "}
-              <span className="font-mono">{remote.runtime.syncMirrorPath || "--"}</span>
+              <span className="font-mono">
+                {remote.runtime.syncMirrorPath || "--"}
+              </span>
             </div>
             <div className="text-muted-foreground">
               {t.networkLog}{" "}

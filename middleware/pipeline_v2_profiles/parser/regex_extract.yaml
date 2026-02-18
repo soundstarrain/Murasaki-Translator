@@ -1,0 +1,8 @@
+id: parser_regex_extract
+name: Regex Extract Parser
+type: regex
+options:
+  pattern: "(?s)```(?:text|translation)?\\n(?P<content>.*?)\\n```"
+  group: content
+  flags:
+    - dotall

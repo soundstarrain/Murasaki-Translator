@@ -3327,9 +3327,6 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                 <span className="text-xs text-muted-foreground">
                   {t.dashboard.terminal}
                 </span>
-                <span className="text-[10px] bg-secondary px-1.5 py-0.5 rounded">
-                  {logs.length}
-                </span>
                 <ChevronDown
                   className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${logsCollapsed ? "" : "rotate-180"}`}
                 />

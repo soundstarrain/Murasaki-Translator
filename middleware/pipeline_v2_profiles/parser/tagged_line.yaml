@@ -1,0 +1,5 @@
+id: parser_tagged_line
+name: Tagged Line Parser
+type: tagged_line
+options:
+  pattern: "^@@(?P<id>\\d+)@@(?P<text>.*)$"

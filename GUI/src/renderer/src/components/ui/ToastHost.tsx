@@ -53,13 +53,14 @@ export function ToastHost() {
     };
 
     window.addEventListener("app-toast", handler as EventListener);
-    return () => window.removeEventListener("app-toast", handler as EventListener);
+    return () =>
+      window.removeEventListener("app-toast", handler as EventListener);
   }, []);
 
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-4 right-4 z-[var(--z-toast)] flex flex-col gap-2">
+    <div className="fixed bottom-6 right-6 z-[var(--z-toast)] flex flex-col gap-2">
       {toasts.map((toast) => {
         const config = variantStyles[toast.variant];
         const Icon = config.icon;

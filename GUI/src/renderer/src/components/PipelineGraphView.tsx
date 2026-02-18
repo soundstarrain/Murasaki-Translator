@@ -92,7 +92,7 @@ const PipelineNode = ({ data }: NodeProps<PipelineNodeData>) => {
   return (
     <div
       className={cn(
-        "rounded-xl border border-border/60 bg-background/80 px-3 py-2 text-xs shadow-sm",
+        "rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs shadow-sm backdrop-blur-md transition-all hover:border-primary/30 hover:shadow-md",
         data.muted ? "opacity-60" : "",
       )}
     >
@@ -114,9 +114,8 @@ export function PipelineGraphView({
   dragHint,
   className,
 }: PipelineGraphViewProps) {
-  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(
-    null,
-  );
+  const [reactFlowInstance, setReactFlowInstance] =
+    useState<ReactFlowInstance | null>(null);
 
   const baseNodes = useMemo<Array<Node<PipelineNodeData>>>(
     () =>
@@ -141,7 +140,7 @@ export function PipelineGraphView({
         target: item.id,
         type: "smoothstep",
         markerEnd: { type: MarkerType.ArrowClosed },
-        style: { stroke: "hsl(var(--border))" },
+        style: { stroke: "hsl(var(--border))", strokeWidth: 1.2 },
       })),
     [items],
   );
@@ -175,7 +174,7 @@ export function PipelineGraphView({
   return (
     <div
       className={cn(
-        "rounded-xl border border-border/60 bg-background/70 shadow-sm",
+        "rounded-xl border border-border/60 bg-background/70 shadow-sm backdrop-blur-md",
         className,
       )}
     >

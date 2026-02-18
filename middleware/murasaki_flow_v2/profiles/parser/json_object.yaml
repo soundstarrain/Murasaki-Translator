@@ -1,5 +1,6 @@
-id: parser_json_object
-name: Json Object Parser
+﻿id: parser_json_object
+name: JSON 对象解析
 type: json_object
 options:
   path: translation
+

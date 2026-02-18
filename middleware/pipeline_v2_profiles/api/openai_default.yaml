@@ -1,0 +1,13 @@
+id: openai_default
+name: OpenAI 默认接口
+type: openai_compat
+base_url: https://api.openai.com/v1
+api_key: null
+model: gpt-4.1-mini
+timeout: 600
+concurrency: 0
+rpm: 3600
+headers: {}
+params:
+  top_p: 0.95
+  max_tokens: 4096

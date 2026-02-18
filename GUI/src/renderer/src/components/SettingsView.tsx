@@ -33,7 +33,10 @@ import { AlertModal } from "./ui/AlertModal";
 import { translations, Language } from "../lib/i18n";
 import { APP_CONFIG, DEFAULT_POST_RULES } from "../lib/config";
 import { cn } from "../lib/utils";
-import { buildConfigSnapshot, parseConfigSnapshot } from "../lib/configSnapshot";
+import {
+  buildConfigSnapshot,
+  parseConfigSnapshot,
+} from "../lib/configSnapshot";
 import { LogViewerModal } from "./LogViewerModal";
 import { EnvFixerModal } from "./EnvFixerModal";
 
@@ -465,9 +468,10 @@ export function SettingsView({ lang }: { lang: Language }) {
       return "";
     }
     const sep = folder.includes("\\") ? "\\" : "/";
-    const normalized = folder.endsWith("\\") || folder.endsWith("/")
-      ? folder.slice(0, -1)
-      : folder;
+    const normalized =
+      folder.endsWith("\\") || folder.endsWith("/")
+        ? folder.slice(0, -1)
+        : folder;
     return `${normalized}${sep}${fileName}`;
   };
 
@@ -1013,9 +1017,7 @@ export function SettingsView({ lang }: { lang: Language }) {
           <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/50 p-3 rounded">
             <Info className="w-3 h-3 mt-0.5 shrink-0 text-blue-500" />
             <div className="space-y-1">
-              <p>
-                {diagText.fixHint}
-              </p>
+              <p>{diagText.fixHint}</p>
               <p>{diagText.refreshHint}</p>
             </div>
           </div>

@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { EditorView, placeholder } from "@codemirror/view";
@@ -24,6 +25,7 @@ import {
   Settings2,
 } from "lucide-react";
 import { Button, Tooltip, Switch } from "./ui/core";
+import { computePopoverPosition } from "./ui/popoverPosition";
 import { translations, Language } from "../lib/i18n";
 import { AlertModal } from "./ui/AlertModal";
 import { useAlertModal } from "../hooks/useAlertModal";
@@ -173,10 +175,7 @@ const buildPresetTemplates = (
 });
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
-const buildProtectRule = (
-  re: RuleEditorI18n,
-  patterns: string = "",
-): Rule => ({
+const buildProtectRule = (re: RuleEditorI18n, patterns: string = ""): Rule => ({
   id: generateId(),
   type: "protect",
   active: true,
@@ -231,7 +230,9 @@ const cloneRules = (items: Rule[]) =>
     const normalizedRule = normalizePythonRule(rule);
     return {
       ...normalizedRule,
-      options: normalizedRule.options ? { ...normalizedRule.options } : undefined,
+      options: normalizedRule.options
+        ? { ...normalizedRule.options }
+        : undefined,
     };
   });
 
@@ -241,7 +242,9 @@ const ensureRuleIds = (items: Rule[]) =>
     return {
       ...normalizedRule,
       id: normalizedRule.id || generateId(),
-      options: normalizedRule.options ? { ...normalizedRule.options } : undefined,
+      options: normalizedRule.options
+        ? { ...normalizedRule.options }
+        : undefined,
     };
   });
 
@@ -300,6 +303,8 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
             '"JetBrains Mono", "Fira Code", "Cascadia Mono", "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", "Monaco", "Noto Sans Mono CJK SC", "Microsoft YaHei UI", "PingFang SC", monospace',
           backgroundColor: "transparent",
           color: "hsl(var(--foreground))",
+          border: "none",
+          outline: "none",
         },
         ".cm-content": {
           padding: "10px 12px",
@@ -307,10 +312,10 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
         ".cm-gutters": {
           backgroundColor: "transparent",
           color: "hsl(var(--muted-foreground))",
-          borderRight: "1px solid hsl(var(--border))",
+          borderRight: "1px solid hsl(var(--border) / 0.6)",
         },
         ".cm-lineNumbers": {
-          minWidth: "26px",
+          minWidth: "32px",
         },
         ".cm-activeLine": {
           backgroundColor: "hsl(var(--muted) / 0.25)",
@@ -348,7 +353,9 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
   const [activeProfileId, setActiveProfileId] = useState("");
   const [creatingProfile, setCreatingProfile] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
-  const [renamingProfileId, setRenamingProfileId] = useState<string | null>(null);
+  const [renamingProfileId, setRenamingProfileId] = useState<string | null>(
+    null,
+  );
   const [renameProfileName, setRenameProfileName] = useState("");
   const [saved, setSaved] = useState(false);
   const [testInput, setTestInput] = useState("");
@@ -362,10 +369,17 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
   const [showPythonTemplates, setShowPythonTemplates] = useState<string | null>(
     null,
   );
+  const [pythonTemplateMenuPos, setPythonTemplateMenuPos] = useState<ReturnType<
+    typeof computePopoverPosition
+  > | null>(null);
   const [showProtectPresets, setShowProtectPresets] = useState(false);
   const [protectInfoOpen, setProtectInfoOpen] = useState(false);
   const [testing, setTesting] = useState(false);
   const { alertProps, showAlert, showConfirm } = useAlertModal();
+  const pythonTemplateAnchorRefs = useRef<
+    Record<string, HTMLButtonElement | null>
+  >({});
+  const pythonTemplateMenuRef = useRef<HTMLDivElement>(null);
 
   const storageKey = `config_rules_${mode}`;
   const profilesKey = `config_rules_${mode}_profiles`;
@@ -440,6 +454,38 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
       JSON.stringify(cloneRules(nextActiveProfile?.rules || [])),
     );
   }, [mode, profilesKey, activeProfileKey, storageKey]);
+
+  useEffect(() => {
+    setPythonTemplateMenuPos(null);
+  }, [showPythonTemplates]);
+
+  useLayoutEffect(() => {
+    if (!showPythonTemplates) return;
+    const anchor = pythonTemplateAnchorRefs.current[showPythonTemplates];
+    const menu = pythonTemplateMenuRef.current;
+    if (!anchor || !menu) return;
+
+    const updatePosition = () => {
+      const anchorRect = anchor.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const next = computePopoverPosition({
+        anchorRect,
+        popoverSize: { width: menuRect.width, height: menuRect.height },
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      });
+      setPythonTemplateMenuPos(next);
+    };
+
+    const frame = window.requestAnimationFrame(updatePosition);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [showPythonTemplates]);
 
   const flashSaved = () => {
     setSaved(true);
@@ -680,10 +726,7 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
     setActiveProfileId(profileId);
     setRules(cloneRules(profile.rules));
     localStorage.setItem(activeProfileKey, profileId);
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify(cloneRules(profile.rules)),
-    );
+    localStorage.setItem(storageKey, JSON.stringify(cloneRules(profile.rules)));
     setSaved(false);
     setCreatingProfile(false);
     setRenamingProfileId(null);
@@ -910,9 +953,7 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
       const normalizedRules = rules.map((rule) => {
         if (rule.type !== "python") return rule;
         const script = normalizePythonScript(rule.script || "");
-        return script === (rule.script || "")
-          ? rule
-          : { ...rule, script };
+        return script === (rule.script || "") ? rule : { ...rule, script };
       });
       const hasNormalization = normalizedRules.some(
         (rule, idx) => (rule.script || "") !== (rules[idx]?.script || ""),
@@ -1042,13 +1083,13 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
   const protectRule =
     mode === "pre"
       ? rules.find(
-          (rule) =>
-            rule.type === "protect" || rule.pattern === "text_protect",
+          (rule) => rule.type === "protect" || rule.pattern === "text_protect",
         )
       : null;
   const protectEnabled = Boolean(protectRule?.active);
-  const protectPatterns =
-    normalizeProtectPatterns(protectRule?.options?.patterns);
+  const protectPatterns = normalizeProtectPatterns(
+    protectRule?.options?.patterns,
+  );
   useEffect(() => {
     if (protectEnabled) {
       setProtectInfoOpen(false);
@@ -1212,7 +1253,8 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                     }}
                     className="bg-background hover:bg-accent border-input hover:border-purple-500/50 transition-all duration-300"
                   >
-                    <Sparkles className="w-4 h-4 mr-2 text-purple-500" /> {re.presets}
+                    <Sparkles className="w-4 h-4 mr-2 text-purple-500" />{" "}
+                    {re.presets}
                   </Button>
                   {showPresets && (
                     <div className="absolute right-0 mt-3 w-80 bg-popover/95 backdrop-blur-2xl rounded-2xl shadow-2xl border border-border z-50 p-4 animate-in fade-in zoom-in-95 duration-200">
@@ -1268,7 +1310,8 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                 onClick={handleSave}
                 className={`h-10 px-7 text-sm transition-all duration-500 font-bold shadow-[0_0_20px_rgba(168,85,247,0.1)] dark:shadow-[0_0_20px_rgba(168,85,247,0.2)] ${saved ? "bg-emerald-500 hover:bg-emerald-600" : "bg-gradient-to-r from-purple-600 to-indigo-600 hover:shadow-[0_0_30px_rgba(168,85,247,0.3)]"}`}
               >
-                <Save className="w-4 h-4 mr-2" /> {saved ? re.saveReady : re.saveConfig}
+                <Save className="w-4 h-4 mr-2" />{" "}
+                {saved ? re.saveReady : re.saveConfig}
               </Button>
             </div>
           </div>
@@ -1362,8 +1405,7 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                       {re.textProtectLabel}
                     </div>
                     <p className="text-[12px] text-muted-foreground leading-relaxed mt-0.5">
-                      {re.textProtectDesc}
-                      {" "}
+                      {re.textProtectDesc}{" "}
                       <span className="whitespace-nowrap">
                         {re.textProtectSupportNote}
                       </span>
@@ -1389,9 +1431,7 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                         className="w-full min-h-[72px] rounded-xl border border-border bg-background px-3 py-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-purple-500/40 transition-all"
                         placeholder={re.textProtectPlaceholder}
                         value={protectPatterns}
-                        onChange={(e) =>
-                          updateProtectPatterns(e.target.value)
-                        }
+                        onChange={(e) => updateProtectPatterns(e.target.value)}
                         spellCheck={false}
                       />
                       <div className="flex items-center justify-end gap-2">
@@ -1467,15 +1507,21 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                             </div>
                             <div className="space-y-1 text-[12px] text-muted-foreground/80 leading-relaxed">
                               <div className="flex items-start gap-2">
-                                <span className="text-muted-foreground/60">•</span>
+                                <span className="text-muted-foreground/60">
+                                  •
+                                </span>
                                 <span>{re.textProtectInfoStep1}</span>
                               </div>
                               <div className="flex items-start gap-2">
-                                <span className="text-muted-foreground/60">•</span>
+                                <span className="text-muted-foreground/60">
+                                  •
+                                </span>
                                 <span>{re.textProtectInfoStep2}</span>
                               </div>
                               <div className="flex items-start gap-2">
-                                <span className="text-muted-foreground/60">•</span>
+                                <span className="text-muted-foreground/60">
+                                  •
+                                </span>
                                 <span>{re.textProtectInfoStep3}</span>
                               </div>
                             </div>
@@ -1594,10 +1640,18 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                               });
                             }}
                           >
-                            <option value="format">{re.executor.options.format}</option>
-                            <option value="replace">{re.executor.options.replace}</option>
-                            <option value="regex">{re.executor.options.regex}</option>
-                            <option value="python">{re.executor.options.python}</option>
+                            <option value="format">
+                              {re.executor.options.format}
+                            </option>
+                            <option value="replace">
+                              {re.executor.options.replace}
+                            </option>
+                            <option value="regex">
+                              {re.executor.options.regex}
+                            </option>
+                            <option value="python">
+                              {re.executor.options.python}
+                            </option>
                           </select>
                           <ChevronRight className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground rotate-90 pointer-events-none" />
                         </div>
@@ -1622,7 +1676,9 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                                   });
                                 }}
                               >
-                                <option value="">{re.executor.templatePlaceholder}</option>
+                                <option value="">
+                                  {re.executor.templatePlaceholder}
+                                </option>
                                 {Object.entries(patternMetadata).map(
                                   ([key, meta]) => (
                                     <option key={key} value={key}>
@@ -1652,44 +1708,60 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                                       prev === rule.id ? null : rule.id,
                                     )
                                   }
+                                  ref={(node) => {
+                                    pythonTemplateAnchorRefs.current[rule.id] =
+                                      node;
+                                  }}
                                   className="h-7 px-2 text-[10px] font-semibold"
                                 >
                                   <Sparkles className="w-3.5 h-3.5 mr-1 text-purple-500" />
                                   {re.python.templateLibrary}
                                   <ChevronRight className="w-3.5 h-3.5 ml-1 rotate-90 text-muted-foreground" />
                                 </Button>
-                                {showPythonTemplates === rule.id && (
-                                  <div className="absolute left-0 mt-2 w-56 bg-popover/95 backdrop-blur-2xl rounded-2xl shadow-2xl border border-border z-50 p-2 animate-in fade-in zoom-in-95 duration-200">
-                                    <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground px-2 py-1">
-                                      {re.python.insertTemplate}
-                                    </div>
-                                    <div className="space-y-1">
-                                      {pythonTemplates.map((template) => (
-                                        <button
-                                          key={template.key}
-                                          onClick={() => {
-                                            insertPythonTemplate(
-                                              rule.id,
-                                              template.key,
-                                            );
-                                            setShowPythonTemplates(null);
-                                          }}
-                                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-accent text-[11px] font-semibold text-foreground"
-                                        >
-                                          {template.label}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
+                                {showPythonTemplates === rule.id &&
+                                  createPortal(
+                                    <div
+                                      ref={pythonTemplateMenuRef}
+                                      className="fixed w-56 bg-popover/95 backdrop-blur-2xl rounded-2xl shadow-2xl border border-border z-[var(--z-floating)] p-2 animate-in fade-in zoom-in-95 duration-200"
+                                      style={{
+                                        top: pythonTemplateMenuPos?.top ?? 0,
+                                        left: pythonTemplateMenuPos?.left ?? 0,
+                                        visibility: pythonTemplateMenuPos
+                                          ? "visible"
+                                          : "hidden",
+                                      }}
+                                    >
+                                      <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground px-2 py-1">
+                                        {re.python.insertTemplate}
+                                      </div>
+                                      <div className="space-y-1">
+                                        {pythonTemplates.map((template) => (
+                                          <button
+                                            key={template.key}
+                                            onClick={() => {
+                                              insertPythonTemplate(
+                                                rule.id,
+                                                template.key,
+                                              );
+                                              setShowPythonTemplates(null);
+                                            }}
+                                            className="w-full text-left px-3 py-2 rounded-lg hover:bg-accent text-[11px] font-semibold text-foreground"
+                                          >
+                                            {template.label}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>,
+                                    document.body,
+                                  )}
                               </div>
                             </div>
-                            <div className="w-full min-h-[160px] rounded-lg border border-border bg-background/50 focus-within:ring-1 focus-within:ring-purple-500/40 transition-all">
+                            <div className="w-full min-h-[160px] rounded-xl border border-border/70 bg-background/60 shadow-sm focus-within:border-purple-500/40 focus-within:ring-1 focus-within:ring-purple-500/30 transition-all">
                               <CodeMirror
                                 value={rule.script || ""}
                                 minHeight="160px"
                                 basicSetup={{
-                                  lineNumbers: false,
+                                  lineNumbers: true,
                                   foldGutter: false,
                                   highlightActiveLineGutter: false,
                                 }}
@@ -1798,7 +1870,9 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                               <div className="text-[11px] text-muted-foreground leading-relaxed font-medium flex-1">
                                 {rule.description
                                   ?.split("\n")
-                                  .filter((l) => !l.startsWith(re.examplePrefix))
+                                  .filter(
+                                    (l) => !l.startsWith(re.examplePrefix),
+                                  )
                                   .map((line, lIdx) => (
                                     <div key={lIdx} className="mb-0.5">
                                       {line}
@@ -1992,7 +2066,9 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
                       <span className="text-[9px] font-bold text-purple-600 dark:text-purple-300 truncate tracking-tight uppercase">
                         {re.sandbox.stepPrefix} {activeStep}:{" "}
                         {testSteps[activeStep]?.label || re.sandbox.stepInitial}
-                        {testSteps[activeStep]?.error ? ` (${re.errorLabel})` : ""}
+                        {testSteps[activeStep]?.error
+                          ? ` (${re.errorLabel})`
+                          : ""}
                       </span>
                     </div>
                   </div>
@@ -2013,6 +2089,3 @@ export function RuleEditor({ lang, mode }: RuleEditorProps) {
     </div>
   );
 }
-
-
-

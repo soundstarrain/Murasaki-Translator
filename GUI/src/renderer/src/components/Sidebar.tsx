@@ -75,7 +75,7 @@ export function Sidebar({ lang, setLang, view, setView }: SidebarProps) {
   ];
 
   return (
-    <div className="w-[200px] bg-card border-r border-border h-screen flex flex-col">
+    <div className="w-[200px] min-w-[200px] shrink-0 bg-card border-r border-border h-screen flex flex-col">
       <div className="p-4 pb-3 flex flex-col items-start text-left">
         <h1 className="text-xl font-bold tracking-tight bg-gradient-to-r from-purple-400 to-violet-400 bg-clip-text text-transparent">
           Murasaki

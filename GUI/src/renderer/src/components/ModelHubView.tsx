@@ -1,12 +1,6 @@
 import { useMemo, useState } from "react";
 import yaml from "js-yaml";
-import {
-  Card,
-  CardContent,
-  Button,
-  Input,
-  Label,
-} from "./ui/core";
+import { Card, CardContent, Button, Input, Label } from "./ui/core";
 import { translations, Language } from "../lib/i18n";
 import { emitToast } from "../lib/toast";
 import {
@@ -25,7 +19,7 @@ const DEFAULT_API_FORM = {
   name: "",
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
-  model: "gpt-4o-mini",
+  model: "gpt-4.1-mini",
   timeout: "600",
 };
 
@@ -49,7 +43,9 @@ const formatErrorCode = (code: string, texts: any) => {
     const parts = code.split(":");
     const kind = parts[1] || "";
     const id = parts[2] || "";
-    return texts.validationUnknownReference.replace("{kind}", kind).replace("{id}", id);
+    return texts.validationUnknownReference
+      .replace("{kind}", kind)
+      .replace("{id}", id);
   }
   return code;
 };
@@ -58,12 +54,17 @@ const formatServerError = (error: any, fallback: string, texts: any) => {
   if (!error) return fallback;
   if (typeof error === "string") return error;
   if (Array.isArray(error?.errors)) {
-    return error.errors.map((code: string) => formatErrorCode(code, texts)).join("\n");
+    return error.errors
+      .map((code: string) => formatErrorCode(code, texts))
+      .join("\n");
   }
   if (Array.isArray(error?.detail)) {
-    return error.detail.map((code: string) => formatErrorCode(code, texts)).join("\n");
+    return error.detail
+      .map((code: string) => formatErrorCode(code, texts))
+      .join("\n");
   }
-  if (typeof error?.detail === "string") return formatErrorCode(error.detail, texts);
+  if (typeof error?.detail === "string")
+    return formatErrorCode(error.detail, texts);
   try {
     return JSON.stringify(error);
   } catch {
@@ -86,7 +87,9 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
   const [saving, setSaving] = useState(false);
 
   const requiredMissing = useMemo(() => {
-    return !apiForm.id.trim() || !apiForm.baseUrl.trim() || !apiForm.model.trim();
+    return (
+      !apiForm.id.trim() || !apiForm.baseUrl.trim() || !apiForm.model.trim()
+    );
   }, [apiForm]);
 
   const handleApiSave = async (openAfterSave?: boolean) => {
@@ -130,11 +133,18 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
       } else {
         emitToast({
           title: texts.saveFail,
-          description: formatServerError(result?.error, texts.saveFail, apiTexts),
+          description: formatServerError(
+            result?.error,
+            texts.saveFail,
+            apiTexts,
+          ),
         });
       }
     } catch (error: any) {
-      emitToast({ title: texts.saveFail, description: error?.message || texts.saveFail });
+      emitToast({
+        title: texts.saveFail,
+        description: error?.message || texts.saveFail,
+      });
     } finally {
       setSaving(false);
     }
@@ -149,7 +159,9 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
           : "border-border/60 bg-secondary/20 text-muted-foreground",
       )}
     >
-      <CheckCircle2 className={cn("w-3.5 h-3.5", active ? "opacity-100" : "opacity-50")} />
+      <CheckCircle2
+        className={cn("w-3.5 h-3.5", active ? "opacity-100" : "opacity-50")}
+      />
       <span>{label}</span>
     </div>
   );
@@ -179,7 +191,9 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
           <CardContent className="pt-6 space-y-4">
             <div>
               <div className="text-sm font-semibold">{texts.chooseTitle}</div>
-              <p className="text-xs text-muted-foreground">{texts.chooseDesc}</p>
+              <p className="text-xs text-muted-foreground">
+                {texts.chooseDesc}
+              </p>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <Card
@@ -204,7 +218,9 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
                       <Database className="w-5 h-5" />
                     </div>
                     <div className="space-y-1">
-                      <div className="text-sm font-semibold">{texts.localCard.title}</div>
+                      <div className="text-sm font-semibold">
+                        {texts.localCard.title}
+                      </div>
                       <div className="text-xs text-muted-foreground">
                         {texts.localCard.desc}
                       </div>
@@ -212,8 +228,13 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
                   </div>
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
                     <span>{texts.localCard.hint}</span>
-                    <Button size="sm" variant={source === "local" ? "default" : "outline"}>
-                      {source === "local" ? texts.selectedAction : texts.selectAction}
+                    <Button
+                      size="sm"
+                      variant={source === "local" ? "default" : "outline"}
+                    >
+                      {source === "local"
+                        ? texts.selectedAction
+                        : texts.selectAction}
                     </Button>
                   </div>
                 </CardContent>
@@ -241,7 +262,9 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
                       <Server className="w-5 h-5" />
                     </div>
                     <div className="space-y-1">
-                      <div className="text-sm font-semibold">{texts.apiCard.title}</div>
+                      <div className="text-sm font-semibold">
+                        {texts.apiCard.title}
+                      </div>
                       <div className="text-xs text-muted-foreground">
                         {texts.apiCard.desc}
                       </div>
@@ -249,8 +272,13 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
                   </div>
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
                     <span>{texts.apiCard.hint}</span>
-                    <Button size="sm" variant={source === "api" ? "default" : "outline"}>
-                      {source === "api" ? texts.selectedAction : texts.selectAction}
+                    <Button
+                      size="sm"
+                      variant={source === "api" ? "default" : "outline"}
+                    >
+                      {source === "api"
+                        ? texts.selectedAction
+                        : texts.selectAction}
                     </Button>
                   </div>
                 </CardContent>
@@ -263,14 +291,21 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
           <Card>
             <CardContent className="pt-6 space-y-4">
               <div className="flex flex-col gap-2">
-                <div className="text-sm font-semibold">{texts.localActionsTitle}</div>
-                <p className="text-xs text-muted-foreground">{texts.localActionsDesc}</p>
+                <div className="text-sm font-semibold">
+                  {texts.localActionsTitle}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {texts.localActionsDesc}
+                </p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button onClick={() => onNavigate?.("model_local")}>
                   {texts.localActionsPrimary}
                 </Button>
-                <Button variant="outline" onClick={() => onNavigate?.("service")}>
+                <Button
+                  variant="outline"
+                  onClick={() => onNavigate?.("service")}
+                >
                   {texts.localActionsSecondary}
                 </Button>
               </div>
@@ -283,8 +318,12 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
             <CardContent className="pt-6 space-y-4">
               <div className="flex items-center justify-between gap-4">
                 <div className="space-y-1">
-                  <div className="text-sm font-semibold">{texts.quickTitle}</div>
-                  <p className="text-xs text-muted-foreground">{texts.quickDesc}</p>
+                  <div className="text-sm font-semibold">
+                    {texts.quickTitle}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {texts.quickDesc}
+                  </p>
                 </div>
                 <div className="inline-flex items-center gap-1.5 text-xs font-medium text-primary bg-primary/10 border border-primary/20 rounded-full px-2 py-1">
                   <Sparkles className="w-3 h-3" />
@@ -299,16 +338,22 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
                   </Label>
                   <Input
                     value={apiForm.id}
-                    onChange={(e) => setApiForm((prev) => ({ ...prev, id: e.target.value }))}
+                    onChange={(e) =>
+                      setApiForm((prev) => ({ ...prev, id: e.target.value }))
+                    }
                     placeholder={texts.placeholders.id}
                   />
-                  <div className="text-[11px] text-muted-foreground">{texts.help.id}</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {texts.help.id}
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label>{texts.form.nameLabel}</Label>
                   <Input
                     value={apiForm.name}
-                    onChange={(e) => setApiForm((prev) => ({ ...prev, name: e.target.value }))}
+                    onChange={(e) =>
+                      setApiForm((prev) => ({ ...prev, name: e.target.value }))
+                    }
                     placeholder={texts.placeholders.name}
                   />
                 </div>
@@ -320,7 +365,10 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
                   <Input
                     value={apiForm.baseUrl}
                     onChange={(e) =>
-                      setApiForm((prev) => ({ ...prev, baseUrl: e.target.value }))
+                      setApiForm((prev) => ({
+                        ...prev,
+                        baseUrl: e.target.value,
+                      }))
                     }
                     placeholder={texts.placeholders.baseUrl}
                   />
@@ -330,10 +378,17 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
                   <Input
                     type="password"
                     value={apiForm.apiKey}
-                    onChange={(e) => setApiForm((prev) => ({ ...prev, apiKey: e.target.value }))}
+                    onChange={(e) =>
+                      setApiForm((prev) => ({
+                        ...prev,
+                        apiKey: e.target.value,
+                      }))
+                    }
                     placeholder={texts.placeholders.apiKey}
                   />
-                  <div className="text-[11px] text-muted-foreground">{texts.help.apiKey}</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {texts.help.apiKey}
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label>
@@ -342,7 +397,9 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
                   </Label>
                   <Input
                     value={apiForm.model}
-                    onChange={(e) => setApiForm((prev) => ({ ...prev, model: e.target.value }))}
+                    onChange={(e) =>
+                      setApiForm((prev) => ({ ...prev, model: e.target.value }))
+                    }
                     placeholder={texts.placeholders.model}
                   />
                 </div>
@@ -351,11 +408,16 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
                   <Input
                     value={apiForm.timeout}
                     onChange={(e) =>
-                      setApiForm((prev) => ({ ...prev, timeout: e.target.value }))
+                      setApiForm((prev) => ({
+                        ...prev,
+                        timeout: e.target.value,
+                      }))
                     }
                     placeholder={texts.placeholders.timeout}
                   />
-                  <div className="text-[11px] text-muted-foreground">{texts.help.timeout}</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {texts.help.timeout}
+                  </div>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2 pt-2">
@@ -378,7 +440,9 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
                 </Button>
               </div>
               {requiredMissing && (
-                <div className="text-xs text-muted-foreground">{texts.missingRequired}</div>
+                <div className="text-xs text-muted-foreground">
+                  {texts.missingRequired}
+                </div>
               )}
             </CardContent>
           </Card>
@@ -388,10 +452,17 @@ export function ModelHubView({ lang, onNavigate }: ModelHubViewProps) {
           <CardContent className="pt-6 space-y-4">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <div className="text-sm font-semibold">{texts.advancedTitle}</div>
-                <p className="text-xs text-muted-foreground">{texts.advancedDesc}</p>
+                <div className="text-sm font-semibold">
+                  {texts.advancedTitle}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {texts.advancedDesc}
+                </p>
               </div>
-              <Button variant="outline" onClick={() => onNavigate?.("api_manager")}>
+              <Button
+                variant="outline"
+                onClick={() => onNavigate?.("api_manager")}
+              >
                 {texts.advancedAction}
                 <ArrowRight className="w-4 h-4 ml-1.5" />
               </Button>

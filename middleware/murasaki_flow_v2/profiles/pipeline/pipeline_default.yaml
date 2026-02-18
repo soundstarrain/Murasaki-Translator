@@ -1,0 +1,9 @@
+id: pipeline_default
+name: 默认API方案
+provider: openai_default
+prompt: prompt_default
+parser: parser_any_default
+chunk_policy: chunk_legacy_doc
+apply_line_policy: false
+settings:
+  timeout: 600

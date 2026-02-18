@@ -481,9 +481,7 @@ export function EnvFixerModal({ onClose }: EnvFixerModalProps) {
     setShowFixConfirm(null);
     setFixingComponent(action.component);
     setFixProgress(0);
-    setFixLogs([
-      t.logs.fixStart.replace("{action}", action.label),
-    ]);
+    setFixLogs([t.logs.fixStart.replace("{action}", action.label)]);
     setFixResult(null);
     let unsubscribeProgress: (() => void) | undefined;
 
@@ -619,9 +617,7 @@ export function EnvFixerModal({ onClose }: EnvFixerModalProps) {
               <Wrench className="w-5 h-5 text-indigo-500" />
             </div>
             <div>
-              <CardTitle className="text-base font-bold">
-                {t.title}
-              </CardTitle>
+              <CardTitle className="text-base font-bold">{t.title}</CardTitle>
               <p className="text-[11px] text-muted-foreground mt-0.5">
                 {t.subtitle}
               </p>

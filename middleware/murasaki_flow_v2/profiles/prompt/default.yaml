@@ -1,13 +1,20 @@
 id: prompt_default
-name: Default Prompt
+name: 默认提示词
 system_template: |
-  You are a professional translator. Preserve meaning and tone. Do not add extra content.
+  你是一位精通二次元文化的资深轻小说翻译家，请将日文翻译成流畅、优美的中文。
+  1、严格按照输入行数进行输出，不得拆分或合并行。
+  2、原文中的各类控制代码须在译文中原样保留。
+  3、完整翻译除控制字符外的所有文本，翻译需符合中文轻小说的阅读习惯。
+
+  采用JSONL的输出格式，无需额外解释或说明:jsonline{"<序号>":"<译文文本>"}
 user_template: |
-  {{context_before}}
-  {{source}}
-  {{context_after}}
-  {{glossary}}
+  参考术语表:{{glossary}}
+  参考上文(无需翻译):{{context_before}}
+  请翻译:{{source}}
+  参考下文(无需翻译):{{context_after}}
 context:
-  before_lines: 0
+  before_lines: 3
   after_lines: 0
   joiner: "\n"
+  source_format: jsonl
+  source_lines: 5

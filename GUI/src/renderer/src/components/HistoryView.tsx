@@ -113,7 +113,7 @@ export interface TranslationRecord {
   /** 远程连接信息（仅远程模式） */
   remoteInfo?: {
     serverUrl: string;
-    source: string;  // "manual" | "local-daemon"
+    source: string; // "manual" | "local-daemon"
     taskId?: string;
     model?: string;
     serverVersion?: string;
@@ -199,7 +199,9 @@ export const getRecordDetail = (id: string): RecordDetail | null => {
       const record = records.find((r) => r.id === id);
       if (
         record &&
-        (record.logs?.length || record.triggers?.length || record.llamaLogs?.length)
+        (record.logs?.length ||
+          record.triggers?.length ||
+          record.llamaLogs?.length)
       ) {
         const detail = {
           logs: record.logs || [],
@@ -253,7 +255,11 @@ export const saveHistory = (records: TranslationRecord[]) => {
 export const addRecord = (record: TranslationRecord) => {
   const history = getHistory();
   // Save detail separately
-  if (record.logs?.length || record.triggers?.length || record.llamaLogs?.length) {
+  if (
+    record.logs?.length ||
+    record.triggers?.length ||
+    record.llamaLogs?.length
+  ) {
     saveRecordDetail(record.id, {
       logs: record.logs || [],
       triggers: record.triggers || [],
@@ -278,9 +284,16 @@ export const updateRecord = (
   const index = history.findIndex((r) => r.id === id);
   if (index >= 0) {
     // Handle detail data separately
-    if (updates.logs?.length || updates.triggers?.length || updates.llamaLogs?.length) {
-      const existingDetail =
-        getRecordDetail(id) || { logs: [], triggers: [], llamaLogs: [] };
+    if (
+      updates.logs?.length ||
+      updates.triggers?.length ||
+      updates.llamaLogs?.length
+    ) {
+      const existingDetail = getRecordDetail(id) || {
+        logs: [],
+        triggers: [],
+        llamaLogs: [],
+      };
       saveRecordDetail(id, {
         logs: updates.logs || existingDetail.logs,
         triggers: updates.triggers || existingDetail.triggers,
@@ -362,7 +375,11 @@ function RecordDetailContent({
   onOpenFolder,
 }: RecordDetailContentProps) {
   // Get full record with details
-  const detail = getDetail(record.id) || { logs: [], triggers: [], llamaLogs: [] };
+  const detail = getDetail(record.id) || {
+    logs: [],
+    triggers: [],
+    llamaLogs: [],
+  };
   const fullRecord = {
     ...record,
     logs: detail.logs,
@@ -442,7 +459,9 @@ function RecordDetailContent({
             <p className="text-muted-foreground text-xs">
               {t.historyView.stats.temperature}
             </p>
-            <p className="font-medium">{formatMaybe(config.temperature, "-")}</p>
+            <p className="font-medium">
+              {formatMaybe(config.temperature, "-")}
+            </p>
           </div>
           <div>
             <p className="text-muted-foreground text-xs">
@@ -616,21 +635,21 @@ function RecordDetailContent({
                 <Button
                   variant="ghost"
                   size="sm"
-                className="h-6 px-2"
-                onClick={() => {
-                  const folderPath = fullRecord.outputPath!.substring(
-                    0,
-                    Math.max(
-                      fullRecord.outputPath!.lastIndexOf("\\"),
-                      fullRecord.outputPath!.lastIndexOf("/"),
-                    ),
-                  );
-                  onOpenFolder(folderPath);
-                }}
-              >
-                <FolderOpen className="w-3 h-3" />
-              </Button>
-            </Tooltip>
+                  className="h-6 px-2"
+                  onClick={() => {
+                    const folderPath = fullRecord.outputPath!.substring(
+                      0,
+                      Math.max(
+                        fullRecord.outputPath!.lastIndexOf("\\"),
+                        fullRecord.outputPath!.lastIndexOf("/"),
+                      ),
+                    );
+                    onOpenFolder(folderPath);
+                  }}
+                >
+                  <FolderOpen className="w-3 h-3" />
+                </Button>
+              </Tooltip>
             </div>
           )}
         </div>
@@ -793,7 +812,6 @@ export function HistoryView({ lang, onNavigate }: HistoryViewProps) {
     setNumber("config_rep_penalty_step", config.repPenaltyStep);
     setNumber("config_max_retries", config.maxRetries);
     setString("config_strict_mode", config.strictMode);
-
 
     setBool("config_balance_enable", config.balanceEnable);
     setNumber("config_balance_threshold", config.balanceThreshold);
@@ -1114,7 +1132,13 @@ export function HistoryView({ lang, onNavigate }: HistoryViewProps) {
                           {formatDate(record.startTime)} ·{" "}
                           {formatDuration(record.duration)}
                           {record.remoteInfo?.serverUrl && (
-                            <span className="ml-1 opacity-60">· {record.remoteInfo.serverUrl.replace(/^https?:\/\//, "")}</span>
+                            <span className="ml-1 opacity-60">
+                              ·{" "}
+                              {record.remoteInfo.serverUrl.replace(
+                                /^https?:\/\//,
+                                "",
+                              )}
+                            </span>
                           )}
                         </p>
                       </div>

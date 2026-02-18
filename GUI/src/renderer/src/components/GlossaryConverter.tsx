@@ -197,7 +197,10 @@ export function GlossaryConverter({
         "Murasaki Translator",
         t.glossaryConverter.saveSuccess,
       );
-      emitToast({ variant: "success", message: t.glossaryConverter.saveSuccess });
+      emitToast({
+        variant: "success",
+        message: t.glossaryConverter.saveSuccess,
+      });
       onSuccess();
       onClose();
     } catch (e) {

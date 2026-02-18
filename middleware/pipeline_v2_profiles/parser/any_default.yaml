@@ -1,0 +1,16 @@
+﻿id: parser_any_default
+name: Any Parser
+type: any
+options:
+  parsers:
+    - type: json_object
+      options:
+        path: translation
+    - type: json_array
+    - type: jsonl
+      options:
+        path: translation
+    - type: tagged_line
+      options:
+        pattern: "^@@(?P<id>\\d+)@@(?P<text>.*)$"
+    - type: plain

@@ -1,0 +1,11 @@
+id: line_quality
+name: Line Quality Guard
+type: tolerant
+options:
+  trim: true
+  similarity_threshold: 0.8
+  source_lang: ""
+  checks:
+    - empty_line
+    - similarity
+    - kana_trace

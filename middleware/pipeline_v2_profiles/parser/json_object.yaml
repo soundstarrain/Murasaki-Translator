@@ -1,0 +1,5 @@
+id: parser_json_object
+name: Json Object Parser
+type: json_object
+options:
+  path: translation

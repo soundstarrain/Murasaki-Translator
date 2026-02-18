@@ -276,9 +276,7 @@ export function TermExtractModal({
               <Sparkles className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <CardTitle className="text-lg font-bold">
-                {tt.title}
-              </CardTitle>
+              <CardTitle className="text-lg font-bold">{tt.title}</CardTitle>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {tt.subtitle}
               </p>
@@ -336,8 +334,7 @@ export function TermExtractModal({
                   </p>
                   {libraryQueue.length > 0 && (
                     <span className="text-[10px] text-muted-foreground">
-                      ({libraryQueue.length}{" "}
-                      {tt.files})
+                      ({libraryQueue.length} {tt.files})
                     </span>
                   )}
                 </button>
@@ -384,9 +381,7 @@ export function TermExtractModal({
                         className={`w-10 h-10 mx-auto mb-3 ${isDragging ? "text-primary" : "text-muted-foreground"}`}
                       />
                       <p className="text-sm text-muted-foreground">
-                        {isDragging
-                          ? tt.dropRelease
-                          : tt.dropHint}
+                        {isDragging ? tt.dropRelease : tt.dropHint}
                       </p>
                     </>
                   )}
@@ -431,19 +426,12 @@ export function TermExtractModal({
                   {tt.algorithmTitle}
                 </p>
                 <ul className="list-disc list-inside space-y-1 pl-2">
-                  <li>
-                    {tt.algorithmProper}
-                  </li>
-                  <li>
-                    {tt.algorithmKatakana}
-                  </li>
-                  <li>
-                    {tt.algorithmDedup}
-                  </li>
+                  <li>{tt.algorithmProper}</li>
+                  <li>{tt.algorithmKatakana}</li>
+                  <li>{tt.algorithmDedup}</li>
                 </ul>
                 <p className="text-amber-500/80 mt-2 text-[11px]">
-                  {tt.tipLabel}{" "}
-                  {tt.tipDesc}
+                  {tt.tipLabel} {tt.tipDesc}
                 </p>
               </div>
 
@@ -497,9 +485,7 @@ export function TermExtractModal({
                 <Search className="w-12 h-12 text-muted-foreground opacity-50" />
               </div>
               <div className="space-y-2">
-                <p className="font-bold text-lg">
-                  {tt.emptyTitle}
-                </p>
+                <p className="font-bold text-lg">{tt.emptyTitle}</p>
                 <p className="text-sm text-muted-foreground max-w-xs mx-auto">
                   {tt.emptyDesc}
                 </p>
@@ -518,9 +504,7 @@ export function TermExtractModal({
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
                   <CheckCircle className="w-5 h-5 text-green-500" />
-                  <span className="font-bold">
-                    {tt.complete}
-                  </span>
+                  <span className="font-bold">{tt.complete}</span>
                   <span className="text-sm text-muted-foreground">
                     ({results.length} {tt.terms})
                   </span>
@@ -551,9 +535,7 @@ export function TermExtractModal({
                 <div className="grid grid-cols-[1fr_1fr_80px] bg-muted/50 px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b border-border/50">
                   <div>{tt.colSource}</div>
                   <div>{tt.colTarget}</div>
-                  <div className="text-center">
-                    {tt.colActions}
-                  </div>
+                  <div className="text-center">{tt.colActions}</div>
                 </div>
                 <div className="overflow-y-auto max-h-[300px] divide-y divide-border/30">
                   {filteredResults.slice(0, 200).map((item, idx) => {
@@ -580,9 +562,7 @@ export function TermExtractModal({
                               type="text"
                               value={editDst}
                               onChange={(e) => setEditDst(e.target.value)}
-                              placeholder={
-                                tt.inputTranslationPlaceholder
-                              }
+                              placeholder={tt.inputTranslationPlaceholder}
                               className="text-sm px-2 py-1 border border-border rounded bg-background focus:outline-none focus:border-violet-500"
                               onKeyDown={(e) => {
                                 if (e.key === "Enter") saveEdit();
@@ -621,8 +601,7 @@ export function TermExtractModal({
                               className={`text-sm truncate cursor-pointer hover:text-violet-600 ${item.dst ? "text-foreground" : "text-muted-foreground italic"}`}
                               onClick={() => startEdit(realIdx)}
                             >
-                              {item.dst ||
-                                tt.clickToEdit}
+                              {item.dst || tt.clickToEdit}
                             </div>
                             <div className="flex items-center justify-center">
                               <Button
@@ -645,9 +624,7 @@ export function TermExtractModal({
               {/* Info Banner */}
               <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>
-                  {tt.editHint}
-                </span>
+                <span>{tt.editHint}</span>
               </div>
 
               {/* Action Buttons */}

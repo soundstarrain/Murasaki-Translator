@@ -1,3 +1,4 @@
-id: parser_plain
-name: Plain Parser
+﻿id: parser_plain
+name: 纯文本解析
 type: plain
+

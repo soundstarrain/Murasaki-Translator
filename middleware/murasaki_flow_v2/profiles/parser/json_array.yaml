@@ -1,3 +1,4 @@
-id: parser_json_array
-name: JSON Array Parser
+﻿id: parser_json_array
+name: JSON 数组解析
 type: json_array
+

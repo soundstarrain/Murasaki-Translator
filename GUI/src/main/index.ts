@@ -8,7 +8,15 @@ import {
   nativeTheme,
 } from "electron";
 import type { Event as ElectronEvent } from "electron";
-import { join, basename, resolve, relative, isAbsolute, dirname, parse } from "path";
+import {
+  join,
+  basename,
+  resolve,
+  relative,
+  isAbsolute,
+  dirname,
+  parse,
+} from "path";
 import chokidar from "chokidar";
 import { electronApp, optimizer, is } from "@electron-toolkit/utils";
 import { spawn, ChildProcess } from "child_process";
@@ -30,23 +38,19 @@ let remoteTranslationBridge: {
 } | null = null;
 let mainWindow: BrowserWindow | null = null;
 let hardwareSpecsInFlight: Promise<any> | null = null;
-let hardwareSpecsCache:
-  | {
-    at: number;
-    data: any;
-  }
-  | null = null;
+let hardwareSpecsCache: {
+  at: number;
+  data: any;
+} | null = null;
 const HARDWARE_SPECS_CACHE_TTL_MS = 12000;
 let envCheckInFlight: Promise<
   | { ok: true; report: any }
   | { ok: false; error: string; output?: string; errorOutput?: string }
 > | null = null;
-let envCheckCache:
-  | {
-    at: number;
-    report: any;
-  }
-  | null = null;
+let envCheckCache: {
+  at: number;
+  report: any;
+} | null = null;
 const ENV_CHECK_CACHE_TTL_MS = 12000;
 
 type WatchFolderConfig = {
@@ -114,8 +118,10 @@ const enrichJsonEventLine = (line: string, meta: LogMeta): string => {
       const resolvedSource = meta.source ?? "main";
       const enriched: Record<string, unknown> = { ...payload };
       if (!("ts" in enriched)) enriched.ts = new Date().toISOString();
-      if (resolvedRunId && !("runId" in enriched)) enriched.runId = resolvedRunId;
-      if (resolvedTaskId && !("taskId" in enriched)) enriched.taskId = resolvedTaskId;
+      if (resolvedRunId && !("runId" in enriched))
+        enriched.runId = resolvedRunId;
+      if (resolvedTaskId && !("taskId" in enriched))
+        enriched.taskId = resolvedTaskId;
       if (resolvedSource && !("source" in enriched))
         enriched.source = resolvedSource;
       if (meta.level && !("level" in enriched)) enriched.level = meta.level;
@@ -158,8 +164,10 @@ const emitJsonLog = (
   const enriched: Record<string, unknown> = { ...payload };
   if (!("ts" in enriched)) enriched.ts = new Date().toISOString();
   if (resolvedRunId && !("runId" in enriched)) enriched.runId = resolvedRunId;
-  if (resolvedTaskId && !("taskId" in enriched)) enriched.taskId = resolvedTaskId;
-  if (resolvedSource && !("source" in enriched)) enriched.source = resolvedSource;
+  if (resolvedTaskId && !("taskId" in enriched))
+    enriched.taskId = resolvedTaskId;
+  if (resolvedSource && !("source" in enriched))
+    enriched.source = resolvedSource;
   if (meta.level && !("level" in enriched)) enriched.level = meta.level;
   send(`${prefix}${JSON.stringify(enriched)}\n`);
 };
@@ -206,11 +214,15 @@ const requestRemoteTaskCancel = (reason?: string): boolean => {
   bridge.cancelRequested = true;
   const reasonTag = reason ? ` (${reason})` : "";
   console.log(`[Stop] Cancelling remote task${reasonTag}: ${bridge.taskId}`);
-  sendLogUpdateToWindow(mainWindow, `System: Cancelling remote task${reasonTag}...`, {
-    level: "info",
-    source: "remote",
-    taskId: bridge.taskId,
-  });
+  sendLogUpdateToWindow(
+    mainWindow,
+    `System: Cancelling remote task${reasonTag}...`,
+    {
+      level: "info",
+      source: "remote",
+      taskId: bridge.taskId,
+    },
+  );
   const cancellingTaskId = bridge.taskId;
   setTimeout(() => {
     if (
@@ -398,7 +410,7 @@ function cleanupTempDirectory(): void {
       for (const file of files) {
         try {
           fs.unlinkSync(join(tempDir, file));
-        } catch (_) { }
+        } catch (_) {}
       }
       console.log(`[App] Cleaned ${files.length} temp files`);
     }
@@ -419,7 +431,7 @@ function cleanupTempDirectory(): void {
           continue;
         try {
           fs.unlinkSync(join(middlewareDir, file));
-        } catch { }
+        } catch {}
       }
     }
   } catch (e) {
@@ -448,6 +460,7 @@ app.whenReady().then(() => {
   registerPipelineV2Profiles({
     getPythonPath,
     getMiddlewarePath,
+    getProfilesDir: () => join(getMiddlewarePath(), "pipeline_v2_profiles"),
   });
   registerPipelineV2Runner({
     getPythonPath,
@@ -517,7 +530,11 @@ const getPythonPath = (): { type: "python" | "bundle"; path: string } => {
   // In prod: platform-specific Python path
   if (process.platform === "win32") {
     // Windows: resources/python_env/python.exe (Embeddable)
-    const embeddedPath = join(process.resourcesPath, "python_env", "python.exe");
+    const embeddedPath = join(
+      process.resourcesPath,
+      "python_env",
+      "python.exe",
+    );
     return {
       type: "python",
       path: fs.existsSync(embeddedPath) ? embeddedPath : getScriptPythonPath(),
@@ -545,17 +562,17 @@ const getScriptPythonPath = (): string => {
   const middlewarePythonCandidates =
     process.platform === "win32"
       ? [
-        join(middlewarePath, ".venv", "Scripts", "python.exe"),
-        join(middlewarePath, "python_env", "python.exe"),
-      ]
+          join(middlewarePath, ".venv", "Scripts", "python.exe"),
+          join(middlewarePath, "python_env", "python.exe"),
+        ]
       : [
-        join(middlewarePath, ".venv", "bin", "python3"),
-        join(middlewarePath, ".venv", "bin", "python"),
-        join(middlewarePath, "python_env", "bin", "python3"),
-        join(middlewarePath, "python_env", "bin", "python"),
-        join(middlewarePath, "python_env", "python3"),
-        join(middlewarePath, "python_env", "python"),
-      ];
+          join(middlewarePath, ".venv", "bin", "python3"),
+          join(middlewarePath, ".venv", "bin", "python"),
+          join(middlewarePath, "python_env", "bin", "python3"),
+          join(middlewarePath, "python_env", "bin", "python"),
+          join(middlewarePath, "python_env", "python3"),
+          join(middlewarePath, "python_env", "python"),
+        ];
 
   if (is.dev) {
     if (process.env.ELECTRON_PYTHON_PATH)
@@ -689,10 +706,10 @@ const spawnPythonProcess = (
     cwd: string;
     env?: NodeJS.ProcessEnv;
     stdio?:
-    | "pipe"
-    | "inherit"
-    | "ignore"
-    | Array<"pipe" | "inherit" | "ignore" | "ipc" | null>;
+      | "pipe"
+      | "inherit"
+      | "ignore"
+      | Array<"pipe" | "inherit" | "ignore" | "ipc" | null>;
   },
 ) => {
   // 1. Base Environment
@@ -780,7 +797,9 @@ const isSupportedWatchFile = (filePath: string, types: string[]) => {
   return types.length === 0 ? true : types.includes(ext);
 };
 
-const normalizeWatchConfig = (config: WatchFolderConfig): WatchFolderConfig => ({
+const normalizeWatchConfig = (
+  config: WatchFolderConfig,
+): WatchFolderConfig => ({
   ...config,
   includeSubdirs: Boolean(config.includeSubdirs),
   enabled: config.enabled !== false,
@@ -1003,7 +1022,7 @@ let remoteEventLogFlushing = false;
 let remoteMirrorLogQueue: string[] = [];
 let remoteMirrorLogFlushTimer: NodeJS.Timeout | null = null;
 let remoteMirrorLogFlushing = false;
-let remoteNetworkStats = {
+const remoteNetworkStats = {
   wsConnected: false,
   inFlightRequests: 0,
   totalEvents: 0,
@@ -1020,12 +1039,12 @@ let remoteNetworkStats = {
   lastEventAt: undefined as number | undefined,
   lastError: undefined as
     | {
-      at: number;
-      kind: "connection" | "http" | "upload" | "download" | "retry" | "ws";
-      message: string;
-      path?: string;
-      statusCode?: number;
-    }
+        at: number;
+        kind: "connection" | "http" | "upload" | "download" | "retry" | "ws";
+        message: string;
+        path?: string;
+        statusCode?: number;
+      }
     | undefined,
   lastSyncAt: undefined as number | undefined,
 };
@@ -1126,9 +1145,7 @@ const getFileScope = (): "shared-local" | "isolated-remote" =>
 const getOutputPolicy = (): "same-dir" | "scoped-remote-dir" =>
   remoteSession?.source === "local-daemon" ? "same-dir" : "scoped-remote-dir";
 
-const detectRemoteSessionSource = (
-  url: string,
-): "manual" | "local-daemon" => {
+const detectRemoteSessionSource = (url: string): "manual" | "local-daemon" => {
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase();
@@ -1204,7 +1221,10 @@ const appendRemoteEvent = (event: RemoteNetworkEvent) => {
   if (sanitizedEvent.kind === "upload" && sanitizedEvent.phase === "success") {
     remoteNetworkStats.uploadCount += 1;
   }
-  if (sanitizedEvent.kind === "download" && sanitizedEvent.phase === "success") {
+  if (
+    sanitizedEvent.kind === "download" &&
+    sanitizedEvent.phase === "success"
+  ) {
     remoteNetworkStats.downloadCount += 1;
   }
 
@@ -1216,7 +1236,8 @@ const appendRemoteEvent = (event: RemoteNetworkEvent) => {
     remoteNetworkStats.latencyTotalMs += sanitizedEvent.durationMs;
     remoteNetworkStats.latencyCount += 1;
     remoteNetworkStats.avgLatencyMs = Math.round(
-      remoteNetworkStats.latencyTotalMs / Math.max(1, remoteNetworkStats.latencyCount),
+      remoteNetworkStats.latencyTotalMs /
+        Math.max(1, remoteNetworkStats.latencyCount),
     );
   }
 
@@ -1247,7 +1268,9 @@ const extractRemoteHttpError = (message: string) => {
         detail = parsed.detail;
       } else if (Array.isArray(parsed.detail)) {
         detail = parsed.detail
-          .map((item: any) => item?.msg || item?.message || JSON.stringify(item))
+          .map(
+            (item: any) => item?.msg || item?.message || JSON.stringify(item),
+          )
           .join("; ");
       } else if (typeof parsed.message === "string") {
         detail = parsed.message;
@@ -1308,7 +1331,9 @@ const formatRemoteError = (error: unknown) => {
     lower.includes("api key");
   const retryableByStatus =
     typeof statusCode === "number" &&
-    (statusCode === 408 || statusCode === 429 || (statusCode >= 500 && statusCode <= 504));
+    (statusCode === 408 ||
+      statusCode === 429 ||
+      (statusCode >= 500 && statusCode <= 504));
   const retryableByMessage =
     lower.includes("timeout") ||
     lower.includes("network") ||
@@ -1342,10 +1367,7 @@ const formatRemoteError = (error: unknown) => {
   };
 };
 
-const buildRemoteErrorResponse = (
-  error: unknown,
-  fallbackMessage?: string,
-) => {
+const buildRemoteErrorResponse = (error: unknown, fallbackMessage?: string) => {
   const formatted = formatRemoteError(error);
   const actionHint = buildRemoteActionHint({
     code: formatted.errorCode,
@@ -1371,10 +1393,10 @@ const buildRemoteErrorResponse = (
 const getSanitizedRemoteSession = () =>
   remoteSession
     ? {
-      url: remoteSession.url,
-      connectedAt: remoteSession.connectedAt,
-      source: remoteSession.source,
-    }
+        url: remoteSession.url,
+        connectedAt: remoteSession.connectedAt,
+        source: remoteSession.source,
+      }
     : null;
 
 const buildRemoteNetworkStatus = () => ({
@@ -1656,7 +1678,12 @@ ipcMain.handle("remote-hf-list-files", async (_event, repoId: string) => {
 
 ipcMain.handle(
   "remote-hf-download-start",
-  async (_event, repoId: string, fileName: string, mirror: string = "direct") => {
+  async (
+    _event,
+    repoId: string,
+    fileName: string,
+    mirror: string = "direct",
+  ) => {
     if (!remoteClient) {
       return {
         ok: false,
@@ -1673,37 +1700,46 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle("remote-hf-download-status", async (_event, downloadId: string) => {
-  if (!remoteClient) {
-    return {
-      ok: false,
-      code: "REMOTE_PROTOCOL",
-      message: "Not connected to remote server",
-    };
-  }
-  try {
-    const data = await remoteClient.getHfDownloadStatus(downloadId);
-    return { ok: true, data };
-  } catch (e) {
-    return buildRemoteErrorResponse(e, "Failed to fetch remote download status");
-  }
-});
+ipcMain.handle(
+  "remote-hf-download-status",
+  async (_event, downloadId: string) => {
+    if (!remoteClient) {
+      return {
+        ok: false,
+        code: "REMOTE_PROTOCOL",
+        message: "Not connected to remote server",
+      };
+    }
+    try {
+      const data = await remoteClient.getHfDownloadStatus(downloadId);
+      return { ok: true, data };
+    } catch (e) {
+      return buildRemoteErrorResponse(
+        e,
+        "Failed to fetch remote download status",
+      );
+    }
+  },
+);
 
-ipcMain.handle("remote-hf-download-cancel", async (_event, downloadId: string) => {
-  if (!remoteClient) {
-    return {
-      ok: false,
-      code: "REMOTE_PROTOCOL",
-      message: "Not connected to remote server",
-    };
-  }
-  try {
-    const data = await remoteClient.cancelHfDownload(downloadId);
-    return { ok: true, data };
-  } catch (e) {
-    return buildRemoteErrorResponse(e, "Failed to cancel remote download");
-  }
-});
+ipcMain.handle(
+  "remote-hf-download-cancel",
+  async (_event, downloadId: string) => {
+    if (!remoteClient) {
+      return {
+        ok: false,
+        code: "REMOTE_PROTOCOL",
+        message: "Not connected to remote server",
+      };
+    }
+    try {
+      const data = await remoteClient.cancelHfDownload(downloadId);
+      return { ok: true, data };
+    } catch (e) {
+      return buildRemoteErrorResponse(e, "Failed to cancel remote download");
+    }
+  },
+);
 
 // --------------------------
 
@@ -1801,37 +1837,40 @@ ipcMain.handle(
 );
 
 // --- Watch Folder IPC ---
-ipcMain.handle("watch-folder-add", async (_event, config: WatchFolderConfig) => {
-  try {
-    if (!config || !config.id || !config.path) {
-      return { ok: false, error: "Invalid watch folder config" };
-    }
-    const normalized = normalizeWatchConfig(config);
-    if (normalized.enabled) {
-      validateWatchFolderPath(normalized.path);
-    }
-
-    const existing = watchFolderEntries.get(normalized.id);
-    if (existing) {
-      await closeWatchEntry(existing);
-      existing.config = normalized;
+ipcMain.handle(
+  "watch-folder-add",
+  async (_event, config: WatchFolderConfig) => {
+    try {
+      if (!config || !config.id || !config.path) {
+        return { ok: false, error: "Invalid watch folder config" };
+      }
+      const normalized = normalizeWatchConfig(config);
       if (normalized.enabled) {
-        createWatcher(existing);
+        validateWatchFolderPath(normalized.path);
+      }
+
+      const existing = watchFolderEntries.get(normalized.id);
+      if (existing) {
+        await closeWatchEntry(existing);
+        existing.config = normalized;
+        if (normalized.enabled) {
+          createWatcher(existing);
+        }
+        return { ok: true };
+      }
+
+      const entry: WatchFolderEntry = { config: normalized };
+      watchFolderEntries.set(normalized.id, entry);
+      if (normalized.enabled) {
+        createWatcher(entry);
       }
       return { ok: true };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: message };
     }
-
-    const entry: WatchFolderEntry = { config: normalized };
-    watchFolderEntries.set(normalized.id, entry);
-    if (normalized.enabled) {
-      createWatcher(entry);
-    }
-    return { ok: true };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: message };
-  }
-});
+  },
+);
 
 ipcMain.handle(
   "watch-folder-toggle",
@@ -2071,7 +2110,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           }
         }
       }
-    } catch { }
+    } catch {}
 
     try {
       const { stdout } = await execWithTimeout(
@@ -2093,7 +2132,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           return;
         }
       }
-    } catch { }
+    } catch {}
 
     if (process.platform === "win32") {
       try {
@@ -2119,7 +2158,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.gpu = { name, driver: driver || undefined, vram };
           return;
         }
-      } catch { }
+      } catch {}
 
       try {
         const { stdout } = await execWithTimeout(
@@ -2127,7 +2166,11 @@ ipcMain.handle("get-system-diagnostics", async () => {
           5000,
         );
         const payload = tryParseJson<any>(stdout.trim());
-        const rows = Array.isArray(payload) ? payload : payload ? [payload] : [];
+        const rows = Array.isArray(payload)
+          ? payload
+          : payload
+            ? [payload]
+            : [];
         for (const row of rows) {
           const name = String(row?.Name || "").trim();
           if (!name || /microsoft|basic/i.test(name)) continue;
@@ -2140,7 +2183,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.gpu = { name, driver: driver || undefined, vram };
           return;
         }
-      } catch { }
+      } catch {}
     }
 
     if (process.platform === "darwin") {
@@ -2165,7 +2208,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.gpu = { name: String(name), driver: "METAL", vram };
           return;
         }
-      } catch { }
+      } catch {}
     }
 
     if (process.platform === "linux") {
@@ -2189,7 +2232,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
             return;
           }
         }
-      } catch { }
+      } catch {}
 
       try {
         const { stdout } = await execWithTimeout("lspci", 4000);
@@ -2203,7 +2246,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           };
           return;
         }
-      } catch { }
+      } catch {}
 
       try {
         const { stdout } = await execWithTimeout("glxinfo -B", 4000);
@@ -2216,7 +2259,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
             driver: "Detected via glxinfo",
           };
         }
-      } catch { }
+      } catch {}
     }
   })();
 
@@ -2246,7 +2289,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.python = { version, path: executable };
           return;
         }
-      } catch { }
+      } catch {}
     }
 
     if (primary.type === "bundle" && fs.existsSync(primary.path)) {
@@ -2279,7 +2322,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.cuda = { version: `driver ${first}`, available: true };
           return;
         }
-      } catch { }
+      } catch {}
       result.cuda = { version: "N/A", available: false };
     }
   })();
@@ -2309,7 +2352,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           version: versionMatch ? versionMatch[1] : undefined,
         };
         return;
-      } catch { }
+      } catch {}
       result.vulkan = { available: false };
     }
   })();
@@ -2416,7 +2459,11 @@ ipcMain.on("set-theme", (_event, theme: "dark" | "light") => {
 // Read tail of a text file (for log viewing)
 ipcMain.handle(
   "read-text-tail",
-  async (_event, path: string, options?: { maxBytes?: number; lineCount?: number }) => {
+  async (
+    _event,
+    path: string,
+    options?: { maxBytes?: number; lineCount?: number },
+  ) => {
     try {
       if (!path) {
         return { exists: false, error: "Empty path" };
@@ -2574,9 +2621,7 @@ ipcMain.handle("test-rules", async (_event, payload) => {
         resolve({
           success: false,
           error:
-            stderr ||
-            stdout ||
-            `Process exited with code ${code ?? "unknown"}`,
+            stderr || stdout || `Process exited with code ${code ?? "unknown"}`,
         });
       });
 
@@ -3492,10 +3537,7 @@ ipcMain.handle(
           );
         }
         if (config.coverageRetries !== undefined) {
-          args.push(
-            "--coverage-retries",
-            config.coverageRetries.toString(),
-          );
+          args.push("--coverage-retries", config.coverageRetries.toString());
         }
       }
       if (config.textProtect) {
@@ -3685,6 +3727,13 @@ ipcMain.handle("open-folder", async (_event, filePath: string) => {
     }
   }
 
+  if (!fs.existsSync(filePath) && filePath.includes("pipeline_v2_profiles")) {
+    try {
+      fs.mkdirSync(filePath, { recursive: true });
+    } catch (e) {
+      console.error("Failed to create profiles dir: " + filePath);
+    }
+  }
   if (fs.existsSync(filePath)) {
     // use openPath for directories to open INSIDE them, showItemInFolder selects them.
     // The user wants "Open Folder" to enter the directory.
@@ -3820,7 +3869,11 @@ const resolveConfiguredRemoteUrl = (config: any): string => {
 };
 
 const resolveConfiguredRemoteApiKey = (config: any): string | undefined => {
-  const candidates = [config?.apiKey, config?.remoteApiKey, config?.config_api_key];
+  const candidates = [
+    config?.apiKey,
+    config?.remoteApiKey,
+    config?.config_api_key,
+  ];
   for (const candidate of candidates) {
     const normalized = String(candidate || "").trim();
     if (normalized) return normalized;
@@ -3828,7 +3881,10 @@ const resolveConfiguredRemoteApiKey = (config: any): string | undefined => {
   return undefined;
 };
 
-const normalizeLineTolerancePct = (value: unknown, fallback: number = 0.2): number => {
+const normalizeLineTolerancePct = (
+  value: unknown,
+  fallback: number = 0.2,
+): number => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   if (numeric > 1) return numeric / 100;
@@ -3877,9 +3933,7 @@ const resolveScopedRemoteOutputDir = (
   let hostPort = "remote";
   try {
     const parsed = new URL(serverUrl);
-    const port =
-      parsed.port ||
-      (parsed.protocol === "https:" ? "443" : "80");
+    const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
     hostPort = `${parsed.hostname}_${port}`;
   } catch {
     hostPort = "remote";
@@ -3978,8 +4032,12 @@ const buildRemoteTranslateOptionsFromConfig = (
     resume: config?.resume === true,
     saveCache: config?.saveCache !== false,
     cachePath: config?.cacheDir || undefined,
-    rulesPreInline: Array.isArray(config?.rulesPre) ? config.rulesPre : undefined,
-    rulesPostInline: Array.isArray(config?.rulesPost) ? config.rulesPost : undefined,
+    rulesPreInline: Array.isArray(config?.rulesPre)
+      ? config.rulesPre
+      : undefined,
+    rulesPostInline: Array.isArray(config?.rulesPost)
+      ? config.rulesPost
+      : undefined,
     repPenaltyBase: toFloat(config?.repPenaltyBase, 1.0),
     repPenaltyMax: toFloat(config?.repPenaltyMax, 1.5),
     repPenaltyStep: toFloat(config?.repPenaltyStep, 0.1),
@@ -4100,16 +4158,15 @@ const runTranslationViaRemoteApi = async (
       lastWsLogAt = Date.now();
     }
     const upper = logLine.toUpperCase();
-    const inferredLevel =
-      upper.includes("CRITICAL")
-        ? "critical"
-        : logLine.startsWith("ERR:") || upper.includes("ERROR")
-          ? "error"
-          : upper.includes("[WARN]") || upper.includes("WARN")
-            ? "warn"
-            : upper.includes("DEBUG")
-              ? "debug"
-              : "info";
+    const inferredLevel = upper.includes("CRITICAL")
+      ? "critical"
+      : logLine.startsWith("ERR:") || upper.includes("ERROR")
+        ? "error"
+        : upper.includes("[WARN]") || upper.includes("WARN")
+          ? "warn"
+          : upper.includes("DEBUG")
+            ? "debug"
+            : "info";
     emitRemoteLog(logLine, inferredLevel);
     appendRemoteMirrorMessage({
       taskId,
@@ -4242,26 +4299,33 @@ const runTranslationViaRemoteApi = async (
     }
 
     while (true) {
-      if (!remoteTranslationBridge || remoteTranslationBridge.taskId !== taskId) return;
+      if (!remoteTranslationBridge || remoteTranslationBridge.taskId !== taskId)
+        return;
       const status = await client.getTaskStatus(taskId, {
         logFrom: nextLogIndex,
         logLimit: wsActive ? 80 : 200,
       });
-      if (!remoteTranslationBridge || remoteTranslationBridge.taskId !== taskId) return;
+      if (!remoteTranslationBridge || remoteTranslationBridge.taskId !== taskId)
+        return;
 
       const taskLogs = Array.isArray(status.logs) ? status.logs : [];
       if (wsActive && lastWsLogAt > 0 && Date.now() - lastWsLogAt > 2000) {
         wsActive = false;
       }
       // 检查日志中是否已含 main.py 输出的 JSON_PROGRESS（含真实速度/token 数据）
-      const logsContainProgress = taskLogs.some((log) => typeof log === "string" && log.includes("JSON_PROGRESS:"));
+      const logsContainProgress = taskLogs.some(
+        (log) => typeof log === "string" && log.includes("JSON_PROGRESS:"),
+      );
       if (taskLogs.length > 0 && !wsActive) {
         taskLogs.forEach((logLine) => {
           if (!logLine) return;
           handleRemoteLogLine(logLine, "poll");
         });
       }
-      if (typeof status.nextLogIndex === "number" && Number.isFinite(status.nextLogIndex)) {
+      if (
+        typeof status.nextLogIndex === "number" &&
+        Number.isFinite(status.nextLogIndex)
+      ) {
         nextLogIndex = Math.max(nextLogIndex, status.nextLogIndex);
       } else {
         nextLogIndex = Math.max(nextLogIndex, nextLogIndex + taskLogs.length);
@@ -4272,7 +4336,8 @@ const runTranslationViaRemoteApi = async (
       const recentlySawProgress = Date.now() - lastProgressSeenAt < 1500;
       if (!logsContainProgress && !recentlySawProgress) {
         const percentRaw =
-          typeof status.progress === "number" && Number.isFinite(status.progress)
+          typeof status.progress === "number" &&
+          Number.isFinite(status.progress)
             ? status.progress <= 1
               ? status.progress * 100
               : status.progress
@@ -4293,12 +4358,17 @@ const runTranslationViaRemoteApi = async (
 
       if (status.status === "completed") {
         // [Fix Bug 6/7] 追加获取所有剩余日志，确保 JSON_FINAL/PREVIEW_BLOCK 不被 200 行分页截断
-        if (typeof status.logTotal === "number" && nextLogIndex < status.logTotal) {
+        if (
+          typeof status.logTotal === "number" &&
+          nextLogIndex < status.logTotal
+        ) {
           const finalStatus = await client.getTaskStatus(taskId, {
             logFrom: nextLogIndex,
             logLimit: 1000,
           });
-          const finalLogs = Array.isArray(finalStatus.logs) ? finalStatus.logs : [];
+          const finalLogs = Array.isArray(finalStatus.logs)
+            ? finalStatus.logs
+            : [];
           if (finalLogs.length > 0) {
             finalLogs.forEach((logLine) => {
               if (!logLine) return;
@@ -4321,7 +4391,12 @@ const runTranslationViaRemoteApi = async (
           message: `System: Remote task completed (${taskId})`,
         });
         emitRemoteJson("JSON_OUTPUT_PATH:", { path: outputPath });
-        event.reply("process-exit", { code: 0, signal: null, stopRequested: false, runId });
+        event.reply("process-exit", {
+          code: 0,
+          signal: null,
+          stopRequested: false,
+          runId,
+        });
         return;
       }
 
@@ -4338,7 +4413,12 @@ const runTranslationViaRemoteApi = async (
           message: status.error || "Remote translation failed",
         });
         emitRemoteTroubleshootingHint();
-        event.reply("process-exit", { code: 1, signal: null, stopRequested: false, runId });
+        event.reply("process-exit", {
+          code: 1,
+          signal: null,
+          stopRequested: false,
+          runId,
+        });
         return;
       }
 
@@ -4351,7 +4431,12 @@ const runTranslationViaRemoteApi = async (
           level: "warn",
           message: "Remote translation cancelled by user",
         });
-        event.reply("process-exit", { code: 1, signal: null, stopRequested: true, runId });
+        event.reply("process-exit", {
+          code: 1,
+          signal: null,
+          stopRequested: true,
+          runId,
+        });
         return;
       }
 
@@ -4362,7 +4447,8 @@ const runTranslationViaRemoteApi = async (
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const stopRequested =
-      translationStopRequested || remoteTranslationBridge?.cancelRequested === true;
+      translationStopRequested ||
+      remoteTranslationBridge?.cancelRequested === true;
     if (taskId && !remoteTranslationBridge && stopRequested) {
       return;
     }
@@ -4407,611 +4493,640 @@ ipcMain.on(
     activeRunId =
       typeof runId === "string" && runId.trim() ? runId.trim() : randomUUID();
 
-  const middlewareDir = getMiddlewarePath();
-  const tempRuleFiles: string[] = [];
-  // Use the proper translator script
-  const scriptPath = join(middlewareDir, "murasaki_translator", "main.py");
+    const middlewareDir = getMiddlewarePath();
+    const tempRuleFiles: string[] = [];
+    // Use the proper translator script
+    const scriptPath = join(middlewareDir, "murasaki_translator", "main.py");
 
-  if (!fs.existsSync(scriptPath)) {
-    replyLogUpdate(event, `ERR: Script not found at ${scriptPath}`, {
-      level: "error",
-      source: "main",
-    });
-    activeRunId = null;
-    return;
-  }
-
-  const pythonCmd = getPythonPath();
-  console.log("Using Python:", pythonCmd);
-
-  // 使用跨平台检测获取正确的二进制路径
-  let serverExePath: string;
-  try {
-    const platformInfo = detectPlatform();
-    replyLogUpdate(
-      event,
-      `System: Platform ${platformInfo.os}/${platformInfo.arch}, Backend: ${platformInfo.backend}`,
-      { level: "info", source: "main" },
-    );
-    serverExePath = getLlamaServerPath();
-  } catch (e: unknown) {
-    const errorMsg = e instanceof Error ? e.message : String(e);
-    replyLogUpdate(event, `ERR: ${errorMsg}`, {
-      level: "error",
-      source: "main",
-    });
-    activeRunId = null;
-    return;
-  }
-
-  const configuredRemoteUrl = resolveConfiguredRemoteUrl(config);
-  const configuredRemoteApiKey = resolveConfiguredRemoteApiKey(config);
-  const serverManager = ServerManager.getInstance();
-  const daemonStatus = config?.daemonMode ? serverManager.getStatus() : null;
-  const daemonConnection =
-    daemonStatus?.running && daemonStatus.mode === "api_v1"
-      ? serverManager.getConnectionInfo()
-      : null;
-
-  let remoteExecutionClient: RemoteClient | null = null;
-  let remoteExecutionSource = "";
-
-  if (remoteClient && remoteSession) {
-    remoteExecutionClient = remoteClient;
-    remoteExecutionSource =
-      remoteSession.source === "local-daemon"
-        ? "connected-local-daemon"
-        : "connected-remote-session";
-  } else if (daemonConnection?.url && config?.executionMode === "remote") {
-    // 仅当用户明确选择远程模式时才为本地 daemon 创建 RemoteClient。
-    // 本地翻译不走 HTTP API 桥接，避免轮询延迟导致的性能回退。
-    remoteExecutionClient = new RemoteClient(
-      {
-        url: daemonConnection.url,
-        apiKey: daemonConnection.apiKey,
-      },
-      remoteObserver,
-    );
-    remoteExecutionSource = "local-daemon-api_v1";
-  } else if (configuredRemoteUrl && config?.executionMode === "remote") {
-    remoteExecutionClient = new RemoteClient(
-      {
-        url: configuredRemoteUrl,
-        apiKey: configuredRemoteApiKey,
-      },
-      remoteObserver,
-    );
-    remoteExecutionSource = "configured-remote-url";
-  }
-
-  const configuredRemoteModel =
-    typeof config?.remoteModel === "string" && config.remoteModel.trim()
-      ? config.remoteModel.trim()
-      : "";
-  const configuredLocalModel =
-    typeof config?.modelPath === "string" && config.modelPath.trim()
-      ? config.modelPath.trim()
-      : "";
-
-  const isExternalRemote = (() => {
-    if (remoteSession?.source === "local-daemon") return false;
-    if (
-      remoteExecutionSource === "local-daemon-api_v1" ||
-      remoteExecutionSource === "connected-local-daemon"
-    ) {
-      return false;
+    if (!fs.existsSync(scriptPath)) {
+      replyLogUpdate(event, `ERR: Script not found at ${scriptPath}`, {
+        level: "error",
+        source: "main",
+      });
+      activeRunId = null;
+      return;
     }
-    if (remoteExecutionSource === "configured-remote-url" && configuredRemoteUrl) {
-      return detectRemoteSessionSource(configuredRemoteUrl) !== "local-daemon";
-    }
-    return true;
-  })();
 
-  const effectiveRemoteModelPath = (
-    isExternalRemote
-      ? configuredRemoteModel
-      : configuredRemoteModel || configuredLocalModel || modelPath || ""
-  ).trim();
+    const pythonCmd = getPythonPath();
+    console.log("Using Python:", pythonCmd);
 
-  if (remoteExecutionClient) {
-    await runTranslationViaRemoteApi(event, {
-      client: remoteExecutionClient,
-      sourceLabel: remoteExecutionSource,
-      inputFile,
-      effectiveModelPath: effectiveRemoteModelPath,
-      config,
-      isExternalRemote,
-      runId: activeRunId,
-    });
-    activeRunId = null;
-    return;
-  }
-
-  // Model selection
-  let effectiveModelPath =
-    typeof config?.modelPath === "string" && config.modelPath.trim()
-      ? config.modelPath.trim()
-      : modelPath;
-  const userDataPath = getUserDataPath();
-  const middlewareRelativePrefix = /^middleware[\\/]?/;
-  console.log("[start-translation] modelPath from frontend:", modelPath);
-  console.log("[start-translation] config.modelPath:", config?.modelPath);
-  console.log("[start-translation] userDataPath:", userDataPath);
-
-  if (!effectiveModelPath) {
-    // Auto-select from User Data models folder
-    const modelDir = join(userDataPath, "models");
-    console.log("[start-translation] Auto-selecting from:", modelDir);
-    if (fs.existsSync(modelDir)) {
-      const models = fs
-        .readdirSync(modelDir)
-        .filter((f) => f.endsWith(".gguf"));
-      console.log("[start-translation] Available models:", models);
-      if (models.length > 0) {
-        effectiveModelPath = join(modelDir, models[0]);
-        console.log("Auto-selected model:", effectiveModelPath);
-      }
-    }
-  } else if (middlewareRelativePrefix.test(effectiveModelPath)) {
-    const relativePart = effectiveModelPath.replace(middlewareRelativePrefix, "");
-    effectiveModelPath = resolve(middlewareDir, relativePart);
-    console.log(
-      "[start-translation] Resolved middleware-relative model path to:",
-      effectiveModelPath,
-    );
-  } else if (
-    !effectiveModelPath.includes("\\") &&
-    !effectiveModelPath.includes("/")
-  ) {
-    // Relative model name, resolve to full path in User Data
-    effectiveModelPath = join(userDataPath, "models", effectiveModelPath);
-    console.log(
-      "[start-translation] Resolved relative path to:",
-      effectiveModelPath,
-    );
-  }
-
-  console.log("[start-translation] effectiveModelPath:", effectiveModelPath);
-  console.log(
-    "[start-translation] Model exists:",
-    effectiveModelPath ? fs.existsSync(effectiveModelPath) : false,
-  );
-
-  if (!effectiveModelPath || !fs.existsSync(effectiveModelPath)) {
-    console.error("[start-translation] Model not found, returning early");
-    replyLogUpdate(event, `ERR: Model not found at ${effectiveModelPath}`, {
-      level: "error",
-      source: "main",
-    });
-    return;
-  }
-
-  console.log("[start-translation] Model check passed, building args...");
-
-  // serverExePath 已在上面的 try-catch 中验证
-  // Build args for murasaki_translator/main.py
-  const args = [
-    join("murasaki_translator", "main.py"),
-    "--file",
-    inputFile,
-    "--model",
-    effectiveModelPath,
-  ];
-
-  const configuredServerUrl = config?.executionMode === "remote" ? configuredRemoteUrl : "";
-  const useRemoteServerUrl = (() => {
-    if (!configuredServerUrl) return false;
+    // 使用跨平台检测获取正确的二进制路径
+    let serverExePath: string;
     try {
-      const parsed = new URL(configuredServerUrl);
-      return parsed.protocol === "http:" || parsed.protocol === "https:";
-    } catch {
-      return false;
-    }
-  })();
-
-  if (useRemoteServerUrl) {
-    args.push("--server", configuredServerUrl);
-    args.push("--no-server-spawn");
-    console.log("[start-translation] Using configured remote server:", configuredServerUrl);
-  } else if (config && config.daemonMode) {
-    const sm = ServerManager.getInstance();
-    const status = sm.getStatus();
-
-    if (status.running && status.mode !== "api_v1") {
-      // 非 api_v1 daemon：直接连接其 llama-server 端口
-      args.push("--server", `http://127.0.0.1:${status.port}`);
-      args.push("--no-server-spawn");
-      console.log("[start-translation] Using local daemon server on port", status.port);
+      const platformInfo = detectPlatform();
       replyLogUpdate(
         event,
-        `System: Connected to local daemon on port ${status.port}`,
+        `System: Platform ${platformInfo.os}/${platformInfo.arch}, Backend: ${platformInfo.backend}`,
         { level: "info", source: "main" },
       );
-    } else if (status.running && status.mode === "api_v1") {
-      // api_v1 daemon：API server 端口与 llama-server 协议不兼容，
-      // 回退到标准 spawn（main.py 自行启动 llama-server）
-      console.log("[start-translation] api_v1 daemon detected, using direct spawn for performance.");
-      replyLogUpdate(
-        event,
-        "System: Local daemon(api_v1) detected, using direct spawn mode for best performance.",
-        { level: "info", source: "main" },
+      serverExePath = getLlamaServerPath();
+    } catch (e: unknown) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      replyLogUpdate(event, `ERR: ${errorMsg}`, {
+        level: "error",
+        source: "main",
+      });
+      activeRunId = null;
+      return;
+    }
+
+    const configuredRemoteUrl = resolveConfiguredRemoteUrl(config);
+    const configuredRemoteApiKey = resolveConfiguredRemoteApiKey(config);
+    const serverManager = ServerManager.getInstance();
+    const daemonStatus = config?.daemonMode ? serverManager.getStatus() : null;
+    const daemonConnection =
+      daemonStatus?.running && daemonStatus.mode === "api_v1"
+        ? serverManager.getConnectionInfo()
+        : null;
+
+    let remoteExecutionClient: RemoteClient | null = null;
+    let remoteExecutionSource = "";
+
+    if (remoteClient && remoteSession) {
+      remoteExecutionClient = remoteClient;
+      remoteExecutionSource =
+        remoteSession.source === "local-daemon"
+          ? "connected-local-daemon"
+          : "connected-remote-session";
+    } else if (daemonConnection?.url && config?.executionMode === "remote") {
+      // 仅当用户明确选择远程模式时才为本地 daemon 创建 RemoteClient。
+      // 本地翻译不走 HTTP API 桥接，避免轮询延迟导致的性能回退。
+      remoteExecutionClient = new RemoteClient(
+        {
+          url: daemonConnection.url,
+          apiKey: daemonConnection.apiKey,
+        },
+        remoteObserver,
       );
-      args.push("--server", serverExePath);
-    } else {
-      // Daemon 未运行，回退到标准 spawn
-      args.push("--server", serverExePath);
-    }
-  } else {
-    args.push("--server", serverExePath);
-  }
-
-  // Apply Advanced Config
-  if (config) {
-    // Device Mode Logic
-    if (config.deviceMode === "cpu") {
-      args.push("--gpu-layers", "0");
-      console.log("Mode: CPU Only (Forced gpu-layers 0)");
-    } else {
-      // 默认使用 -1（尽可能加载到 GPU），若用户指定则使用用户值
-      const gpuLayers = config.gpuLayers !== undefined ? config.gpuLayers : -1;
-      args.push("--gpu-layers", gpuLayers.toString());
-      console.log(`Mode: GPU with ${gpuLayers} layers`);
+      remoteExecutionSource = "local-daemon-api_v1";
+    } else if (configuredRemoteUrl && config?.executionMode === "remote") {
+      remoteExecutionClient = new RemoteClient(
+        {
+          url: configuredRemoteUrl,
+          apiKey: configuredRemoteApiKey,
+        },
+        remoteObserver,
+      );
+      remoteExecutionSource = "configured-remote-url";
     }
 
-    if (config.ctxSize) args.push("--ctx", config.ctxSize);
-    if (config.chunkSize) args.push("--chunk-size", config.chunkSize);
-    if (config.concurrency) {
-      args.push("--concurrency", config.concurrency.toString());
+    const configuredRemoteModel =
+      typeof config?.remoteModel === "string" && config.remoteModel.trim()
+        ? config.remoteModel.trim()
+        : "";
+    const configuredLocalModel =
+      typeof config?.modelPath === "string" && config.modelPath.trim()
+        ? config.modelPath.trim()
+        : "";
+
+    const isExternalRemote = (() => {
+      if (remoteSession?.source === "local-daemon") return false;
+      if (
+        remoteExecutionSource === "local-daemon-api_v1" ||
+        remoteExecutionSource === "connected-local-daemon"
+      ) {
+        return false;
+      }
+      if (
+        remoteExecutionSource === "configured-remote-url" &&
+        configuredRemoteUrl
+      ) {
+        return (
+          detectRemoteSessionSource(configuredRemoteUrl) !== "local-daemon"
+        );
+      }
+      return true;
+    })();
+
+    const effectiveRemoteModelPath = (
+      isExternalRemote
+        ? configuredRemoteModel
+        : configuredRemoteModel || configuredLocalModel || modelPath || ""
+    ).trim();
+
+    if (remoteExecutionClient) {
+      await runTranslationViaRemoteApi(event, {
+        client: remoteExecutionClient,
+        sourceLabel: remoteExecutionSource,
+        inputFile,
+        effectiveModelPath: effectiveRemoteModelPath,
+        config,
+        isExternalRemote,
+        runId: activeRunId,
+      });
+      activeRunId = null;
+      return;
     }
 
-    // Chunk Balancing
-    if (config.balanceEnable) {
-      args.push("--balance-enable");
-    }
-    if (config.balanceThreshold !== undefined) {
-      args.push("--balance-threshold", config.balanceThreshold.toString());
-    }
-    if (config.balanceCount) {
-      args.push("--balance-count", config.balanceCount.toString());
-    }
+    // Model selection
+    let effectiveModelPath =
+      typeof config?.modelPath === "string" && config.modelPath.trim()
+        ? config.modelPath.trim()
+        : modelPath;
+    const userDataPath = getUserDataPath();
+    const middlewareRelativePrefix = /^middleware[\\/]?/;
+    console.log("[start-translation] modelPath from frontend:", modelPath);
+    console.log("[start-translation] config.modelPath:", config?.modelPath);
+    console.log("[start-translation] userDataPath:", userDataPath);
 
-    // Fidelity & Performance Control (Granular)
-    if (config.flashAttn) args.push("--flash-attn");
-    if (config.kvCacheType) args.push("--kv-cache-type", config.kvCacheType);
-    if (config.useLargeBatch) args.push("--use-large-batch");
-    if (config.physicalBatchSize)
-      args.push("--batch-size", config.physicalBatchSize.toString());
-
-    if (
-      config.seed !== undefined &&
-      config.seed !== null &&
-      config.seed !== ""
+    if (!effectiveModelPath) {
+      // Auto-select from User Data models folder
+      const modelDir = join(userDataPath, "models");
+      console.log("[start-translation] Auto-selecting from:", modelDir);
+      if (fs.existsSync(modelDir)) {
+        const models = fs
+          .readdirSync(modelDir)
+          .filter((f) => f.endsWith(".gguf"));
+        console.log("[start-translation] Available models:", models);
+        if (models.length > 0) {
+          effectiveModelPath = join(modelDir, models[0]);
+          console.log("Auto-selected model:", effectiveModelPath);
+        }
+      }
+    } else if (middlewareRelativePrefix.test(effectiveModelPath)) {
+      const relativePart = effectiveModelPath.replace(
+        middlewareRelativePrefix,
+        "",
+      );
+      effectiveModelPath = resolve(middlewareDir, relativePart);
+      console.log(
+        "[start-translation] Resolved middleware-relative model path to:",
+        effectiveModelPath,
+      );
+    } else if (
+      !effectiveModelPath.includes("\\") &&
+      !effectiveModelPath.includes("/")
     ) {
-      args.push("--seed", config.seed.toString());
+      // Relative model name, resolve to full path in User Data
+      effectiveModelPath = join(userDataPath, "models", effectiveModelPath);
+      console.log(
+        "[start-translation] Resolved relative path to:",
+        effectiveModelPath,
+      );
     }
 
-    // Custom Output Directory
-    if (config.outputDir && fs.existsSync(config.outputDir)) {
-      const ext = inputFile.split(".").pop();
-      const baseName = basename(inputFile, `.${ext}`);
-      const outFilename = `${baseName}_translated.${ext}`;
-      const outPath = join(config.outputDir, outFilename);
-      args.push("--output", outPath);
-      console.log("Custom Output Path:", outPath);
+    console.log("[start-translation] effectiveModelPath:", effectiveModelPath);
+    console.log(
+      "[start-translation] Model exists:",
+      effectiveModelPath ? fs.existsSync(effectiveModelPath) : false,
+    );
+
+    if (!effectiveModelPath || !fs.existsSync(effectiveModelPath)) {
+      console.error("[start-translation] Model not found, returning early");
+      replyLogUpdate(event, `ERR: Model not found at ${effectiveModelPath}`, {
+        level: "error",
+        source: "main",
+      });
+      return;
     }
 
-    // Glossary
-    if (config.glossaryPath) {
-      const gPath = config.glossaryPath;
-      if (fs.existsSync(gPath)) {
-        args.push("--glossary", gPath);
+    console.log("[start-translation] Model check passed, building args...");
+
+    // serverExePath 已在上面的 try-catch 中验证
+    // Build args for murasaki_translator/main.py
+    const args = [
+      join("murasaki_translator", "main.py"),
+      "--file",
+      inputFile,
+      "--model",
+      effectiveModelPath,
+    ];
+
+    const configuredServerUrl =
+      config?.executionMode === "remote" ? configuredRemoteUrl : "";
+    const useRemoteServerUrl = (() => {
+      if (!configuredServerUrl) return false;
+      try {
+        const parsed = new URL(configuredServerUrl);
+        return parsed.protocol === "http:" || parsed.protocol === "https:";
+      } catch {
+        return false;
+      }
+    })();
+
+    if (useRemoteServerUrl) {
+      args.push("--server", configuredServerUrl);
+      args.push("--no-server-spawn");
+      console.log(
+        "[start-translation] Using configured remote server:",
+        configuredServerUrl,
+      );
+    } else if (config && config.daemonMode) {
+      const sm = ServerManager.getInstance();
+      const status = sm.getStatus();
+
+      if (status.running && status.mode !== "api_v1") {
+        // 非 api_v1 daemon：直接连接其 llama-server 端口
+        args.push("--server", `http://127.0.0.1:${status.port}`);
+        args.push("--no-server-spawn");
+        console.log(
+          "[start-translation] Using local daemon server on port",
+          status.port,
+        );
+        replyLogUpdate(
+          event,
+          `System: Connected to local daemon on port ${status.port}`,
+          { level: "info", source: "main" },
+        );
+      } else if (status.running && status.mode === "api_v1") {
+        // api_v1 daemon：API server 端口与 llama-server 协议不兼容，
+        // 回退到标准 spawn（main.py 自行启动 llama-server）
+        console.log(
+          "[start-translation] api_v1 daemon detected, using direct spawn for performance.",
+        );
+        replyLogUpdate(
+          event,
+          "System: Local daemon(api_v1) detected, using direct spawn mode for best performance.",
+          { level: "info", source: "main" },
+        );
+        args.push("--server", serverExePath);
       } else {
-        const managedPath = join(middlewareDir, "glossaries", gPath);
-        if (fs.existsSync(managedPath)) {
-          args.push("--glossary", managedPath);
+        // Daemon 未运行，回退到标准 spawn
+        args.push("--server", serverExePath);
+      }
+    } else {
+      args.push("--server", serverExePath);
+    }
+
+    // Apply Advanced Config
+    if (config) {
+      // Device Mode Logic
+      if (config.deviceMode === "cpu") {
+        args.push("--gpu-layers", "0");
+        console.log("Mode: CPU Only (Forced gpu-layers 0)");
+      } else {
+        // 默认使用 -1（尽可能加载到 GPU），若用户指定则使用用户值
+        const gpuLayers =
+          config.gpuLayers !== undefined ? config.gpuLayers : -1;
+        args.push("--gpu-layers", gpuLayers.toString());
+        console.log(`Mode: GPU with ${gpuLayers} layers`);
+      }
+
+      if (config.ctxSize) args.push("--ctx", config.ctxSize);
+      if (config.chunkSize) args.push("--chunk-size", config.chunkSize);
+      if (config.concurrency) {
+        args.push("--concurrency", config.concurrency.toString());
+      }
+
+      // Chunk Balancing
+      if (config.balanceEnable) {
+        args.push("--balance-enable");
+      }
+      if (config.balanceThreshold !== undefined) {
+        args.push("--balance-threshold", config.balanceThreshold.toString());
+      }
+      if (config.balanceCount) {
+        args.push("--balance-count", config.balanceCount.toString());
+      }
+
+      // Fidelity & Performance Control (Granular)
+      if (config.flashAttn) args.push("--flash-attn");
+      if (config.kvCacheType) args.push("--kv-cache-type", config.kvCacheType);
+      if (config.useLargeBatch) args.push("--use-large-batch");
+      if (config.physicalBatchSize)
+        args.push("--batch-size", config.physicalBatchSize.toString());
+
+      if (
+        config.seed !== undefined &&
+        config.seed !== null &&
+        config.seed !== ""
+      ) {
+        args.push("--seed", config.seed.toString());
+      }
+
+      // Custom Output Directory
+      if (config.outputDir && fs.existsSync(config.outputDir)) {
+        const ext = inputFile.split(".").pop();
+        const baseName = basename(inputFile, `.${ext}`);
+        const outFilename = `${baseName}_translated.${ext}`;
+        const outPath = join(config.outputDir, outFilename);
+        args.push("--output", outPath);
+        console.log("Custom Output Path:", outPath);
+      }
+
+      // Glossary
+      if (config.glossaryPath) {
+        const gPath = config.glossaryPath;
+        if (fs.existsSync(gPath)) {
+          args.push("--glossary", gPath);
+        } else {
+          const managedPath = join(middlewareDir, "glossaries", gPath);
+          if (fs.existsSync(managedPath)) {
+            args.push("--glossary", managedPath);
+          }
+        }
+      }
+
+      if (config.preset) {
+        args.push("--preset", config.preset);
+      }
+
+      if (config.lineFormat) {
+        args.push("--line-format", config.lineFormat);
+      }
+
+      if (config.strictMode) {
+        args.push("--strict-mode", config.strictMode);
+      }
+
+      // Debug/Save Options
+      if (config.saveCot) {
+        args.push("--save-cot");
+      }
+      if (config.alignmentMode) {
+        args.push("--alignment-mode");
+      }
+      if (config.saveSummary) {
+        args.push("--save-summary");
+      }
+
+      // User-defined Rules (written as temp files with unique names)
+      if (config.rulesPre && config.rulesPre.length > 0) {
+        const uid = require("crypto").randomUUID().slice(0, 8);
+        const preRulesPath = join(middlewareDir, `temp_rules_pre_${uid}.json`);
+        fs.writeFileSync(preRulesPath, JSON.stringify(config.rulesPre), "utf8");
+        args.push("--rules-pre", preRulesPath);
+        tempRuleFiles.push(preRulesPath);
+      }
+      if (config.rulesPost && config.rulesPost.length > 0) {
+        const uid = require("crypto").randomUUID().slice(0, 8);
+        const postRulesPath = join(
+          middlewareDir,
+          `temp_rules_post_${uid}.json`,
+        );
+        fs.writeFileSync(
+          postRulesPath,
+          JSON.stringify(config.rulesPost),
+          "utf8",
+        );
+        args.push("--rules-post", postRulesPath);
+        tempRuleFiles.push(postRulesPath);
+      }
+
+      // Quality Control Settings
+      if (config.temperature !== undefined) {
+        args.push("--temperature", config.temperature.toString());
+      }
+      if (config.lineCheck) {
+        args.push("--line-check");
+        args.push(
+          "--line-tolerance-abs",
+          (config.lineToleranceAbs ?? 20).toString(),
+        );
+        args.push(
+          "--line-tolerance-pct",
+          ((config.lineTolerancePct ?? 20) / 100).toString(),
+        );
+      }
+      if (config.anchorCheck) {
+        args.push("--anchor-check");
+        args.push(
+          "--anchor-check-retries",
+          String(config.anchorCheckRetries || 1),
+        );
+      }
+      if (config.repPenaltyBase !== undefined) {
+        args.push("--rep-penalty-base", config.repPenaltyBase.toString());
+      }
+      if (config.repPenaltyMax !== undefined) {
+        args.push("--rep-penalty-max", config.repPenaltyMax.toString());
+      }
+      if (config.repPenaltyStep !== undefined) {
+        args.push("--rep-penalty-step", config.repPenaltyStep.toString());
+      }
+      if (config.maxRetries !== undefined) {
+        args.push("--max-retries", config.maxRetries.toString());
+      }
+
+      // Glossary Coverage Check（术语覆盖率检测）
+      if (config.coverageCheck === false) {
+        // Explicitly disable coverage retries on backend defaults
+        args.push("--output-hit-threshold", "0");
+        args.push("--cot-coverage-threshold", "0");
+        args.push("--coverage-retries", "0");
+      } else {
+        args.push(
+          "--output-hit-threshold",
+          (config.outputHitThreshold || 60).toString(),
+        );
+        args.push(
+          "--cot-coverage-threshold",
+          (config.cotCoverageThreshold || 80).toString(),
+        );
+        args.push(
+          "--coverage-retries",
+          (config.coverageRetries || 1).toString(),
+        );
+      }
+
+      // Incremental Translation（增量翻译）
+      if (config.resume) {
+        args.push("--resume");
+      }
+
+      // Text Protection（文本保护）
+      if (config.textProtect) {
+        args.push("--text-protect");
+      }
+      if (config.protectPatterns && String(config.protectPatterns).trim()) {
+        const rawPatterns = String(config.protectPatterns).trim();
+        if (fs.existsSync(rawPatterns)) {
+          args.push("--protect-patterns", rawPatterns);
+        } else {
+          const uid = require("crypto").randomUUID().slice(0, 8);
+          const protectPath = join(
+            middlewareDir,
+            `temp_protect_patterns_${uid}.txt`,
+          );
+          fs.writeFileSync(protectPath, rawPatterns, "utf8");
+          args.push("--protect-patterns", protectPath);
+          tempRuleFiles.push(protectPath);
+        }
+      }
+
+      // Dynamic Retry Strategy（动态重试策略）
+      if (config.retryTempBoost !== undefined) {
+        args.push("--retry-temp-boost", config.retryTempBoost.toString());
+      }
+      if (config.retryPromptFeedback) {
+        args.push("--retry-prompt-feedback");
+      } else if (config.retryPromptFeedback === false) {
+        args.push("--no-retry-prompt-feedback");
+      }
+
+      // Save Cache（默认启用，用于校对界面）
+      if (config.saveCache !== false) {
+        args.push("--save-cache");
+        // Cache Directory
+        if (config.cacheDir && fs.existsSync(config.cacheDir)) {
+          args.push("--cache-path", config.cacheDir);
         }
       }
     }
 
-    if (config.preset) {
-      args.push("--preset", config.preset);
-    }
-
-    if (config.lineFormat) {
-      args.push("--line-format", config.lineFormat);
-    }
-
-    if (config.strictMode) {
-      args.push("--strict-mode", config.strictMode);
-    }
-
-    // Debug/Save Options
-    if (config.saveCot) {
-      args.push("--save-cot");
-    }
-    if (config.alignmentMode) {
-      args.push("--alignment-mode");
-    }
-    if (config.saveSummary) {
-      args.push("--save-summary");
-    }
-
-    // User-defined Rules (written as temp files with unique names)
-    if (config.rulesPre && config.rulesPre.length > 0) {
-      const uid = require("crypto").randomUUID().slice(0, 8);
-      const preRulesPath = join(middlewareDir, `temp_rules_pre_${uid}.json`);
-      fs.writeFileSync(preRulesPath, JSON.stringify(config.rulesPre), "utf8");
-      args.push("--rules-pre", preRulesPath);
-      tempRuleFiles.push(preRulesPath);
-    }
-    if (config.rulesPost && config.rulesPost.length > 0) {
-      const uid = require("crypto").randomUUID().slice(0, 8);
-      const postRulesPath = join(middlewareDir, `temp_rules_post_${uid}.json`);
-      fs.writeFileSync(postRulesPath, JSON.stringify(config.rulesPost), "utf8");
-      args.push("--rules-post", postRulesPath);
-      tempRuleFiles.push(postRulesPath);
-    }
-
-    // Quality Control Settings
-    if (config.temperature !== undefined) {
-      args.push("--temperature", config.temperature.toString());
-    }
-    if (config.lineCheck) {
-      args.push("--line-check");
-      args.push(
-        "--line-tolerance-abs",
-        (config.lineToleranceAbs ?? 20).toString(),
-      );
-      args.push(
-        "--line-tolerance-pct",
-        ((config.lineTolerancePct ?? 20) / 100).toString(),
-      );
-    }
-    if (config.anchorCheck) {
-      args.push("--anchor-check");
-      args.push(
-        "--anchor-check-retries",
-        String(config.anchorCheckRetries || 1),
-      );
-    }
-    if (config.repPenaltyBase !== undefined) {
-      args.push("--rep-penalty-base", config.repPenaltyBase.toString());
-    }
-    if (config.repPenaltyMax !== undefined) {
-      args.push("--rep-penalty-max", config.repPenaltyMax.toString());
-    }
-    if (config.repPenaltyStep !== undefined) {
-      args.push("--rep-penalty-step", config.repPenaltyStep.toString());
-    }
-    if (config.maxRetries !== undefined) {
-      args.push("--max-retries", config.maxRetries.toString());
-    }
-
-    // Glossary Coverage Check（术语覆盖率检测）
-    if (config.coverageCheck === false) {
-      // Explicitly disable coverage retries on backend defaults
-      args.push("--output-hit-threshold", "0");
-      args.push("--cot-coverage-threshold", "0");
-      args.push("--coverage-retries", "0");
-    } else {
-      args.push(
-        "--output-hit-threshold",
-        (config.outputHitThreshold || 60).toString(),
-      );
-      args.push(
-        "--cot-coverage-threshold",
-        (config.cotCoverageThreshold || 80).toString(),
-      );
-      args.push("--coverage-retries", (config.coverageRetries || 1).toString());
-    }
-
-    // Incremental Translation（增量翻译）
-    if (config.resume) {
-      args.push("--resume");
-    }
-
-    // Text Protection（文本保护）
-    if (config.textProtect) {
-      args.push("--text-protect");
-    }
-    if (config.protectPatterns && String(config.protectPatterns).trim()) {
-      const rawPatterns = String(config.protectPatterns).trim();
-      if (fs.existsSync(rawPatterns)) {
-        args.push("--protect-patterns", rawPatterns);
-      } else {
-        const uid = require("crypto").randomUUID().slice(0, 8);
-        const protectPath = join(
-          middlewareDir,
-          `temp_protect_patterns_${uid}.txt`,
-        );
-        fs.writeFileSync(protectPath, rawPatterns, "utf8");
-        args.push("--protect-patterns", protectPath);
-        tempRuleFiles.push(protectPath);
-      }
-    }
-
-    // Dynamic Retry Strategy（动态重试策略）
-    if (config.retryTempBoost !== undefined) {
-      args.push("--retry-temp-boost", config.retryTempBoost.toString());
-    }
-    if (config.retryPromptFeedback) {
-      args.push("--retry-prompt-feedback");
-    } else if (config.retryPromptFeedback === false) {
-      args.push("--no-retry-prompt-feedback");
-    }
-
-    // Save Cache（默认启用，用于校对界面）
-    if (config.saveCache !== false) {
-      args.push("--save-cache");
-      // Cache Directory
-      if (config.cacheDir && fs.existsSync(config.cacheDir)) {
-        args.push("--cache-path", config.cacheDir);
-      }
-    }
-  }
-
-  console.log("Spawning:", pythonCmd, args.join(" "), "in", middlewareDir);
-  replyLogUpdate(event, `System: CMD: ${pythonCmd} ${args.join(" ")}`, {
-    level: "info",
-    source: "main",
-  });
-  replyLogUpdate(event, `System: CWD: ${middlewareDir}`, {
-    level: "info",
-    source: "main",
-  });
-  replyLogUpdate(
-    event,
-    `System: Config - CTX: ${config?.ctxSize || "4096"}, Concurrency: ${config?.concurrency || "1"}, KV: ${config?.kvCacheType || "f16"}`,
-    { level: "info", source: "main" },
-  );
-
-  // Set GPU ID if specified and not in CPU mode
-  const customEnv: NodeJS.ProcessEnv = {};
-  if (config?.deviceMode !== "cpu" && config?.gpuDeviceId) {
-    customEnv["CUDA_VISIBLE_DEVICES"] = config.gpuDeviceId;
-    console.log(`Setting CUDA_VISIBLE_DEVICES=${config.gpuDeviceId}`);
-    replyLogUpdate(
-      event,
-      `System: CUDA_VISIBLE_DEVICES=${config.gpuDeviceId}`,
-      { level: "info", source: "main" },
-    );
-  }
-
-  try {
-    pythonProcess = spawnPythonProcess(pythonCmd, args, {
-      cwd: middlewareDir,
-      env: customEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdoutBuffer = "";
-    let stderrBuffer = "";
-
-    const flushBufferedLines = (
-      buffer: string,
-      onLine: (line: string) => void,
-    ): { buffer: string } => {
-      const lines = buffer.split(/\r?\n/);
-      const remaining = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        onLine(line);
-      }
-      return { buffer: remaining };
-    };
-
-    const emitLlamaLogLine = (line: string) => {
-      replyJsonLog(
-        event,
-        "JSON_LLAMA_LOG:",
-        { line },
-        { level: "info", source: "llama" },
-      );
-    };
-
-    const handleStdoutLine = (line: string) => {
-      replyLogUpdate(event, line, { level: "info", source: "python" });
-    };
-
-    const handleStderrLine = (line: string) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      // Filter out noisy llama-server logs
-      if (
-        trimmed === "." ||
-        trimmed.includes("llama_") ||
-        trimmed.includes("common_init") ||
-        trimmed.includes("srv ") ||
-        trimmed.startsWith("slot ") ||
-        trimmed.includes("sched_reserve")
-      ) {
-        emitLlamaLogLine(trimmed);
-        return;
-      }
-
-      console.error("STDERR:", trimmed);
-      // If it's still informational (e.g. from llama-server or python logging that wasn't redirected)
-      if (trimmed.includes("INFO") || trimmed.includes("WARN")) {
-        const level = trimmed.includes("WARN") ? "warn" : "info";
-        replyLogUpdate(event, `System: ${trimmed}`, {
-          level,
-          source: "python",
-        });
-      } else {
-        replyLogUpdate(event, `ERR: ${trimmed}`, {
-          level: "error",
-          source: "python",
-        });
-      }
-    };
-
-    pythonProcess.on("error", (err) => {
-      console.error("Spawn Error:", err);
-      replyLogUpdate(
-        event,
-        `CRITICAL ERROR: Failed to spawn python. ${err.message}`,
-        { level: "critical", source: "main" },
-      );
-      translationStopRequested = false;
-      pythonProcess = null;
-    });
-
-    if (pythonProcess.stdout) {
-      pythonProcess.stdout.on("data", (data) => {
-        const str = data.toString();
-        console.log("STDOUT:", str);
-        stdoutBuffer += str;
-        const flushed = flushBufferedLines(stdoutBuffer, handleStdoutLine);
-        stdoutBuffer = flushed.buffer;
-      });
-    }
-
-    if (pythonProcess.stderr) {
-      pythonProcess.stderr.on("data", (data) => {
-        const str = data.toString();
-        stderrBuffer += str;
-        const flushed = flushBufferedLines(stderrBuffer, handleStderrLine);
-        stderrBuffer = flushed.buffer;
-      });
-    }
-
-    pythonProcess.on("close", (code, signal) => {
-      if (stdoutBuffer.trim()) {
-        flushBufferedLines(`${stdoutBuffer}\n`, handleStdoutLine);
-      }
-      if (stderrBuffer.trim()) {
-        flushBufferedLines(`${stderrBuffer}\n`, handleStderrLine);
-      }
-      const stopRequested = translationStopRequested;
-      translationStopRequested = false;
-      const exitRunId = activeRunId;
-      console.log(
-        `[Translation] Process exited (code=${String(code)}, signal=${String(signal)}, stopRequested=${stopRequested})`,
-      );
-      event.reply("process-exit", {
-        code,
-        signal,
-        stopRequested,
-        runId: exitRunId || undefined,
-      });
-      pythonProcess = null;
-      activeRunId = null;
-      // 清理临时规则文件
-      for (const tmpFile of tempRuleFiles) {
-        try {
-          fs.unlinkSync(tmpFile);
-        } catch (_) { }
-      }
-    });
-  } catch (e: unknown) {
-    const errorMsg = e instanceof Error ? e.message : String(e);
-    replyLogUpdate(event, `Exception: ${errorMsg}`, {
-      level: "error",
+    console.log("Spawning:", pythonCmd, args.join(" "), "in", middlewareDir);
+    replyLogUpdate(event, `System: CMD: ${pythonCmd} ${args.join(" ")}`, {
+      level: "info",
       source: "main",
     });
-    console.error(e);
-  }
-});
+    replyLogUpdate(event, `System: CWD: ${middlewareDir}`, {
+      level: "info",
+      source: "main",
+    });
+    replyLogUpdate(
+      event,
+      `System: Config - CTX: ${config?.ctxSize || "4096"}, Concurrency: ${config?.concurrency || "1"}, KV: ${config?.kvCacheType || "f16"}`,
+      { level: "info", source: "main" },
+    );
+
+    // Set GPU ID if specified and not in CPU mode
+    const customEnv: NodeJS.ProcessEnv = {};
+    if (config?.deviceMode !== "cpu" && config?.gpuDeviceId) {
+      customEnv["CUDA_VISIBLE_DEVICES"] = config.gpuDeviceId;
+      console.log(`Setting CUDA_VISIBLE_DEVICES=${config.gpuDeviceId}`);
+      replyLogUpdate(
+        event,
+        `System: CUDA_VISIBLE_DEVICES=${config.gpuDeviceId}`,
+        { level: "info", source: "main" },
+      );
+    }
+
+    try {
+      pythonProcess = spawnPythonProcess(pythonCmd, args, {
+        cwd: middlewareDir,
+        env: customEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let stdoutBuffer = "";
+      let stderrBuffer = "";
+
+      const flushBufferedLines = (
+        buffer: string,
+        onLine: (line: string) => void,
+      ): { buffer: string } => {
+        const lines = buffer.split(/\r?\n/);
+        const remaining = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          onLine(line);
+        }
+        return { buffer: remaining };
+      };
+
+      const emitLlamaLogLine = (line: string) => {
+        replyJsonLog(
+          event,
+          "JSON_LLAMA_LOG:",
+          { line },
+          { level: "info", source: "llama" },
+        );
+      };
+
+      const handleStdoutLine = (line: string) => {
+        replyLogUpdate(event, line, { level: "info", source: "python" });
+      };
+
+      const handleStderrLine = (line: string) => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        // Filter out noisy llama-server logs
+        if (
+          trimmed === "." ||
+          trimmed.includes("llama_") ||
+          trimmed.includes("common_init") ||
+          trimmed.includes("srv ") ||
+          trimmed.startsWith("slot ") ||
+          trimmed.includes("sched_reserve")
+        ) {
+          emitLlamaLogLine(trimmed);
+          return;
+        }
+
+        console.error("STDERR:", trimmed);
+        // If it's still informational (e.g. from llama-server or python logging that wasn't redirected)
+        if (trimmed.includes("INFO") || trimmed.includes("WARN")) {
+          const level = trimmed.includes("WARN") ? "warn" : "info";
+          replyLogUpdate(event, `System: ${trimmed}`, {
+            level,
+            source: "python",
+          });
+        } else {
+          replyLogUpdate(event, `ERR: ${trimmed}`, {
+            level: "error",
+            source: "python",
+          });
+        }
+      };
+
+      pythonProcess.on("error", (err) => {
+        console.error("Spawn Error:", err);
+        replyLogUpdate(
+          event,
+          `CRITICAL ERROR: Failed to spawn python. ${err.message}`,
+          { level: "critical", source: "main" },
+        );
+        translationStopRequested = false;
+        pythonProcess = null;
+      });
+
+      if (pythonProcess.stdout) {
+        pythonProcess.stdout.on("data", (data) => {
+          const str = data.toString();
+          console.log("STDOUT:", str);
+          stdoutBuffer += str;
+          const flushed = flushBufferedLines(stdoutBuffer, handleStdoutLine);
+          stdoutBuffer = flushed.buffer;
+        });
+      }
+
+      if (pythonProcess.stderr) {
+        pythonProcess.stderr.on("data", (data) => {
+          const str = data.toString();
+          stderrBuffer += str;
+          const flushed = flushBufferedLines(stderrBuffer, handleStderrLine);
+          stderrBuffer = flushed.buffer;
+        });
+      }
+
+      pythonProcess.on("close", (code, signal) => {
+        if (stdoutBuffer.trim()) {
+          flushBufferedLines(`${stdoutBuffer}\n`, handleStdoutLine);
+        }
+        if (stderrBuffer.trim()) {
+          flushBufferedLines(`${stderrBuffer}\n`, handleStderrLine);
+        }
+        const stopRequested = translationStopRequested;
+        translationStopRequested = false;
+        const exitRunId = activeRunId;
+        console.log(
+          `[Translation] Process exited (code=${String(code)}, signal=${String(signal)}, stopRequested=${stopRequested})`,
+        );
+        event.reply("process-exit", {
+          code,
+          signal,
+          stopRequested,
+          runId: exitRunId || undefined,
+        });
+        pythonProcess = null;
+        activeRunId = null;
+        // 清理临时规则文件
+        for (const tmpFile of tempRuleFiles) {
+          try {
+            fs.unlinkSync(tmpFile);
+          } catch (_) {}
+        }
+      });
+    } catch (e: unknown) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      replyLogUpdate(event, `Exception: ${errorMsg}`, {
+        level: "error",
+        source: "main",
+      });
+      console.error(e);
+    }
+  },
+);
 
 ipcMain.on("stop-translation", () => {
   if (remoteTranslationBridge) {
@@ -5038,13 +5153,13 @@ ipcMain.on("stop-translation", () => {
         // Fallback
         try {
           pythonProcess?.kill();
-        } catch (_) { }
+        } catch (_) {}
       });
       // 超时兜底：3s 后若进程仍然存活
       setTimeout(() => {
         try {
           pythonProcess?.kill("SIGKILL");
-        } catch (_) { }
+        } catch (_) {}
       }, 3000);
     } else {
       pythonProcess.kill();
@@ -5135,7 +5250,7 @@ ipcMain.handle(
           if (tempFile && fs.existsSync(tempFile)) {
             try {
               fs.unlinkSync(tempFile);
-            } catch (_) { }
+            } catch (_) {}
           }
 
           if (code === 0) {
@@ -5443,7 +5558,7 @@ ipcMain.handle("hf-download-cancel", async () => {
       } catch {
         try {
           hfDownloadProcess.kill();
-        } catch { }
+        } catch {}
       }
     } else {
       hfDownloadProcess.kill("SIGTERM");

@@ -13,6 +13,9 @@ from .builtins import (
     TaggedLineParser,
     RegexParser,
     JsonObjectParser,
+    JsonlParser,
+    AnyParser,
+    PythonScriptParser,
 )
 
 
@@ -34,10 +37,16 @@ class ParserRegistry:
             parser = JsonArrayParser(profile)
         elif parser_type == "json_object":
             parser = JsonObjectParser(profile)
+        elif parser_type == "jsonl":
+            parser = JsonlParser(profile)
         elif parser_type == "tagged_line":
             parser = TaggedLineParser(profile)
         elif parser_type == "regex":
             parser = RegexParser(profile)
+        elif parser_type == "any":
+            parser = AnyParser(profile)
+        elif parser_type == "python":
+            parser = PythonScriptParser(profile)
         else:
             raise ParserError(f"Unsupported parser type: {parser_type}")
         self._cache[ref] = parser

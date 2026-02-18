@@ -15,6 +15,7 @@ class ProviderRequest:
     extra: Dict[str, Any] | None = None
     headers: Dict[str, str] | None = None
     timeout: Optional[int] = None
+    provider_id: Optional[str] = None
 
 
 @dataclass

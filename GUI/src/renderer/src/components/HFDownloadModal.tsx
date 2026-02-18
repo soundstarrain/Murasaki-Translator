@@ -113,7 +113,9 @@ export function HFDownloadModal({
             setNetworkMessage(`${latency}ms`);
           } else {
             setNetworkStatus("error");
-            setNetworkMessage(result?.message || result?.data?.message || text.networkFailed);
+            setNetworkMessage(
+              result?.message || result?.data?.message || text.networkFailed,
+            );
           }
         } else {
           // @ts-ignore
@@ -201,7 +203,8 @@ export function HFDownloadModal({
     const pollStatus = async () => {
       try {
         // @ts-ignore
-        const result = await window.api?.remoteHfDownloadStatus?.(remoteDownloadId);
+        const result =
+          await window.api?.remoteHfDownloadStatus?.(remoteDownloadId);
         if (!result?.ok) {
           setError(result?.message || text.error);
           setStep("files");
@@ -748,4 +751,3 @@ export function HFDownloadModal({
     </div>
   );
 }
-

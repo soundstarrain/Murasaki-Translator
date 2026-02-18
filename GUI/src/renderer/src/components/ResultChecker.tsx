@@ -185,7 +185,9 @@ export function ResultChecker({
           message: t.messages.kanaResidue
             .replace(
               "{level}",
-              isMinor ? t.messages.kanaResidueMinor : t.messages.kanaResidueMajor,
+              isMinor
+                ? t.messages.kanaResidueMinor
+                : t.messages.kanaResidueMajor,
             )
             .replace("{count}", String(kanaCount)),
           srcPreview: srcText.substring(0, 100),
@@ -276,8 +278,10 @@ export function ResultChecker({
       // 5. 检测行数不匹配 - 分级处理 (阈值 10%)
       const effectiveSrcLines = getEffectiveLineCount(srcText);
       const effectiveDstLines = getEffectiveLineCount(dstText);
-      const srcLineCount = effectiveSrcLines > 0 ? effectiveSrcLines : block.srcLines;
-      const dstLineCount = effectiveDstLines > 0 ? effectiveDstLines : block.dstLines;
+      const srcLineCount =
+        effectiveSrcLines > 0 ? effectiveSrcLines : block.srcLines;
+      const dstLineCount =
+        effectiveDstLines > 0 ? effectiveDstLines : block.dstLines;
       if (srcLineCount && dstLineCount) {
         const diff = Math.abs(srcLineCount - dstLineCount);
         const pct = diff / Math.max(srcLineCount, 1);
@@ -491,9 +495,7 @@ export function ResultChecker({
             <div>
               <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
               <p>{t.noCacheTitle}</p>
-              <p className="text-sm mt-2 opacity-70">
-                {t.noCacheDesc}
-              </p>
+              <p className="text-sm mt-2 opacity-70">{t.noCacheDesc}</p>
             </div>
             {loadError && (
               <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600">
@@ -627,10 +629,7 @@ export function ResultChecker({
       <Card className="flex-1 overflow-hidden flex flex-col">
         <CardHeader className="py-3 border-b border-border">
           <CardTitle className="text-sm font-medium">
-            {t.resultsTitle.replace(
-              "{count}",
-              String(filteredIssues.length),
-            )}
+            {t.resultsTitle.replace("{count}", String(filteredIssues.length))}
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0 flex-1 overflow-y-auto">

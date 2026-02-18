@@ -1,3 +1,9 @@
 id: line_tolerant
-name: Tolerant Line Policy
+name: 默认行配置
 type: tolerant
+options:
+  on_mismatch: retry
+  trim: true
+  similarity_threshold: 0.8
+  checks:
+    - similarity

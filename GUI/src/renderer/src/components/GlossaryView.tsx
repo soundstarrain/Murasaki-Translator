@@ -52,10 +52,7 @@ export function GlossaryView({ lang }: { lang: Language }) {
   } | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const pushNotice = (
-    type: "info" | "warning" | "error",
-    message: string,
-  ) => {
+  const pushNotice = (type: "info" | "warning" | "error", message: string) => {
     setNotice({ type, message });
     if (noticeTimerRef.current) {
       clearTimeout(noticeTimerRef.current);
@@ -535,38 +532,39 @@ export function GlossaryView({ lang }: { lang: Language }) {
         </div>
       </div>
 
-      {notice && (() => {
-        const noticeConfig = {
-          info: {
-            className: "bg-blue-500/10 border-blue-500/30 text-blue-600",
-            icon: Sparkles,
-          },
-          warning: {
-            className: "bg-amber-500/10 border-amber-500/30 text-amber-600",
-            icon: AlertTriangle,
-          },
-          error: {
-            className: "bg-red-500/10 border-red-500/30 text-red-600",
-            icon: AlertTriangle,
-          },
-        }[notice.type];
-        const NoticeIcon = noticeConfig.icon;
-        return (
-          <div
-            className={`mb-4 rounded-lg border px-3 py-2 text-xs flex items-start gap-2 ${noticeConfig.className}`}
-          >
-            <NoticeIcon className="w-3.5 h-3.5 mt-0.5" />
-            <span className="flex-1 leading-relaxed">{notice.message}</span>
-            <button
-              type="button"
-              onClick={() => setNotice(null)}
-              className="ml-auto text-current/70 hover:text-current"
+      {notice &&
+        (() => {
+          const noticeConfig = {
+            info: {
+              className: "bg-blue-500/10 border-blue-500/30 text-blue-600",
+              icon: Sparkles,
+            },
+            warning: {
+              className: "bg-amber-500/10 border-amber-500/30 text-amber-600",
+              icon: AlertTriangle,
+            },
+            error: {
+              className: "bg-red-500/10 border-red-500/30 text-red-600",
+              icon: AlertTriangle,
+            },
+          }[notice.type];
+          const NoticeIcon = noticeConfig.icon;
+          return (
+            <div
+              className={`mb-4 rounded-lg border px-3 py-2 text-xs flex items-start gap-2 ${noticeConfig.className}`}
             >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        );
-      })()}
+              <NoticeIcon className="w-3.5 h-3.5 mt-0.5" />
+              <span className="flex-1 leading-relaxed">{notice.message}</span>
+              <button
+                type="button"
+                onClick={() => setNotice(null)}
+                className="ml-auto text-current/70 hover:text-current"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          );
+        })()}
 
       {/* Format Description */}
       <div className="mb-4 p-4 bg-card border border-border/60 rounded-2xl shadow-sm text-xs overflow-hidden shrink-0">
@@ -588,7 +586,8 @@ export function GlossaryView({ lang }: { lang: Language }) {
                 <div className="flex items-start gap-2 text-[10px] text-muted-foreground/80 bg-primary/5 p-2 rounded-lg border border-primary/10">
                   <Sparkles className="w-3 h-3 text-primary mt-0.5 shrink-0" />
                   <span>
-                    <strong>{t.glossaryView.smartAdaptTitle}</strong>: {t.glossaryView.smartAdaptDesc}
+                    <strong>{t.glossaryView.smartAdaptTitle}</strong>:{" "}
+                    {t.glossaryView.smartAdaptDesc}
                   </span>
                 </div>
               </div>
@@ -602,7 +601,9 @@ export function GlossaryView({ lang }: { lang: Language }) {
                 </span>
                 <div className="w-1 h-1 rounded-full bg-primary/40" />
               </div>
-              <pre className="flex-1 bg-secondary/30 p-2.5 rounded-xl border border-border/50 font-mono text-[9px] text-primary/80 overflow-y-auto max-h-[70px] scrollbar-none">{t.glossaryView.exampleDict}</pre>
+              <pre className="flex-1 bg-secondary/30 p-2.5 rounded-xl border border-border/50 font-mono text-[9px] text-primary/80 overflow-y-auto max-h-[70px] scrollbar-none">
+                {t.glossaryView.exampleDict}
+              </pre>
             </div>
             <div className="space-y-1.5 flex flex-col min-w-0">
               <div className="flex items-center justify-between px-1">
@@ -611,7 +612,9 @@ export function GlossaryView({ lang }: { lang: Language }) {
                 </span>
                 <div className="w-1 h-1 rounded-full bg-primary/40" />
               </div>
-              <pre className="flex-1 bg-secondary/30 p-2.5 rounded-xl border border-border/50 font-mono text-[9px] text-primary/80 overflow-y-auto max-h-[70px] scrollbar-none">{t.glossaryView.exampleList}</pre>
+              <pre className="flex-1 bg-secondary/30 p-2.5 rounded-xl border border-border/50 font-mono text-[9px] text-primary/80 overflow-y-auto max-h-[70px] scrollbar-none">
+                {t.glossaryView.exampleList}
+              </pre>
             </div>
           </div>
         </div>

@@ -39,7 +39,9 @@ export type View =
 function AppContent() {
   const [lang, setLang] = useState<Language>(() => {
     const stored = localStorage.getItem("app_lang");
-    return stored === "zh" || stored === "en" || stored === "jp" ? stored : "zh";
+    return stored === "zh" || stored === "en" || stored === "jp"
+      ? stored
+      : "zh";
   });
   const [view, setView] = useState<View>("dashboard");
   const [proofreadHasChanges, setProofreadHasChanges] = useState(false);
@@ -135,7 +137,9 @@ function AppContent() {
           }}
         />
       )}
-      {view === "model" && <ModelView lang={lang} remoteRuntime={remoteRuntime} />}
+      {view === "model" && (
+        <ModelView lang={lang} remoteRuntime={remoteRuntime} />
+      )}
       {view === "glossary" && <GlossaryView lang={lang} />}
       {view === "service" && (
         <ServiceView lang={lang} remoteRuntime={remoteRuntime} />

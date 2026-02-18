@@ -152,7 +152,9 @@ const mapRemoteApiError = (
   }
 };
 
-const loadCachedSnapshot = (notice: string): {
+const loadCachedSnapshot = (
+  notice: string,
+): {
   runtime: RemoteRuntimeStatus;
   network: RemoteNetworkStatus;
   diagnostics: RemoteDiagnostics;
@@ -255,8 +257,14 @@ export function useRemoteRuntime(lang: Language): UseRemoteRuntimeResult {
             api.remoteDiagnostics(),
           ]);
 
-        const nextRuntime = toRuntime(statusResult?.data, remoteText.noticeDefault);
-        const nextNetwork = toNetwork(networkResult?.data, remoteText.noticeDefault);
+        const nextRuntime = toRuntime(
+          statusResult?.data,
+          remoteText.noticeDefault,
+        );
+        const nextNetwork = toNetwork(
+          networkResult?.data,
+          remoteText.noticeDefault,
+        );
         const nextDiagnostics = toDiagnostics(
           diagnosticsResult?.data,
           remoteText.noticeDefault,

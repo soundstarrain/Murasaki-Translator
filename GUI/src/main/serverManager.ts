@@ -212,8 +212,7 @@ export class ServerManager {
 
     const candidates: string[] = [
       ...(is.dev && envPython ? [envPython] : []),
-      ...(
-      process.platform === "win32"
+      ...(process.platform === "win32"
         ? [
             join(middlewareDir, ".venv", "Scripts", "python.exe"),
             join(middlewareDir, "python_env", "python.exe"),
@@ -247,7 +246,9 @@ export class ServerManager {
 
   private resolvePythonPath(middlewareDir: string): string {
     const candidates = this.resolvePythonPathCandidates(middlewareDir);
-    return candidates[0] || (process.platform === "win32" ? "python" : "python3");
+    return (
+      candidates[0] || (process.platform === "win32" ? "python" : "python3")
+    );
   }
 
   private resolveModelPath(modelPath: string, middlewareDir: string): string {
@@ -255,7 +256,10 @@ export class ServerManager {
     let effectiveModelPath = modelPath;
     const middlewareRelativePrefix = /^middleware[\\/]?/;
     if (middlewareRelativePrefix.test(effectiveModelPath)) {
-      const relativePart = effectiveModelPath.replace(middlewareRelativePrefix, "");
+      const relativePart = effectiveModelPath.replace(
+        middlewareRelativePrefix,
+        "",
+      );
       effectiveModelPath = resolve(middlewareDir, relativePart);
     } else if (!isAbsolute(effectiveModelPath)) {
       const candidatePaths = [
@@ -485,7 +489,9 @@ sys.exit(0 if not missing else 3)
     });
   }
 
-  private async waitForApiReady(timeoutMs: number): Promise<{ ok: boolean; error?: string }> {
+  private async waitForApiReady(
+    timeoutMs: number,
+  ): Promise<{ ok: boolean; error?: string }> {
     const deadline = Date.now() + timeoutMs;
     let lastError = "Unknown startup error";
 
@@ -536,14 +542,22 @@ sys.exit(0 if not missing else 3)
     this.deviceMode = config?.deviceMode || "auto";
 
     if (!this.model) {
-      return { success: false, error: "Model is required for local API daemon." };
+      return {
+        success: false,
+        error: "Model is required for local API daemon.",
+      };
     }
 
     const requestedHost = this.parseHost(config?.host);
-    const customPort = config?.port ? Number.parseInt(String(config.port), 10) : 8000;
+    const customPort = config?.port
+      ? Number.parseInt(String(config.port), 10)
+      : 8000;
     const preferredPort =
       Number.isFinite(customPort) && customPort > 0 ? customPort : 8000;
-    const selectedPort = await this.pickAvailablePort(preferredPort, requestedHost);
+    const selectedPort = await this.pickAvailablePort(
+      preferredPort,
+      requestedHost,
+    );
 
     if (!selectedPort) {
       return {
@@ -597,8 +611,14 @@ sys.exit(0 if not missing else 3)
     }
     if (!depCheck.ok) {
       const missingText =
-        depCheck.missing.length > 0 ? depCheck.missing.join(", ") : "fastapi/uvicorn stack";
-      const requirementsPath = join(middlewareDir, "server", "requirements.txt");
+        depCheck.missing.length > 0
+          ? depCheck.missing.join(", ")
+          : "fastapi/uvicorn stack";
+      const requirementsPath = join(
+        middlewareDir,
+        "server",
+        "requirements.txt",
+      );
       return {
         success: false,
         error: `Missing Python dependencies (${missingText}). Run: "${pythonPath}" -m pip install -r "${requirementsPath}". Python candidates: ${pythonCandidates.join(", ")}`,
@@ -608,7 +628,9 @@ sys.exit(0 if not missing else 3)
     this.apiKey = providedApiKey || randomBytes(16).toString("hex");
     const configuredCtx = this.parseOptionalInteger(config?.ctxSize);
     const configuredGpuLayers = this.parseOptionalInteger(config?.gpuLayers);
-    const configuredBatchSize = this.parseOptionalInteger(config?.physicalBatchSize);
+    const configuredBatchSize = this.parseOptionalInteger(
+      config?.physicalBatchSize,
+    );
     const configuredParallel = this.parseOptionalInteger(config?.concurrency);
     const configuredSeed = this.parseOptionalInteger(config?.seed);
     const configuredKvCacheType = String(config?.kvCacheType || "").trim();
@@ -654,7 +676,9 @@ sys.exit(0 if not missing else 3)
       args.push("--seed", String(configuredSeed));
     }
 
-    this.appendLog(`[Daemon] Local API mode enabled on ${this.host}:${this.port}`);
+    this.appendLog(
+      `[Daemon] Local API mode enabled on ${this.host}:${this.port}`,
+    );
     this.appendLog(`[Daemon] Using model: ${effectiveModelPath}`);
     this.appendLog(`[Daemon] Python: ${pythonPath}`);
     this.appendLog(`[Daemon] API key: ${this.maskApiKey(this.apiKey)}`);
@@ -765,7 +789,11 @@ sys.exit(0 if not missing else 3)
       const failureLogs = this.logs.slice(-20);
       const compactFailureTail = failureLogs
         .slice(-8)
-        .map((line) => String(line || "").replace(/\s+/g, " ").trim())
+        .map((line) =>
+          String(line || "")
+            .replace(/\s+/g, " ")
+            .trim(),
+        )
         .filter(Boolean)
         .join(" || ");
       const failureText = failureLogs.join(" ").toLowerCase();
@@ -777,7 +805,10 @@ sys.exit(0 if not missing else 3)
       const retryDepth = Number(config?._daemonRetryDepth || 0);
 
       if (looksLikeBindConflict && retryDepth < 3) {
-        const retryPort = await this.pickAvailablePort(this.port + 1, this.host);
+        const retryPort = await this.pickAvailablePort(
+          this.port + 1,
+          this.host,
+        );
         if (retryPort && retryPort !== this.port) {
           this.appendLog(
             `[Port] Bind conflict detected on ${this.port}, retrying with ${retryPort}.`,
@@ -839,7 +870,10 @@ sys.exit(0 if not missing else 3)
       } else {
         await this.killUnixProcessTree(managedProcess, pid);
       }
-    } else if (managedProcess.exitCode === null && managedProcess.signalCode === null) {
+    } else if (
+      managedProcess.exitCode === null &&
+      managedProcess.signalCode === null
+    ) {
       await this.waitForProcessClose(managedProcess, 1500);
     }
 
@@ -869,7 +903,11 @@ sys.exit(0 if not missing else 3)
     this.apiKey = null;
   }
 
-  async warmup(): Promise<{ success: boolean; durationMs?: number; error?: string }> {
+  async warmup(): Promise<{
+    success: boolean;
+    durationMs?: number;
+    error?: string;
+  }> {
     if (!this.process) {
       return { success: false, error: "Server not running" };
     }
@@ -889,24 +927,25 @@ sys.exit(0 if not missing else 3)
 
       if (status.body?.model_loaded) {
         const durationMs = Date.now() - startedAt;
-        this.appendLog(`Warmup skipped: model already loaded (${durationMs}ms)`);
+        this.appendLog(
+          `Warmup skipped: model already loaded (${durationMs}ms)`,
+        );
         return { success: true, durationMs };
       }
 
-      const createTask = await this.requestJson<{ task_id?: string; message?: string }>(
-        "/api/v1/translate",
-        "POST",
-        {
-          text: "Warmup request",
-          model: this.model,
-          line_check: false,
-          parallel: 1,
-          temperature: 0.1,
-          save_cache: false,
-          save_cot: false,
-          save_summary: false,
-        },
-      );
+      const createTask = await this.requestJson<{
+        task_id?: string;
+        message?: string;
+      }>("/api/v1/translate", "POST", {
+        text: "Warmup request",
+        model: this.model,
+        line_check: false,
+        parallel: 1,
+        temperature: 0.1,
+        save_cache: false,
+        save_cot: false,
+        save_summary: false,
+      });
 
       if (createTask.statusCode >= 400 || !createTask.body?.task_id) {
         return {
@@ -941,7 +980,8 @@ sys.exit(0 if not missing else 3)
         if (state === "failed" || state === "cancelled") {
           return {
             success: false,
-            error: taskStatus.body?.error || `Warmup ended with status ${state}`,
+            error:
+              taskStatus.body?.error || `Warmup ended with status ${state}`,
           };
         }
 

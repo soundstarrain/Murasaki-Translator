@@ -217,4 +217,3 @@ VARIANT_PAIRS.forEach((pair) => {
 export function getVariants(char: string): Set<string> | undefined {
   return VARIANT_MAP.get(char);
 }
-

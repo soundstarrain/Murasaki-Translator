@@ -67,7 +67,10 @@ const maskApiKey = (value: string): string => {
   return `${normalized.slice(0, 4)}...${normalized.slice(-4)}`;
 };
 
-export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewProps) {
+export function ServiceView({
+  lang,
+  remoteRuntime: remoteState,
+}: ServiceViewProps) {
   const t = translations[lang];
   const s = t.serviceView;
   const { alertProps, showAlert, showConfirm } = useAlertModal();
@@ -88,7 +91,9 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
     () => localStorage.getItem("config_daemon_mode") === "true",
   );
   const [localPort, setLocalPort] = useState(
-    () => localStorage.getItem("config_local_port") || String(DEFAULT_LOCAL_API_PORT),
+    () =>
+      localStorage.getItem("config_local_port") ||
+      String(DEFAULT_LOCAL_API_PORT),
   );
   const [localHost, setLocalHost] = useState(
     () => localStorage.getItem("config_local_host") || "127.0.0.1",
@@ -97,13 +102,15 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
   const [isStartingServer, setIsStartingServer] = useState(false);
   const [isWarming, setIsWarming] = useState(false);
   const [isTestingRemote, setIsTestingRemote] = useState(false);
-  const [remotePanelExpanded, setRemotePanelExpanded] = useState(
-    () => parseBooleanStorage(REMOTE_PANEL_EXPANDED_STORAGE_KEY, true),
+  const [remotePanelExpanded, setRemotePanelExpanded] = useState(() =>
+    parseBooleanStorage(REMOTE_PANEL_EXPANDED_STORAGE_KEY, true),
   );
-  const [autoConnectRemoteAfterDaemonStart, setAutoConnectRemoteAfterDaemonStart] =
-    useState(() =>
-      parseBooleanStorage(LOCAL_DAEMON_AUTO_REMOTE_STORAGE_KEY, true),
-    );
+  const [
+    autoConnectRemoteAfterDaemonStart,
+    setAutoConnectRemoteAfterDaemonStart,
+  ] = useState(() =>
+    parseBooleanStorage(LOCAL_DAEMON_AUTO_REMOTE_STORAGE_KEY, true),
+  );
   const [serviceGuideExpanded, setServiceGuideExpanded] = useState(
     () => localStorage.getItem(SERVICE_GUIDE_EXPANDED_STORAGE_KEY) === "true",
   );
@@ -185,14 +192,14 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
         } catch (error) {
           console.error("Server status check failed", error);
           const now = Date.now();
-            if (now - lastStatusErrorRef.current > 10000) {
-              lastStatusErrorRef.current = now;
-              pushNotice({
-                type: "warning",
-                message: s.statusFetchFailed,
-              });
-            }
+          if (now - lastStatusErrorRef.current > 10000) {
+            lastStatusErrorRef.current = now;
+            pushNotice({
+              type: "warning",
+              message: s.statusFetchFailed,
+            });
           }
+        }
       }
     };
     if (daemonMode) {
@@ -212,7 +219,10 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
   }, [runtime.session?.url]);
 
   const pushNotice = useCallback(
-    (next: { type: "info" | "warning" | "error" | "success"; message: string }) => {
+    (next: {
+      type: "info" | "warning" | "error" | "success";
+      message: string;
+    }) => {
       setInlineNotice(next);
       if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
       noticeTimerRef.current = setTimeout(() => setInlineNotice(null), 5200);
@@ -251,8 +261,7 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
     if (daemonMode && !nextValue && serverStatus?.running) {
       showConfirm({
         title: s.switchToAutoTitle,
-        description:
-          s.switchToAutoDesc,
+        description: s.switchToAutoDesc,
         variant: "warning",
         confirmText: s.switchToAutoConfirm,
         cancelText: t.common.cancel,
@@ -295,7 +304,8 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
       min: 1,
     }),
     seed: parseOptionalIntegerStorage("config_seed"),
-    deviceMode: (localStorage.getItem("config_device_mode") as "auto" | "cpu") || "auto",
+    deviceMode:
+      (localStorage.getItem("config_device_mode") as "auto" | "cpu") || "auto",
     gpuDeviceId: localStorage.getItem("config_gpu_device_id") || "",
     autoConnectRemote: autoConnectRemoteAfterDaemonStart,
   });
@@ -316,8 +326,8 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
       const parsedLocalPort = Number.parseInt(localPort, 10);
       const preferredPort =
         Number.isFinite(parsedLocalPort) &&
-          parsedLocalPort >= 1 &&
-          parsedLocalPort <= 65535
+        parsedLocalPort >= 1 &&
+        parsedLocalPort <= 65535
           ? parsedLocalPort
           : DEFAULT_LOCAL_API_PORT;
       if (String(preferredPort) !== localPort) {
@@ -334,7 +344,11 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
           if (Array.isArray(logs) && logs.length > 0) {
             const compactTail = logs
               .slice(-8)
-              .map((line: unknown) => String(line || "").replace(/\s+/g, " ").trim())
+              .map((line: unknown) =>
+                String(line || "")
+                  .replace(/\s+/g, " ")
+                  .trim(),
+              )
               .filter(Boolean)
               .join(" || ");
             if (compactTail && !errorDetail.includes("| Tail:")) {
@@ -358,11 +372,18 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
       }
       if (startResult?.apiKey) {
         setLocalDaemonApiKey(startResult.apiKey);
-        localStorage.setItem(LOCAL_DAEMON_API_KEY_STORAGE_KEY, startResult.apiKey);
+        localStorage.setItem(
+          LOCAL_DAEMON_API_KEY_STORAGE_KEY,
+          startResult.apiKey,
+        );
       }
       // 自动接入远程统一链路
       let autoConnected = false;
-      if (autoConnectRemoteAfterDaemonStart && startResult?.endpoint && !isRemoteConnected) {
+      if (
+        autoConnectRemoteAfterDaemonStart &&
+        startResult?.endpoint &&
+        !isRemoteConnected
+      ) {
         const endpoint = startResult.endpoint;
         const key = startResult.apiKey || "";
         // 同步表单字段
@@ -389,17 +410,21 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
         } catch (error) {
           pushNotice({
             type: "warning",
-            message: s.autoConnectFailDetail.replace(
-              "{error}",
-              String(error),
-            ),
+            message: s.autoConnectFailDetail.replace("{error}", String(error)),
           });
         }
-      } else if (autoConnectRemoteAfterDaemonStart && startResult?.endpoint && isRemoteConnected) {
+      } else if (
+        autoConnectRemoteAfterDaemonStart &&
+        startResult?.endpoint &&
+        isRemoteConnected
+      ) {
         // 已有远程连接时不覆盖，仅同步表单
         if (startResult.endpoint) {
           setServerUrl(startResult.endpoint);
-          localStorage.setItem(REMOTE_API_URL_STORAGE_KEY, startResult.endpoint);
+          localStorage.setItem(
+            REMOTE_API_URL_STORAGE_KEY,
+            startResult.endpoint,
+          );
           localStorage.removeItem("config_server");
         }
         if (startResult.apiKey) {
@@ -411,7 +436,10 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
       const detailParts: string[] = [];
       if (startResult?.portChanged && startResult?.selectedPort) {
         setLocalPort(String(startResult.selectedPort));
-        localStorage.setItem("config_local_port", String(startResult.selectedPort));
+        localStorage.setItem(
+          "config_local_port",
+          String(startResult.selectedPort),
+        );
         detailParts.push(
           s.portChangedNotice
             .replace(
@@ -420,21 +448,24 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
             )
             .replace("{selected}", String(startResult.selectedPort))
             .replace("{from}", String(preferredPort))
-            .replace(
-              "{to}",
-              String(preferredPort + LOCAL_API_PORT_SCAN_RANGE),
-            ),
+            .replace("{to}", String(preferredPort + LOCAL_API_PORT_SCAN_RANGE)),
         );
       } else if (startResult?.selectedPort) {
         setLocalPort(String(startResult.selectedPort));
-        localStorage.setItem("config_local_port", String(startResult.selectedPort));
+        localStorage.setItem(
+          "config_local_port",
+          String(startResult.selectedPort),
+        );
       }
       if (startResult?.endpoint) {
         detailParts.push(
           s.localEndpoint.replace("{value}", startResult.endpoint),
         );
       }
-      if (Array.isArray(startResult?.lanEndpoints) && startResult.lanEndpoints.length > 0) {
+      if (
+        Array.isArray(startResult?.lanEndpoints) &&
+        startResult.lanEndpoints.length > 0
+      ) {
         detailParts.push(
           s.lanEndpoint.replace("{value}", startResult.lanEndpoints[0]),
         );
@@ -491,8 +522,7 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
       } else {
         pushNotice({
           type: "warning",
-          message:
-            result?.error || s.warmupFailHint,
+          message: result?.error || s.warmupFailHint,
         });
       }
     } catch (error) {
@@ -566,7 +596,9 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
           const ui = mapApiError(disconnectResult, s.disconnectFail);
           showAlert({
             title: ui.title,
-            description: ui.hint ? `${ui.description} ${ui.hint}` : ui.description,
+            description: ui.hint
+              ? `${ui.description} ${ui.hint}`
+              : ui.description,
             variant: "destructive",
           });
         }
@@ -595,7 +627,9 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
             .replace("{source}", sourceHint)
             .replace(
               "{version}",
-              result?.data?.version ? `（服务版本 v${result.data.version}）` : "",
+              result?.data?.version
+                ? `（服务版本 v${result.data.version}）`
+                : "",
             ),
           variant: "success",
         });
@@ -603,7 +637,9 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
         const ui = mapApiError(result, s.connectFail);
         showAlert({
           title: ui.title,
-          description: ui.hint ? `${ui.description} ${ui.hint}` : ui.description,
+          description: ui.hint
+            ? `${ui.description} ${ui.hint}`
+            : ui.description,
           variant: "destructive",
         });
       }
@@ -669,39 +705,39 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
             <RefreshCw className="w-5 h-5 animate-spin text-muted-foreground" />
           )}
         </h2>
-        <p className="text-xs text-muted-foreground mt-2">
-          {s.subtitle}
-        </p>
+        <p className="text-xs text-muted-foreground mt-2">{s.subtitle}</p>
       </div>
-      {inlineNotice && inlineNoticeConfig && (() => {
-        const NoticeIcon = inlineNoticeConfig.icon;
-        return (
-          <div className="px-8 -mt-2 pb-4">
-            <div
-              className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${inlineNoticeConfig.className}`}
-            >
-              <NoticeIcon className="w-3.5 h-3.5 mt-0.5" />
-              <span className="flex-1 leading-relaxed">{inlineNotice.message}</span>
-              <button
-                type="button"
-                onClick={() => setInlineNotice(null)}
-                className="ml-auto text-current/70 hover:text-current"
+      {inlineNotice &&
+        inlineNoticeConfig &&
+        (() => {
+          const NoticeIcon = inlineNoticeConfig.icon;
+          return (
+            <div className="px-8 -mt-2 pb-4">
+              <div
+                className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${inlineNoticeConfig.className}`}
               >
-                <X className="w-3.5 h-3.5" />
-              </button>
+                <NoticeIcon className="w-3.5 h-3.5 mt-0.5" />
+                <span className="flex-1 leading-relaxed">
+                  {inlineNotice.message}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setInlineNotice(null)}
+                  className="ml-auto text-current/70 hover:text-current"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()}
       <div className="flex-1 overflow-y-auto px-8 pb-4 scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent hover:scrollbar-thumb-muted-foreground/30">
         <div className="grid gap-6">
           <div className="rounded-lg border border-border/60 bg-muted/40 px-3 py-2">
             <div className="flex flex-wrap items-center gap-2 text-[11px]">
               <Info className="w-3.5 h-3.5 text-blue-500" />
               <span className="font-medium">{s.guideTitle}</span>
-              <span className="text-muted-foreground">
-                {s.guideSubtitle}
-              </span>
+              <span className="text-muted-foreground">{s.guideSubtitle}</span>
               <button
                 type="button"
                 className="ml-auto inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-xs hover:bg-secondary"
@@ -775,7 +811,9 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <span className="text-sm font-semibold">{s.localTitle}</span>
+                    <span className="text-sm font-semibold">
+                      {s.localTitle}
+                    </span>
                     <p className="text-[10px] text-muted-foreground mt-0.5">
                       {s.localDesc}
                     </p>
@@ -783,19 +821,21 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                   <div className="flex bg-secondary rounded-lg p-0.5 border">
                     <button
                       onClick={() => void toggleDaemonMode(false)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${!daemonMode
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                        }`}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                        !daemonMode
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
                     >
                       {s.modeAuto}
                     </button>
                     <button
                       onClick={() => void toggleDaemonMode(true)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${daemonMode
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                        }`}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                        daemonMode
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
                     >
                       {s.modeFixed}
                     </button>
@@ -803,9 +843,7 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                 </div>
 
                 <p className="text-xs text-muted-foreground">
-                  {daemonMode
-                    ? s.modeFixedDesc
-                    : s.modeAutoDesc}
+                  {daemonMode ? s.modeFixedDesc : s.modeAutoDesc}
                 </p>
 
                 {daemonMode && (
@@ -827,7 +865,10 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                               .replace(/[^\d]/g, "")
                               .slice(0, 5);
                             setLocalPort(nextValue);
-                            localStorage.setItem("config_local_port", nextValue);
+                            localStorage.setItem(
+                              "config_local_port",
+                              nextValue,
+                            );
                           }}
                         />
                         <p className="text-[11px] leading-5 text-muted-foreground">
@@ -847,7 +888,10 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                           value={localHost}
                           onChange={(event) => {
                             setLocalHost(event.target.value);
-                            localStorage.setItem("config_local_host", event.target.value);
+                            localStorage.setItem(
+                              "config_local_host",
+                              event.target.value,
+                            );
                           }}
                         >
                           <option value="127.0.0.1">{s.hostLocal}</option>
@@ -867,7 +911,9 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                             size="sm"
                             variant="outline"
                             className="h-6 px-2 text-[10px] gap-1"
-                            onClick={() => setShowLocalApiKey((value) => !value)}
+                            onClick={() =>
+                              setShowLocalApiKey((value) => !value)
+                            }
                           >
                             {showLocalApiKey ? (
                               <>
@@ -913,7 +959,10 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                           const nextValue = event.target.value;
                           setLocalDaemonApiKey(nextValue);
                           setLocalApiKeyCopied(false);
-                          localStorage.setItem(LOCAL_DAEMON_API_KEY_STORAGE_KEY, nextValue);
+                          localStorage.setItem(
+                            LOCAL_DAEMON_API_KEY_STORAGE_KEY,
+                            nextValue,
+                          );
                         }}
                       />
                       <p className="text-[11px] text-muted-foreground leading-5">
@@ -982,11 +1031,16 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                             serverStatus.lanEndpoints.length > 0 && (
                               <div className="space-y-0.5">
                                 <div>{s.lanApiLabel}</div>
-                                {serverStatus.lanEndpoints.map((url: string) => (
-                                  <div key={url} className="font-mono break-all">
-                                    {url}
-                                  </div>
-                                ))}
+                                {serverStatus.lanEndpoints.map(
+                                  (url: string) => (
+                                    <div
+                                      key={url}
+                                      className="font-mono break-all"
+                                    >
+                                      {url}
+                                    </div>
+                                  ),
+                                )}
                               </div>
                             )}
                           <div className="space-y-0.5">
@@ -1000,7 +1054,8 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                               <div>
                                 {s.localApiKeyShort}{" "}
                                 <span className="font-mono">
-                                  {serverStatus.apiKeyHint || maskApiKey(effectiveLocalApiKey)}
+                                  {serverStatus.apiKeyHint ||
+                                    maskApiKey(effectiveLocalApiKey)}
                                 </span>
                               </div>
                             )}
@@ -1077,7 +1132,10 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                       onChange={(event) => {
                         const nextValue = event.target.value;
                         setServerUrl(nextValue);
-                        localStorage.setItem(REMOTE_API_URL_STORAGE_KEY, nextValue);
+                        localStorage.setItem(
+                          REMOTE_API_URL_STORAGE_KEY,
+                          nextValue,
+                        );
                         localStorage.removeItem("config_server");
                       }}
                     />
@@ -1139,7 +1197,10 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                         const nextValue = event.target.value;
                         setApiKey(nextValue);
                         setRemoteApiKeyCopied(false);
-                        localStorage.setItem(REMOTE_API_KEY_STORAGE_KEY, nextValue);
+                        localStorage.setItem(
+                          REMOTE_API_KEY_STORAGE_KEY,
+                          nextValue,
+                        );
                       }}
                     />
                   </div>
@@ -1272,7 +1333,9 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                             {s.remoteActiveTasksLabel}
                           </span>
                           <span className="font-mono justify-self-end text-right">
-                            {runtime?.activeTasks ?? diagnostics?.activeTaskId ?? 0}
+                            {runtime?.activeTasks ??
+                              diagnostics?.activeTaskId ??
+                              0}
                           </span>
                         </div>
                         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-start gap-3">
@@ -1311,7 +1374,7 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                           </span>
                           <span className="font-mono justify-self-end text-right break-all">
                             {Array.isArray(runtime?.capabilities) &&
-                              runtime.capabilities.length > 0
+                            runtime.capabilities.length > 0
                               ? runtime.capabilities.join(", ")
                               : s.none}
                           </span>
@@ -1330,7 +1393,9 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                           </span>
                           <span className="font-mono justify-self-end text-right">
                             {network.lastSyncAt
-                              ? new Date(network.lastSyncAt).toLocaleTimeString()
+                              ? new Date(
+                                  network.lastSyncAt,
+                                ).toLocaleTimeString()
                               : "--"}
                           </span>
                         </div>
@@ -1339,7 +1404,8 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                             {s.remoteLatencyLabel}
                           </span>
                           <span className="font-mono justify-self-end text-right">
-                            {network.lastLatencyMs ?? "--"} ms / {network.avgLatencyMs ?? "--"} ms
+                            {network.lastLatencyMs ?? "--"} ms /{" "}
+                            {network.avgLatencyMs ?? "--"} ms
                           </span>
                         </div>
                         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-start gap-3">
@@ -1347,7 +1413,8 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                             {s.remoteStatusInFlightLabel}
                           </span>
                           <span className="font-mono justify-self-end text-right">
-                            {network.lastStatusCode ?? "--"} / {network.inFlightRequests ?? 0}
+                            {network.lastStatusCode ?? "--"} /{" "}
+                            {network.inFlightRequests ?? 0}
                           </span>
                         </div>
                         <div className="text-[10px] text-muted-foreground leading-relaxed">
@@ -1360,7 +1427,9 @@ export function ServiceView({ lang, remoteRuntime: remoteState }: ServiceViewPro
                             <button
                               type="button"
                               className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] hover:bg-secondary"
-                              onClick={() => setRemoteNoticeExpanded((value) => !value)}
+                              onClick={() =>
+                                setRemoteNoticeExpanded((value) => !value)
+                              }
                             >
                               {remoteNoticeExpanded
                                 ? s.noticeCollapse

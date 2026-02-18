@@ -1,0 +1,5 @@
+id: parser_line_strict
+name: Line Strict Parser
+type: line_strict
+options:
+  multi_line: join

@@ -49,7 +49,8 @@ export function LogViewerModal({
       : mode === "terminal"
         ? t.subtitleTerminal
         : filePath || t.subtitleFileFallback);
-  const Icon = mode === "server" ? Activity : mode === "terminal" ? Terminal : FileText;
+  const Icon =
+    mode === "server" ? Activity : mode === "terminal" ? Terminal : FileText;
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -71,7 +72,9 @@ export function LogViewerModal({
           setLogs(t.noFile);
         } else {
           // @ts-ignore
-          const result = await window.api?.readTextTail?.(filePath, { lineCount: 500 });
+          const result = await window.api?.readTextTail?.(filePath, {
+            lineCount: 500,
+          });
           if (result?.exists) {
             setLogs(result.content || t.logEmpty);
           } else {
@@ -129,7 +132,9 @@ export function LogViewerModal({
             </div>
             <div>
               <CardTitle className="text-base font-bold">{title}</CardTitle>
-              <p className="text-[11px] text-muted-foreground mt-0.5">{subtitle}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {subtitle}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -210,7 +215,9 @@ export function LogViewerModal({
         {/* Footer */}
         <div className="px-5 py-2.5 border-t border-border/50 bg-muted/30 flex items-center justify-between text-[10px] text-muted-foreground">
           <span>{t.footerHint}</span>
-          <span>{t.lines.replace("{count}", String(logs.split("\n").length))}</span>
+          <span>
+            {t.lines.replace("{count}", String(logs.split("\n").length))}
+          </span>
         </div>
       </Card>
     </div>

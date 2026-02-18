@@ -84,7 +84,9 @@ const LIBRARY_QUEUE_KEY = "library_queue";
 const FILE_QUEUE_KEY = "file_queue";
 const WATCH_FOLDERS_KEY = "watch_folders";
 const SUPPORTED_EXTENSIONS = [".txt", ".epub", ".srt", ".ass", ".ssa"];
-const WATCH_FILE_TYPES = SUPPORTED_EXTENSIONS.map((ext) => ext.replace(".", ""));
+const WATCH_FILE_TYPES = SUPPORTED_EXTENSIONS.map((ext) =>
+  ext.replace(".", ""),
+);
 
 // ============ Helpers ============
 
@@ -114,12 +116,14 @@ function getCachePath(
   const extMatch = filePath.match(/\.[^.]+$/);
   const ext = extMatch ? extMatch[0] : "";
   const modelName = getModelNameFromPath(modelPath);
-  const outputName = modelName ? `${baseName}_${modelName}${ext}` : `${baseName}${ext}`;
-  const sep =
-    dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
-  const joined = dir.endsWith("\\") || dir.endsWith("/")
-    ? `${dir}${outputName}`
-    : `${dir}${sep}${outputName}`;
+  const outputName = modelName
+    ? `${baseName}_${modelName}${ext}`
+    : `${baseName}${ext}`;
+  const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+  const joined =
+    dir.endsWith("\\") || dir.endsWith("/")
+      ? `${dir}${outputName}`
+      : `${dir}${sep}${outputName}`;
   return `${joined}.cache.json`;
 }
 
@@ -198,7 +202,8 @@ const texts = {
     batchConfig: "批量配置",
     batchConfigTitle: "批量配置 ({count} 个文件)",
     configDesc: "覆盖全局设置，为此文件指定独立参数",
-    configWarning: "修改前请确保您了解正在修改的内容，错误的配置可能导致翻译过程异常或结果质量下降。",
+    configWarning:
+      "修改前请确保您了解正在修改的内容，错误的配置可能导致翻译过程异常或结果质量下降。",
     useGlobal: "使用全局默认配置",
     useGlobalDesc: "取消勾选以自定义此文件的翻译参数",
     followGlobal: "跟随全局",
@@ -264,7 +269,8 @@ const texts = {
       script: "剧本模式",
       short: "单句模式",
     },
-    shortModeWarning: "短句模式会导致翻译效率和质量下降，建议使用轻小说或剧本模式。",
+    shortModeWarning:
+      "短句模式会导致翻译效率和质量下降，建议使用轻小说或剧本模式。",
     kvOptions: {
       f16: "F16 (原生质量)",
       q8_0: "Q8_0 (节约显存)",
@@ -339,9 +345,11 @@ const texts = {
     scanSubdirs: "Scan Subdirs",
     confirmClear: "Are you sure you want to clear the translation queue?",
     confirmRemoveTitle: "Confirm Remove",
-    confirmRemoveDesc: "Are you sure you want to remove this file from the queue?",
+    confirmRemoveDesc:
+      "Are you sure you want to remove this file from the queue?",
     confirmRemoveSelectedTitle: "Confirm Remove Selected",
-    confirmRemoveSelectedDesc: "Are you sure you want to remove the {count} selected files?",
+    confirmRemoveSelectedDesc:
+      "Are you sure you want to remove the {count} selected files?",
     supportedTypes: "Supports .txt .epub .srt .ass .ssa",
     queueTitle: "Translation Queue",
     emptyQueue: "Queue is empty",
@@ -365,7 +373,8 @@ const texts = {
     batchConfig: "Batch Config",
     batchConfigTitle: "Batch Config ({count} files)",
     configDesc: "Override global settings with file-specific parameters",
-    configWarning: "Please ensure you understand what you are modifying. Incorrect settings may cause translation errors or quality degradation.",
+    configWarning:
+      "Please ensure you understand what you are modifying. Incorrect settings may cause translation errors or quality degradation.",
     useGlobal: "Use Global Defaults",
     useGlobalDesc: "Uncheck to customize parameters for this file",
     followGlobal: "Use Global",
@@ -428,7 +437,8 @@ const texts = {
       script: "Script Mode (Galgame)",
       short: "Short Mode",
     },
-    shortModeWarning: "Short mode is only for isolated sentences. Use Novel or Script mode for documents.",
+    shortModeWarning:
+      "Short mode is only for isolated sentences. Use Novel or Script mode for documents.",
     kvOptions: {
       f16: "F16 (Native Quality)",
       q8_0: "Q8_0 (VRAM Saver)",
@@ -530,7 +540,8 @@ const texts = {
     batchConfig: "一括設定",
     batchConfigTitle: "一括設定 ({count} 件)",
     configDesc: "グローバル設定を上書きして個別パラメータを指定",
-    configWarning: "変更前に内容を理解していることを確認してください。誤った設定は翻訳の異常や品質低下につながる可能性があります。",
+    configWarning:
+      "変更前に内容を理解していることを確認してください。誤った設定は翻訳の異常や品質低下につながる可能性があります。",
     useGlobal: "グローバルデフォルトを使用",
     useGlobalDesc: "チェックを外すとこのファイルのパラメータをカスタマイズ",
     followGlobal: "グローバルに従う",
@@ -565,8 +576,7 @@ const texts = {
     alignmentMode: "補助アラインメント",
     saveCot: "CoT エクスポート",
     anchorCheck: "アンカーチェック",
-    anchorCheckDesc:
-      "EPUB/SRT/ASS/整列TXTの重要アンカー欠落時に自動再試行。",
+    anchorCheckDesc: "EPUB/SRT/ASS/整列TXTの重要アンカー欠落時に自動再試行。",
     anchorCheckRetries: "アンカー再試行回数",
     sectionStrategy: "翻訳方針とモデル",
     rulesProfileSection: "ルール設定",
@@ -593,7 +603,8 @@ const texts = {
       script: "スクリプトモード (ギャルゲー)",
       short: "短文モード",
     },
-    shortModeWarning: "短文モードは単文向けです。ドキュメントには小説またはスクリプトモードを推奨します。",
+    shortModeWarning:
+      "短文モードは単文向けです。ドキュメントには小説またはスクリプトモードを推奨します。",
     kvOptions: {
       f16: "F16 (ネイティブ品質)",
       q8_0: "Q8_0 (VRAM節約)",
@@ -651,7 +662,9 @@ export function FileConfigModal({
   const [config, setConfig] = useState<FileConfig>({ ...item.config });
   const isRemoteMode = Boolean(remoteRuntime?.isRemoteMode);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [availableRemoteModels, setAvailableRemoteModels] = useState<RemoteModelInfo[]>([]);
+  const [availableRemoteModels, setAvailableRemoteModels] = useState<
+    RemoteModelInfo[]
+  >([]);
   const [preProfiles, setPreProfiles] = useState<RuleProfileSummary[]>([]);
   const [postProfiles, setPostProfiles] = useState<RuleProfileSummary[]>([]);
 
@@ -955,7 +968,9 @@ export function FileConfigModal({
               </div>
               <select
                 value={
-                  !config.useGlobalDefaults && config.preset ? config.preset : ""
+                  !config.useGlobalDefaults && config.preset
+                    ? config.preset
+                    : ""
                 }
                 disabled={config.useGlobalDefaults}
                 onChange={(e) =>
@@ -1031,15 +1046,15 @@ export function FileConfigModal({
                 </option>
                 {isRemoteMode
                   ? availableRemoteModels.map((model) => (
-                    <option key={model.path} value={model.path}>
-                      {model.name || model.path}
-                    </option>
-                  ))
+                      <option key={model.path} value={model.path}>
+                        {model.name || model.path}
+                      </option>
+                    ))
                   : availableModels.map((model) => (
-                    <option key={model} value={model}>
-                      {model.replace(".gguf", "")}
-                    </option>
-                  ))}
+                      <option key={model} value={model}>
+                        {model.replace(".gguf", "")}
+                      </option>
+                    ))}
               </select>
             </div>
 
@@ -1506,7 +1521,6 @@ export function FileConfigModal({
                   />
                 </div>
               </div>
-
             </div>
           </div>
         </div>
@@ -1599,8 +1613,9 @@ export function LibraryView({
     "all" | "pending" | "completed" | "failed"
   >("all");
   const [showImportModal, setShowImportModal] = useState(false);
-  const [importPreview, setImportPreview] =
-    useState<QueueImportPreview | null>(null);
+  const [importPreview, setImportPreview] = useState<QueueImportPreview | null>(
+    null,
+  );
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const [showWatchModal, setShowWatchModal] = useState(false);
   const [watchFolders, setWatchFolders] = useState<WatchFolderConfig[]>(() => {
@@ -1631,7 +1646,10 @@ export function LibraryView({
   const containerRef = useRef<HTMLDivElement>(null);
 
   const pushNotice = useCallback(
-    (next: { type: "info" | "warning" | "error" | "success"; message: string }) => {
+    (next: {
+      type: "info" | "warning" | "error" | "success";
+      message: string;
+    }) => {
       setNotice(next);
       if (noticeTimerRef.current) {
         clearTimeout(noticeTimerRef.current);
@@ -1642,7 +1660,10 @@ export function LibraryView({
   );
   const watchNoticePrefix = t.watchNoticePrefix || "翻译监控: ";
   const pushWatchNotice = useCallback(
-    (next: { type: "info" | "warning" | "error" | "success"; message: string }) =>
+    (next: {
+      type: "info" | "warning" | "error" | "success";
+      message: string;
+    }) =>
       pushNotice({
         ...next,
         message: `${watchNoticePrefix}${next.message}`,
@@ -1749,7 +1770,9 @@ export function LibraryView({
       });
 
       if (!window.api?.scanDirectory) return;
-      const targets = watchFolders.filter((entry) => entry.enabled && entry.path);
+      const targets = watchFolders.filter(
+        (entry) => entry.enabled && entry.path,
+      );
       if (targets.length === 0) return;
 
       try {
@@ -1798,10 +1821,7 @@ export function LibraryView({
 
   // Add files
   const addFiles = useCallback(
-    (
-      paths: string[],
-      options?: { source?: "manual" | "watch" },
-    ) => {
+    (paths: string[], options?: { source?: "manual" | "watch" }) => {
       const existingPaths = new Set(queue.map((q) => q.path));
       const newItems: QueueItem[] = [];
       let skippedUnsupported = 0;
@@ -1815,13 +1835,7 @@ export function LibraryView({
           skippedUnsupported += 1;
           continue;
         }
-        if (
-          isLikelyTranslatedOutput(
-            path,
-            modelNames,
-            SUPPORTED_EXTENSIONS,
-          )
-        ) {
+        if (isLikelyTranslatedOutput(path, modelNames, SUPPORTED_EXTENSIONS)) {
           skippedTranslated += 1;
           continue;
         }
@@ -1846,8 +1860,7 @@ export function LibraryView({
         setQueue((prev) => [...prev, ...newItems]);
       }
 
-      const prefix =
-        options?.source === "watch" ? watchNoticePrefix : "";
+      const prefix = options?.source === "watch" ? watchNoticePrefix : "";
       const messages: string[] = [];
       if (newItems.length > 0) {
         messages.push(
@@ -1856,18 +1869,12 @@ export function LibraryView({
       }
       if (skippedTranslated > 0) {
         messages.push(
-          t.ignoredTranslated.replace(
-            "{count}",
-            String(skippedTranslated),
-          ),
+          t.ignoredTranslated.replace("{count}", String(skippedTranslated)),
         );
       }
       if (skippedUnsupported > 0) {
         messages.push(
-          t.ignoredUnsupported.replace(
-            "{count}",
-            String(skippedUnsupported),
-          ),
+          t.ignoredUnsupported.replace("{count}", String(skippedUnsupported)),
         );
       }
       if (skippedDuplicate > 0) {
@@ -1891,13 +1898,7 @@ export function LibraryView({
         });
       }
     },
-    [
-      queue,
-      pushNotice,
-      t,
-      watchNoticePrefix,
-      buildModelNamesForFilter,
-    ],
+    [queue, pushNotice, t, watchNoticePrefix, buildModelNamesForFilter],
   );
 
   useEffect(() => {
@@ -2002,9 +2003,7 @@ export function LibraryView({
       return;
     }
     setWatchFolders((prev) =>
-      prev.map((entry) =>
-        entry.id === id ? { ...entry, enabled } : entry,
-      ),
+      prev.map((entry) => (entry.id === id ? { ...entry, enabled } : entry)),
     );
   };
 
@@ -2158,12 +2157,16 @@ export function LibraryView({
         .find((item) => item && item.length > 0);
       if (folder) {
         const sep = folder.includes("\\") ? "\\" : "/";
-        const normalized = folder.endsWith("\\") || folder.endsWith("/")
-          ? folder.slice(0, -1)
-          : folder;
+        const normalized =
+          folder.endsWith("\\") || folder.endsWith("/")
+            ? folder.slice(0, -1)
+            : folder;
         defaultPath = `${normalized}${sep}${fileName}`;
       }
-      if (!defaultPath || (!defaultPath.includes("\\") && !defaultPath.includes("/"))) {
+      if (
+        !defaultPath ||
+        (!defaultPath.includes("\\") && !defaultPath.includes("/"))
+      ) {
         const modelsPath = await window.api?.getModelsPath?.();
         if (modelsPath) {
           const sep = modelsPath.includes("\\") ? "\\" : "/";
@@ -2397,7 +2400,10 @@ export function LibraryView({
     );
     pushNotice({
       type: "success",
-      message: t.clearedCompletedNotice.replace("{count}", String(completedCount)),
+      message: t.clearedCompletedNotice.replace(
+        "{count}",
+        String(completedCount),
+      ),
     });
   }, [queue, isRunning, lang, pushNotice, t]);
 
@@ -2697,9 +2703,7 @@ export function LibraryView({
               <h3 className="text-2xl font-bold text-foreground">
                 {t.dropReleaseTitle}
               </h3>
-              <p className="text-base text-muted-foreground">
-                {t.dropHint}
-              </p>
+              <p className="text-base text-muted-foreground">{t.dropHint}</p>
             </div>
             <div className="flex gap-2 mt-2">
               {["txt", "epub", "srt", "ass"].map((ext) => (
@@ -3019,104 +3023,104 @@ export function LibraryView({
                       }}
                       onDrop={(e) => handleReorderDrop(e, queueIndex)}
                     >
-                    {/* Checkbox */}
-                    <input
-                      type="checkbox"
-                      checked={selectedItems.has(item.id)}
-                      onChange={() => toggleSelection(item.id)}
-                      className="w-4 h-4 rounded border-border shrink-0 accent-primary"
-                    />
+                      {/* Checkbox */}
+                      <input
+                        type="checkbox"
+                        checked={selectedItems.has(item.id)}
+                        onChange={() => toggleSelection(item.id)}
+                        className="w-4 h-4 rounded border-border shrink-0 accent-primary"
+                      />
 
-                    {/* Drag Handle - Larger Hit Area */}
-                    <div
-                      className={`p-2 -m-1 rounded shrink-0 transition-colors ${
-                        isRunning || isFilterActive
-                          ? "opacity-20 cursor-not-allowed"
-                          : "hover:bg-secondary cursor-grab active:cursor-grabbing text-muted-foreground/30 hover:text-foreground"
-                      }`}
-                      draggable={!isRunning && !isFilterActive}
-                      onDragStart={(e) => handleDragStart(e, queueIndex)}
-                      onDragEnd={handleDragEnd}
-                      title={t.dragToReorder}
-                    >
-                      <GripVertical className="w-5 h-5" />
-                    </div>
+                      {/* Drag Handle - Larger Hit Area */}
+                      <div
+                        className={`p-2 -m-1 rounded shrink-0 transition-colors ${
+                          isRunning || isFilterActive
+                            ? "opacity-20 cursor-not-allowed"
+                            : "hover:bg-secondary cursor-grab active:cursor-grabbing text-muted-foreground/30 hover:text-foreground"
+                        }`}
+                        draggable={!isRunning && !isFilterActive}
+                        onDragStart={(e) => handleDragStart(e, queueIndex)}
+                        onDragEnd={handleDragEnd}
+                        title={t.dragToReorder}
+                      >
+                        <GripVertical className="w-5 h-5" />
+                      </div>
 
-                    {/* File Icon */}
-                    <FileIcon type={item.fileType} />
+                      {/* File Icon */}
+                      <FileIcon type={item.fileType} />
 
-                    {/* File Info */}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground truncate">
-                        {item.fileName}
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <p
-                          className="text-[11px] text-muted-foreground/60 truncate max-w-[300px]"
-                          title={item.path}
-                        >
-                          {item.path}
+                      {/* File Info */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">
+                          {item.fileName}
                         </p>
-                        {/* Status Badges */}
-                        {item.config?.useGlobalDefaults === false && (
-                          <span className="text-[9px] px-1.5 py-px rounded bg-purple-500/10 text-purple-500 font-medium">
-                            {t.custom}
-                          </span>
-                        )}
+                        <div className="flex items-center gap-2">
+                          <p
+                            className="text-[11px] text-muted-foreground/60 truncate max-w-[300px]"
+                            title={item.path}
+                          >
+                            {item.path}
+                          </p>
+                          {/* Status Badges */}
+                          {item.config?.useGlobalDefaults === false && (
+                            <span className="text-[9px] px-1.5 py-px rounded bg-purple-500/10 text-purple-500 font-medium">
+                              {t.custom}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex items-center gap-1 shrink-0">
+                        <UITooltip content={t.config}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="w-8 h-8 focus-visible:ring-0"
+                            onClick={() => setConfigItem(item)}
+                          >
+                            <Settings className="w-4 h-4 text-muted-foreground hover:text-foreground" />
+                          </Button>
+                        </UITooltip>
+
+                        <UITooltip content={t.proofread}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="w-8 h-8 focus-visible:ring-0"
+                            onClick={() => handleProofread(item)}
+                          >
+                            <ClipboardCheck
+                              className={`w-4 h-4 ${item.status === "completed" ? "text-primary" : "text-muted-foreground"} hover:text-primary transition-colors`}
+                            />
+                          </Button>
+                        </UITooltip>
+
+                        <UITooltip content={t.moveToTop}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="w-8 h-8 focus-visible:ring-0"
+                            onClick={() => handleMoveToTop(item.id)}
+                          >
+                            <ArrowUp className="w-4 h-4 text-muted-foreground hover:text-primary" />
+                          </Button>
+                        </UITooltip>
+
+                        <UITooltip content={t.remove}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className={`w-8 h-8 focus-visible:ring-0 ${isRunning ? "opacity-50 cursor-not-allowed" : ""}`}
+                            onClick={() => handleRemove(item.id)}
+                            disabled={isRunning}
+                          >
+                            <Trash2 className="w-4 h-4 text-muted-foreground hover:text-red-500" />
+                          </Button>
+                        </UITooltip>
                       </div>
                     </div>
-
-                    {/* Actions */}
-                    <div className="flex items-center gap-1 shrink-0">
-                      <UITooltip content={t.config}>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="w-8 h-8 focus-visible:ring-0"
-                          onClick={() => setConfigItem(item)}
-                        >
-                          <Settings className="w-4 h-4 text-muted-foreground hover:text-foreground" />
-                        </Button>
-                      </UITooltip>
-
-                      <UITooltip content={t.proofread}>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="w-8 h-8 focus-visible:ring-0"
-                          onClick={() => handleProofread(item)}
-                        >
-                          <ClipboardCheck
-                            className={`w-4 h-4 ${item.status === "completed" ? "text-primary" : "text-muted-foreground"} hover:text-primary transition-colors`}
-                          />
-                        </Button>
-                      </UITooltip>
-
-                      <UITooltip content={t.moveToTop}>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="w-8 h-8 focus-visible:ring-0"
-                          onClick={() => handleMoveToTop(item.id)}
-                        >
-                          <ArrowUp className="w-4 h-4 text-muted-foreground hover:text-primary" />
-                        </Button>
-                      </UITooltip>
-
-                      <UITooltip content={t.remove}>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className={`w-8 h-8 focus-visible:ring-0 ${isRunning ? "opacity-50 cursor-not-allowed" : ""}`}
-                          onClick={() => handleRemove(item.id)}
-                          disabled={isRunning}
-                        >
-                          <Trash2 className="w-4 h-4 text-muted-foreground hover:text-red-500" />
-                        </Button>
-                      </UITooltip>
-                    </div>
-                  </div>
-                );
+                  );
                 })}
               </div>
             )}
@@ -3187,7 +3191,10 @@ export function LibraryView({
                     .replace("{total}", String(importSummary.total))
                     .replace("{added}", String(importSummary.added))
                     .replace("{duplicate}", String(importSummary.duplicate))
-                    .replace("{unsupported}", String(importSummary.unsupported))}
+                    .replace(
+                      "{unsupported}",
+                      String(importSummary.unsupported),
+                    )}
                 </div>
               </div>
               <div className="px-5 py-3 border-t flex justify-end gap-2">
@@ -3372,7 +3379,9 @@ export function LibraryView({
                                     type="button"
                                     onClick={() => {
                                       const next = active
-                                        ? entry.fileTypes.filter((t) => t !== type)
+                                        ? entry.fileTypes.filter(
+                                            (t) => t !== type,
+                                          )
                                         : [...entry.fileTypes, type];
                                       applyWatchFolderUpdate(entry.id, {
                                         fileTypes: next,
@@ -3409,7 +3418,10 @@ export function LibraryView({
                                 type="checkbox"
                                 checked={entry.enabled}
                                 onChange={(e) =>
-                                  handleToggleWatchFolder(entry.id, e.target.checked)
+                                  handleToggleWatchFolder(
+                                    entry.id,
+                                    e.target.checked,
+                                  )
                                 }
                                 className="w-4 h-4 rounded border-border accent-primary"
                               />

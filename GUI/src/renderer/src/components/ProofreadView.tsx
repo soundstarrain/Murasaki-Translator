@@ -289,7 +289,11 @@ const extractVariantTokensWithPos = (
   while ((match = regex.exec(text)) !== null) {
     const token = match[0];
     if (!isVariantTokenValid(token)) continue;
-    results.push({ text: token, start: match.index, end: match.index + token.length });
+    results.push({
+      text: token,
+      start: match.index,
+      end: match.index + token.length,
+    });
   }
   return results;
 };
@@ -348,10 +352,14 @@ const pickConsistencyVariant = ({
   if (tokens.length === 0) return unknownLabel;
 
   const normalizedExpected = expected ? normalizeVariantToken(expected) : "";
-  const selectByPosition = (candidates: { text: string; start: number; end: number }[]) => {
+  const selectByPosition = (
+    candidates: { text: string; start: number; end: number }[],
+  ) => {
     if (!useLineAlign) {
       candidates.sort(
-        (a, b) => normalizeVariantToken(b.text).length - normalizeVariantToken(a.text).length,
+        (a, b) =>
+          normalizeVariantToken(b.text).length -
+          normalizeVariantToken(a.text).length,
       );
       return candidates[0];
     }
@@ -362,7 +370,9 @@ const pickConsistencyVariant = ({
         : null;
     if (termRatio === null) {
       candidates.sort(
-        (a, b) => normalizeVariantToken(b.text).length - normalizeVariantToken(a.text).length,
+        (a, b) =>
+          normalizeVariantToken(b.text).length -
+          normalizeVariantToken(a.text).length,
       );
       return candidates[0];
     }
@@ -437,8 +447,7 @@ export default function ProofreadView({
     new Set(),
   );
   const [consistencyGlossaryPath, setConsistencyGlossaryPath] = useState("");
-  const [consistencyMinOccurrences, setConsistencyMinOccurrences] =
-    useState(2);
+  const [consistencyMinOccurrences, setConsistencyMinOccurrences] = useState(2);
   const [consistencyResults, setConsistencyResults] = useState<
     ConsistencyIssue[]
   >([]);
@@ -512,9 +521,9 @@ export default function ProofreadView({
 
   // Line Mode - strict line-by-line alignment with line numbers
   const [lineMode, setLineMode] = useState(true); // Default to line mode
-  const [selectionLock, setSelectionLock] = useState<
-    "src" | "dst" | null
-  >(null);
+  const [selectionLock, setSelectionLock] = useState<"src" | "dst" | null>(
+    null,
+  );
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [, startRetryPanelTransition] = useTransition();
 
@@ -607,7 +616,9 @@ export default function ProofreadView({
       const val = parseInt(savedCotCoverageThreshold, 10);
       if (Number.isFinite(val)) setRetryCotCoverageThreshold(val);
     }
-    const savedCoverageRetries = localStorage.getItem("config_coverage_retries");
+    const savedCoverageRetries = localStorage.getItem(
+      "config_coverage_retries",
+    );
     if (savedCoverageRetries) {
       const val = parseInt(savedCoverageRetries, 10);
       if (Number.isFinite(val)) setRetryCoverageRetries(val);
@@ -666,8 +677,11 @@ export default function ProofreadView({
       setRegexError(null);
       return;
     }
-    const matches: { blockIndex: number; type: "src" | "dst"; lineIndex: number }[] =
-      [];
+    const matches: {
+      blockIndex: number;
+      type: "src" | "dst";
+      lineIndex: number;
+    }[] = [];
 
     try {
       const flags = isRegex ? "gi" : "i";
@@ -857,7 +871,7 @@ export default function ProofreadView({
     if (data.glossaryPath) {
       try {
         console.log("Loading glossary from:", data.glossaryPath);
-        let glossaryContent = await window.api?.readFile(data.glossaryPath);
+        const glossaryContent = await window.api?.readFile(data.glossaryPath);
         if (glossaryContent) {
           const parsed = parseGlossaryContent(glossaryContent);
           const count = Object.keys(parsed).length;
@@ -953,16 +967,19 @@ export default function ProofreadView({
       const looksLikeWindowsPath = (value: string) =>
         /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
       const derivedOutputPath = cachePath.replace(/\.cache\.json$/i, "");
-      let resolvedOutputPath = derivedOutputPath !== cachePath
-        ? derivedOutputPath
-        : "";
+      let resolvedOutputPath =
+        derivedOutputPath !== cachePath ? derivedOutputPath : "";
       if (!resolvedOutputPath) {
         resolvedOutputPath =
           cacheData.outputPath && cacheData.outputPath.trim()
             ? cacheData.outputPath.trim()
             : "";
       }
-      if (isWindows && resolvedOutputPath && !looksLikeWindowsPath(resolvedOutputPath)) {
+      if (
+        isWindows &&
+        resolvedOutputPath &&
+        !looksLikeWindowsPath(resolvedOutputPath)
+      ) {
         resolvedOutputPath = "";
       }
       if (resolvedOutputPath) {
@@ -1146,13 +1163,19 @@ export default function ProofreadView({
     localStorage.setItem("config_temperature", String(next.temperature));
 
     setRetryRepPenaltyBase(next.repPenaltyBase);
-    localStorage.setItem("config_rep_penalty_base", String(next.repPenaltyBase));
+    localStorage.setItem(
+      "config_rep_penalty_base",
+      String(next.repPenaltyBase),
+    );
 
     setRetryRepPenaltyMax(next.repPenaltyMax);
     localStorage.setItem("config_rep_penalty_max", String(next.repPenaltyMax));
 
     setRetryRepPenaltyStep(next.repPenaltyStep);
-    localStorage.setItem("config_rep_penalty_step", String(next.repPenaltyStep));
+    localStorage.setItem(
+      "config_rep_penalty_step",
+      String(next.repPenaltyStep),
+    );
 
     setRetryStrictMode(next.strictMode);
     localStorage.setItem("config_strict_mode", next.strictMode);
@@ -1197,7 +1220,10 @@ export default function ProofreadView({
     localStorage.setItem("config_max_retries", String(next.maxRetries));
 
     setRetryTempBoost(next.retryTempBoost);
-    localStorage.setItem("config_retry_temp_boost", String(next.retryTempBoost));
+    localStorage.setItem(
+      "config_retry_temp_boost",
+      String(next.retryTempBoost),
+    );
 
     setRetryPromptFeedback(next.retryPromptFeedback);
     localStorage.setItem(
@@ -1259,151 +1285,158 @@ export default function ProofreadView({
   );
 
   // Retranslate
-  const retranslateBlock = useCallback(async (index: number) => {
-    if (!cacheData) return;
-    const block = cacheData.blocks.find((b) => b.index === index);
-    if (!block) return;
+  const retranslateBlock = useCallback(
+    async (index: number) => {
+      if (!cacheData) return;
+      const block = cacheData.blocks.find((b) => b.index === index);
+      if (!block) return;
 
-    // Global Lock: Enforce single-threading for manual re-translation
-    if (retranslatingBlocks.size > 0 || loading) {
-      showAlert({
-        title: pv.waitTitle,
-        description: pv.waitDesc,
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const resolvedModelPath = (
-      retryModelPath || localStorage.getItem("config_model") || ""
-    ).trim();
-    if (!resolvedModelPath) {
-      showAlert({
-        title: t.advancedFeatures,
-        description: pv.modelMissingDesc,
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setRetranslatingBlocks((prev) => new Set(prev).add(index));
-      // Clear previous logs for this block on start
-      setBlockLogs((prev) => ({ ...prev, [index]: [] }));
-
-      const resolvedGlossaryPath = (
-        retryGlossaryPath ||
-        localStorage.getItem("config_glossary_path") ||
-        ""
-      ).trim();
-      const parsedGpuLayers = parseInt(retryGpuLayers || "-1", 10);
-      const config = {
-        gpuLayers: Number.isFinite(parsedGpuLayers) ? parsedGpuLayers : -1,
-        ctxSize: retryCtxSize || "4096",
-        preset: retryPreset || "novel",
-        temperature: retryTemperature,
-        repPenaltyBase: retryRepPenaltyBase,
-        repPenaltyMax: retryRepPenaltyMax,
-        repPenaltyStep: retryRepPenaltyStep,
-        glossaryPath: resolvedGlossaryPath || undefined,
-        deviceMode: retryDeviceMode || "auto",
-        rulesPre: JSON.parse(localStorage.getItem("config_rules_pre") || "[]"),
-        rulesPost: JSON.parse(
-          localStorage.getItem("config_rules_post") || "[]",
-        ),
-        strictMode: retryStrictMode || "off", // Default to off for manual retry unless set
-        flashAttn: localStorage.getItem("config_flash_attn") !== "false", // Most models support it now
-        kvCacheType: localStorage.getItem("config_kv_cache_type") || "f16",
-        lineCheck: retryLineCheck,
-        lineToleranceAbs: retryLineToleranceAbs,
-        lineTolerancePct: retryLineTolerancePct,
-        anchorCheck: retryAnchorCheck,
-        anchorCheckRetries: retryAnchorCheckRetries,
-        maxRetries: retryMaxRetries,
-        retryTempBoost: retryTempBoost,
-        retryPromptFeedback: retryPromptFeedback,
-        coverageCheck: retryCoverageCheck,
-        outputHitThreshold: retryOutputHitThreshold,
-        cotCoverageThreshold: retryCotCoverageThreshold,
-        coverageRetries: retryCoverageRetries,
-        gpuDeviceId: retryGpuDeviceId,
-      };
-
-      const result = await window.api?.retranslateBlock({
-        src: block.src,
-        index: block.index,
-        modelPath: resolvedModelPath,
-        config: config,
-      });
-
-      if (result?.success) {
-        updateBlockDst(index, result.dst);
+      // Global Lock: Enforce single-threading for manual re-translation
+      if (retranslatingBlocks.size > 0 || loading) {
         showAlert({
-          title: t.config.proofread.retranslateSuccess,
-          description: t.config.proofread.retranslateSuccessDesc.replace(
-            "{index}",
-            (index + 1).toString(),
-          ),
-          variant: "success",
-        });
-      } else {
-        showAlert({
-          title: pv.retranslateFailTitle,
-          description: result?.error || pv.unknownError,
+          title: pv.waitTitle,
+          description: pv.waitDesc,
           variant: "destructive",
         });
+        return;
       }
-    } catch (error) {
-      console.error("Failed to retranslate:", error);
-      showAlert({
-        title: pv.retranslateErrorTitle,
-        description: String(error),
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-      setRetranslatingBlocks((prev) => {
-        const next = new Set(prev);
-        next.delete(index);
-        return next;
-      });
-    }
-  }, [
-    cacheData,
-    loading,
-    pv,
-    retryAnchorCheck,
-    retryAnchorCheckRetries,
-    retryCoverageCheck,
-    retryCoverageRetries,
-    retryCotCoverageThreshold,
-    retryCtxSize,
-    retryGpuDeviceId,
-    retryGpuLayers,
-    retryGlossaryPath,
-    retryLineCheck,
-    retryLineToleranceAbs,
-    retryLineTolerancePct,
-    retryMaxRetries,
-    retryModelPath,
-    retryPreset,
-    retryPromptFeedback,
-    retryRepPenaltyBase,
-    retryRepPenaltyMax,
-    retryRepPenaltyStep,
-    retryStrictMode,
-    retryTempBoost,
-    retryTemperature,
-    retryDeviceMode,
-    retryOutputHitThreshold,
-    retranslatingBlocks,
-    showAlert,
-    t.advancedFeatures,
-    t.config.proofread.retranslateSuccess,
-    t.config.proofread.retranslateSuccessDesc,
-    updateBlockDst,
-  ]);
+
+      const resolvedModelPath = (
+        retryModelPath ||
+        localStorage.getItem("config_model") ||
+        ""
+      ).trim();
+      if (!resolvedModelPath) {
+        showAlert({
+          title: t.advancedFeatures,
+          description: pv.modelMissingDesc,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      try {
+        setLoading(true);
+        setRetranslatingBlocks((prev) => new Set(prev).add(index));
+        // Clear previous logs for this block on start
+        setBlockLogs((prev) => ({ ...prev, [index]: [] }));
+
+        const resolvedGlossaryPath = (
+          retryGlossaryPath ||
+          localStorage.getItem("config_glossary_path") ||
+          ""
+        ).trim();
+        const parsedGpuLayers = parseInt(retryGpuLayers || "-1", 10);
+        const config = {
+          gpuLayers: Number.isFinite(parsedGpuLayers) ? parsedGpuLayers : -1,
+          ctxSize: retryCtxSize || "4096",
+          preset: retryPreset || "novel",
+          temperature: retryTemperature,
+          repPenaltyBase: retryRepPenaltyBase,
+          repPenaltyMax: retryRepPenaltyMax,
+          repPenaltyStep: retryRepPenaltyStep,
+          glossaryPath: resolvedGlossaryPath || undefined,
+          deviceMode: retryDeviceMode || "auto",
+          rulesPre: JSON.parse(
+            localStorage.getItem("config_rules_pre") || "[]",
+          ),
+          rulesPost: JSON.parse(
+            localStorage.getItem("config_rules_post") || "[]",
+          ),
+          strictMode: retryStrictMode || "off", // Default to off for manual retry unless set
+          flashAttn: localStorage.getItem("config_flash_attn") !== "false", // Most models support it now
+          kvCacheType: localStorage.getItem("config_kv_cache_type") || "f16",
+          lineCheck: retryLineCheck,
+          lineToleranceAbs: retryLineToleranceAbs,
+          lineTolerancePct: retryLineTolerancePct,
+          anchorCheck: retryAnchorCheck,
+          anchorCheckRetries: retryAnchorCheckRetries,
+          maxRetries: retryMaxRetries,
+          retryTempBoost: retryTempBoost,
+          retryPromptFeedback: retryPromptFeedback,
+          coverageCheck: retryCoverageCheck,
+          outputHitThreshold: retryOutputHitThreshold,
+          cotCoverageThreshold: retryCotCoverageThreshold,
+          coverageRetries: retryCoverageRetries,
+          gpuDeviceId: retryGpuDeviceId,
+        };
+
+        const result = await window.api?.retranslateBlock({
+          src: block.src,
+          index: block.index,
+          modelPath: resolvedModelPath,
+          config: config,
+        });
+
+        if (result?.success) {
+          updateBlockDst(index, result.dst);
+          showAlert({
+            title: t.config.proofread.retranslateSuccess,
+            description: t.config.proofread.retranslateSuccessDesc.replace(
+              "{index}",
+              (index + 1).toString(),
+            ),
+            variant: "success",
+          });
+        } else {
+          showAlert({
+            title: pv.retranslateFailTitle,
+            description: result?.error || pv.unknownError,
+            variant: "destructive",
+          });
+        }
+      } catch (error) {
+        console.error("Failed to retranslate:", error);
+        showAlert({
+          title: pv.retranslateErrorTitle,
+          description: String(error),
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+        setRetranslatingBlocks((prev) => {
+          const next = new Set(prev);
+          next.delete(index);
+          return next;
+        });
+      }
+    },
+    [
+      cacheData,
+      loading,
+      pv,
+      retryAnchorCheck,
+      retryAnchorCheckRetries,
+      retryCoverageCheck,
+      retryCoverageRetries,
+      retryCotCoverageThreshold,
+      retryCtxSize,
+      retryGpuDeviceId,
+      retryGpuLayers,
+      retryGlossaryPath,
+      retryLineCheck,
+      retryLineToleranceAbs,
+      retryLineTolerancePct,
+      retryMaxRetries,
+      retryModelPath,
+      retryPreset,
+      retryPromptFeedback,
+      retryRepPenaltyBase,
+      retryRepPenaltyMax,
+      retryRepPenaltyStep,
+      retryStrictMode,
+      retryTempBoost,
+      retryTemperature,
+      retryDeviceMode,
+      retryOutputHitThreshold,
+      retranslatingBlocks,
+      showAlert,
+      t.advancedFeatures,
+      t.config.proofread.retranslateSuccess,
+      t.config.proofread.retranslateSuccessDesc,
+      updateBlockDst,
+    ],
+  );
 
   const requestRetranslateBlock = useCallback(
     (index: number) => {
@@ -1416,7 +1449,12 @@ export default function ProofreadView({
         onConfirm: () => retranslateBlock(index),
       });
     },
-    [pv.retranslateConfirmDesc, pv.retranslateConfirmTitle, retranslateBlock, showConfirm],
+    [
+      pv.retranslateConfirmDesc,
+      pv.retranslateConfirmTitle,
+      retranslateBlock,
+      showConfirm,
+    ],
   );
 
   // --- Replace Logic ---
@@ -1601,10 +1639,7 @@ export default function ProofreadView({
         <>
           {parts.map((part, i) =>
             i % 2 === 1 ? (
-              <span
-                key={i}
-                className="bg-yellow-300 text-black rounded px-0.5"
-              >
+              <span key={i} className="bg-yellow-300 text-black rounded px-0.5">
                 {part}
               </span>
             ) : (
@@ -1897,7 +1932,10 @@ export default function ProofreadView({
             </div>
           ) : (
             // Block Mode: Original layout
-            <div className="grid relative" style={{ gridTemplateColumns: gridTemplate }}>
+            <div
+              className="grid relative"
+              style={{ gridTemplateColumns: gridTemplate }}
+            >
               <div className="px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap text-foreground select-text overflow-x-auto border-r border-border/20">
                 <HighlightText
                   text={displaySrc}
@@ -2019,7 +2057,9 @@ export default function ProofreadView({
     try {
       const result = await window.api?.selectFile({
         title: pv.retrySelectGlossaryTitle,
-        filters: [{ name: pv.retryGlossaryFilterName, extensions: ["json", "txt"] }],
+        filters: [
+          { name: pv.retryGlossaryFilterName, extensions: ["json", "txt"] },
+        ],
       } as any);
       if (result) setConsistencyGlossaryPath(result);
     } catch (e) {
@@ -2131,10 +2171,14 @@ export default function ProofreadView({
                 ? normalizeVariantToken(expected)
                 : "";
               const normalizedVariant = normalizeVariantToken(variantText);
-              if (normalizedExpected && normalizedVariant === normalizedExpected) {
+              if (
+                normalizedExpected &&
+                normalizedVariant === normalizedExpected
+              ) {
                 stat.matched += 1;
               }
-              if (!normalizedVariant || variantText === pv.consistencyUnknown) continue;
+              if (!normalizedVariant || variantText === pv.consistencyUnknown)
+                continue;
               const displayVariant =
                 normalizedExpected && normalizedVariant === normalizedExpected
                   ? expected
@@ -2314,10 +2358,7 @@ export default function ProofreadView({
         title: pv.loadProofreadFailTitle,
         description: pv.loadProofreadFailDesc
           .replace("{path}", path)
-          .replace(
-            "{error}",
-            e instanceof Error ? e.message : String(e),
-          ),
+          .replace("{error}", e instanceof Error ? e.message : String(e)),
         variant: "destructive",
       });
     } finally {
@@ -2572,7 +2613,7 @@ export default function ProofreadView({
   }
 
   return (
-      <div className="flex h-full bg-background">
+    <div className="flex h-full bg-background">
       {/* Main Content Column */}
       <div className="flex-1 flex flex-col min-w-0 relative z-0">
         {/* --- Toolbar --- */}
@@ -2642,7 +2683,9 @@ export default function ProofreadView({
                 type="text"
                 placeholder={pv.searchPlaceholder}
                 className={`w-full h-8 pl-7 pr-3 py-1.5 text-sm bg-secondary/50 border rounded-md focus:bg-background transition-colors outline-none font-mono ${
-                  regexError ? "border-amber-500/60 bg-amber-500/5" : "border-border"
+                  regexError
+                    ? "border-amber-500/60 bg-amber-500/5"
+                    : "border-border"
                 }`}
                 value={searchKeyword}
                 onChange={(e) => setSearchKeyword(e.target.value)}
@@ -2725,13 +2768,7 @@ export default function ProofreadView({
                 <Filter className="w-3.5 h-3.5" />
               </button>
             </Tooltip>
-            <Tooltip
-              content={
-                lineMode
-                  ? pv.lineModeHint
-                  : pv.blockModeHint
-              }
-            >
+            <Tooltip content={lineMode ? pv.lineModeHint : pv.blockModeHint}>
               <button
                 onClick={() => setLineMode(!lineMode)}
                 className={`h-8 w-8 inline-flex items-center justify-center rounded text-xs ${lineMode ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted"}`}
@@ -2840,7 +2877,9 @@ export default function ProofreadView({
                 variant="outline"
                 onClick={replaceOne}
                 disabled={
-                  !searchKeyword || matchList.length === 0 || Boolean(regexError)
+                  !searchKeyword ||
+                  matchList.length === 0 ||
+                  Boolean(regexError)
                 }
               >
                 <Replace className="w-3.5 h-3.5 mr-1" />
@@ -2851,7 +2890,9 @@ export default function ProofreadView({
                 variant="outline"
                 onClick={replaceAll}
                 disabled={
-                  !searchKeyword || matchList.length === 0 || Boolean(regexError)
+                  !searchKeyword ||
+                  matchList.length === 0 ||
+                  Boolean(regexError)
                 }
               >
                 <ReplaceAll className="w-3.5 h-3.5 mr-1" />
@@ -2878,9 +2919,7 @@ export default function ProofreadView({
           </div>
 
           {/* Blocks */}
-          <div className="divide-y divide-border/30">
-            {renderedBlocks}
-          </div>
+          <div className="divide-y divide-border/30">{renderedBlocks}</div>
 
           {/* --- Pagination Footer --- */}
           {totalPages > 1 && (
@@ -2911,7 +2950,6 @@ export default function ProofreadView({
         </div>
       </div>
 
-
       {/* --- Retry Settings Modal --- */}
       {showRetryPanel && retryDraft && (
         <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center p-4">
@@ -2926,9 +2964,7 @@ export default function ProofreadView({
                   <RefreshCw className="w-4 h-4 text-primary" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-medium">
-                    {pv.retryPanelTitle}
-                  </h3>
+                  <h3 className="text-sm font-medium">{pv.retryPanelTitle}</h3>
                   <p className="text-xs text-muted-foreground">
                     {pv.retryPanelDesc}
                   </p>
@@ -3266,8 +3302,7 @@ export default function ProofreadView({
                       value={retryForm.anchorCheckRetries}
                       onChange={(e) =>
                         updateRetryDraft({
-                          anchorCheckRetries:
-                            parseInt(e.target.value, 10) || 1,
+                          anchorCheckRetries: parseInt(e.target.value, 10) || 1,
                         })
                       }
                     />
@@ -3382,8 +3417,7 @@ export default function ProofreadView({
                         value={retryForm.coverageRetries}
                         onChange={(e) =>
                           updateRetryDraft({
-                            coverageRetries:
-                              parseInt(e.target.value, 10) || 1,
+                            coverageRetries: parseInt(e.target.value, 10) || 1,
                           })
                         }
                       />
@@ -3537,7 +3571,9 @@ export default function ProofreadView({
                     <input
                       type="text"
                       value={consistencyGlossaryPath}
-                      onChange={(e) => setConsistencyGlossaryPath(e.target.value)}
+                      onChange={(e) =>
+                        setConsistencyGlossaryPath(e.target.value)
+                      }
                       placeholder={pv.consistencyGlossaryPlaceholder}
                       className="flex-1 border rounded-md px-3 py-2 text-xs bg-background"
                     />
@@ -3623,7 +3659,8 @@ export default function ProofreadView({
                                   {pv.consistencyOccurrences}: {issue.total}
                                 </div>
                                 <div>
-                                  {pv.consistencyVariants}: {issue.variants.length}
+                                  {pv.consistencyVariants}:{" "}
+                                  {issue.variants.length}
                                 </div>
                               </div>
                             </div>
@@ -3642,7 +3679,8 @@ export default function ProofreadView({
                                 onClick={() =>
                                   setConsistencyExpanded((prev) => {
                                     const next = new Set(prev);
-                                    if (next.has(issue.term)) next.delete(issue.term);
+                                    if (next.has(issue.term))
+                                      next.delete(issue.term);
                                     else next.add(issue.term);
                                     return next;
                                   })
@@ -3675,7 +3713,8 @@ export default function ProofreadView({
                                         className="text-[10px] text-muted-foreground mb-1 last:mb-0"
                                       >
                                         <div className="truncate">
-                                          {example.file} · #{example.blockIndex + 1}
+                                          {example.file} · #
+                                          {example.blockIndex + 1}
                                         </div>
                                         <div className="font-mono text-[10px] truncate">
                                           {example.srcLine}
@@ -3736,9 +3775,7 @@ export default function ProofreadView({
                       String(showLogModal + 1),
                     )}
                   </h3>
-                  <p className="text-xs text-zinc-500">
-                    {pv.logSubtitle}
-                  </p>
+                  <p className="text-xs text-zinc-500">{pv.logSubtitle}</p>
                 </div>
               </div>
               <Button

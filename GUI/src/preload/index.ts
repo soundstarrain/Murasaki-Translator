@@ -77,7 +77,19 @@ const api = {
     baseUrl: string;
     apiKey?: string;
     timeoutMs?: number;
+    model?: string;
   }) => ipcRenderer.invoke("pipelinev2-api-test", payload),
+  pipelineV2ApiModels: (payload: {
+    baseUrl: string;
+    apiKey?: string;
+    timeoutMs?: number;
+  }) => ipcRenderer.invoke("pipelinev2-api-models", payload),
+  pipelineV2ApiConcurrencyTest: (payload: {
+    baseUrl: string;
+    apiKey?: string;
+    timeoutMs?: number;
+    maxConcurrency?: number;
+  }) => ipcRenderer.invoke("pipelinev2-api-concurrency-test", payload),
   pipelineV2Run: (payload: {
     filePath: string;
     pipelineId: string;
@@ -108,8 +120,14 @@ const api = {
         return;
       }
       callback({
-        code: typeof payload?.code === "number" || payload?.code === null ? payload.code : null,
-        signal: typeof payload?.signal === "string" || payload?.signal === null ? payload.signal : null,
+        code:
+          typeof payload?.code === "number" || payload?.code === null
+            ? payload.code
+            : null,
+        signal:
+          typeof payload?.signal === "string" || payload?.signal === null
+            ? payload.signal
+            : null,
         stopRequested: Boolean(payload?.stopRequested),
       });
     }),
@@ -150,7 +168,11 @@ const api = {
     ipcRenderer.invoke("watch-folder-remove", id),
   watchFolderList: () => ipcRenderer.invoke("watch-folder-list"),
   onWatchFolderFileAdded: (
-    callback: (payload: { watchId: string; path: string; addedAt: string }) => void,
+    callback: (payload: {
+      watchId: string;
+      path: string;
+      addedAt: string;
+    }) => void,
   ) => addIpcListener("watch-folder-file-added", callback),
 
   // Server Manager
@@ -199,8 +221,10 @@ const api = {
   // Debug Export
   readServerLog: () => ipcRenderer.invoke("read-server-log"),
   getMainProcessLogs: () => ipcRenderer.invoke("get-main-process-logs"),
-  readTextTail: (path: string, options?: { maxBytes?: number; lineCount?: number }) =>
-    ipcRenderer.invoke("read-text-tail", path, options),
+  readTextTail: (
+    path: string,
+    options?: { maxBytes?: number; lineCount?: number },
+  ) => ipcRenderer.invoke("read-text-tail", path, options),
 
   // Theme Sync (for Windows title bar)
   setTheme: (theme: "dark" | "light") => ipcRenderer.send("set-theme", theme),
