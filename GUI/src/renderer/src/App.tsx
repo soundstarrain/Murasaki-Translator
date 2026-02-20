@@ -3,7 +3,6 @@ import { Sidebar } from "./components/Sidebar";
 import { Dashboard } from "./components/Dashboard";
 import { SettingsView } from "./components/SettingsView";
 import { AdvancedView } from "./components/AdvancedView";
-import { ServiceView } from "./components/ServiceView";
 import { ModelView } from "./components/ModelView";
 import { GlossaryView } from "./components/GlossaryView";
 import { HistoryView } from "./components/HistoryView";
@@ -141,12 +140,9 @@ function AppContent() {
         <ModelView lang={lang} remoteRuntime={remoteRuntime} />
       )}
       {view === "glossary" && <GlossaryView lang={lang} />}
-      {view === "service" && (
-        <ServiceView lang={lang} remoteRuntime={remoteRuntime} />
-      )}
       {view === "pre" && <RuleEditor lang={lang} mode="pre" />}
       {view === "post" && <RuleEditor lang={lang} mode="post" />}
-      {view === "advanced" && <AdvancedView lang={lang} />}
+      {view === "advanced" && <AdvancedView lang={lang} remoteRuntime={remoteRuntime} />}
       {view === "api_manager" && <ApiManagerView lang={lang} />}
       {view === "history" && (
         <HistoryView lang={lang} onNavigate={handleSwitchView} />

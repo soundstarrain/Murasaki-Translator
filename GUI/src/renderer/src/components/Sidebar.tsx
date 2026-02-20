@@ -12,7 +12,6 @@ import {
   Clock,
   ClipboardCheck,
   Layers,
-  Server,
   Globe,
 } from "lucide-react";
 import { cn } from "../lib/utils";
@@ -69,7 +68,6 @@ export function Sidebar({ lang, setLang, view, setView }: SidebarProps) {
     { icon: FileInput, label: t.nav.pre, id: "pre" },
     { icon: FileOutput, label: t.nav.post, id: "post" },
     // 高级与设置
-    { icon: Server, label: t.nav.service, id: "service" },
     { icon: Sparkles, label: t.nav.advanced, id: "advanced" },
     { icon: Settings, label: t.nav.setting, id: "settings" },
   ];

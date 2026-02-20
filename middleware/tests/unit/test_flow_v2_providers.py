@@ -29,21 +29,24 @@ class DummyRegistry:
 
 
 @pytest.mark.unit
-def test_flow_v2_pool_provider_consistent_selection():
+def test_flow_v2_pool_provider_endpoint_selection_single():
     registry = DummyRegistry()
-    registry.add("a")
-    registry.add("b")
-    pool = PoolProvider({"members": ["a", "b"], "strategy": "round_robin"}, registry)
-
-    req1 = pool.build_request([], {})
-    assert req1.provider_id == "a"
-    resp1 = pool.send(req1)
-    assert resp1.text == "a"
-
-    req2 = pool.build_request([], {})
-    assert req2.provider_id == "b"
-    resp2 = pool.send(req2)
-    assert resp2.text == "b"
+    pool = PoolProvider(
+        {
+            "endpoints": [
+                {
+                    "base_url": "https://api.example.com/v1",
+                    "api_key": "key-a",
+                    "model": "model-a",
+                    "weight": 2,
+                }
+            ],
+            "model": "fallback-model",
+        },
+        registry,
+    )
+    req = pool.build_request([], {})
+    assert req.provider_id == "endpoint:0"
 
 
 @pytest.mark.unit

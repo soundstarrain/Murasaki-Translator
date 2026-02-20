@@ -99,6 +99,32 @@ export interface CacheData {
   blocks: CacheBlock[];
 }
 
+/** V2 行模式缓存行 */
+export interface V2CacheLine {
+  index: number;
+  src: string;
+  dst: string;
+  status: "none" | "processed" | "edited";
+  inputTokens?: number;
+  outputTokens?: number;
+  retries?: number;
+}
+
+/** V2 缓存数据（行模式） */
+export interface V2CacheData {
+  version: "v2-line";
+  pipelineId: string;
+  providerName?: string;
+  outputPath: string;
+  stats: {
+    lineCount: number;
+    srcChars: number;
+    dstChars: number;
+    totalTokens?: number;
+  };
+  lines: V2CacheLine[];
+}
+
 export interface WatchFolderConfig {
   id: string;
   path: string;
@@ -226,15 +252,15 @@ export interface RemoteDiagnostics {
 
 export interface RemoteHfDownloadStatus {
   status:
-    | "starting"
-    | "checking"
-    | "connecting"
-    | "downloading"
-    | "resuming"
-    | "complete"
-    | "skipped"
-    | "error"
-    | "cancelled";
+  | "starting"
+  | "checking"
+  | "connecting"
+  | "downloading"
+  | "resuming"
+  | "complete"
+  | "skipped"
+  | "error"
+  | "cancelled";
   percent: number;
   speed?: string;
   downloaded?: string;
@@ -316,6 +342,7 @@ export interface ElectronAPI {
   pipelineV2ProfilesPath: () => Promise<string>;
   pipelineV2ProfilesList: (
     kind: string,
+    options?: { preferLocal?: boolean },
   ) => Promise<
     { id: string; name: string; filename: string; chunk_type?: string }[]
   >;
@@ -371,6 +398,7 @@ export interface ElectronAPI {
     apiKey?: string;
     timeoutMs?: number;
     maxConcurrency?: number;
+    model?: string;
   }) => Promise<{
     ok: boolean;
     maxConcurrency?: number;
@@ -392,6 +420,7 @@ export interface ElectronAPI {
     textProtect?: boolean;
   }) => Promise<{ ok: boolean; runId: string; code?: number; error?: any }>;
   stopTranslation: () => void;
+  pipelineV2Stop: () => void;
   retranslateBlock: (options: {
     src: string;
     index: number;
@@ -678,4 +707,4 @@ declare global {
   }
 }
 
-export {};
+export { };

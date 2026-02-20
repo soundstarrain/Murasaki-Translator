@@ -279,6 +279,25 @@ const buildChatCompletionsUrl = (baseUrl: string) => {
   return `${clean}/v1/chat/completions`;
 };
 
+const CONCURRENCY_TEST_MESSAGE = "你好";
+const CONCURRENCY_TEST_MESSAGE_COUNT = 32;
+const CONCURRENCY_TEST_MAX_TOKENS = 8;
+
+const buildConcurrencyTestMessages = (
+  count = CONCURRENCY_TEST_MESSAGE_COUNT,
+) =>
+  Array.from({ length: Math.max(1, Math.floor(count)) }, () => ({
+    role: "user",
+    content: CONCURRENCY_TEST_MESSAGE,
+  }));
+
+const buildConcurrencyTestPayload = (model: string) => ({
+  model,
+  messages: buildConcurrencyTestMessages(),
+  temperature: 0,
+  max_tokens: CONCURRENCY_TEST_MAX_TOKENS,
+});
+
 const requestWithTimeout = async (
 
   url: string,
@@ -434,9 +453,11 @@ const listApiModels = async (
 
 ) => {
 
-  const url = buildModelsUrl(baseUrl);
+  const url = buildChatCompletionsUrl(baseUrl);
 
   if (!url) return { ok: false, message: "base_url_missing" };
+  const resolvedModel = String(model || "").trim();
+  if (!resolvedModel) return { ok: false, message: "missing_model" };
 
   const headers: Record<string, string> = {
 
@@ -606,6 +627,18 @@ type LocalProfileRef = {
   chunkType?: "" | "line" | "block";
 
 };
+
+type ProfilesListOptions = {
+
+  preferLocal?: boolean;
+
+};
+
+const normalizeProfilesListOptions = (options?: ProfilesListOptions) => ({
+
+  preferLocal: Boolean(options?.preferLocal),
+
+});
 
 const safeLoadYaml = (raw: string): Record<string, any> | null => {
 
@@ -1500,6 +1533,9 @@ const summarizeStatusCounts = (statuses: number[]) => {
 
 const classifyConcurrencyFailure = (statuses: number[]) => {
 
+  const hasAny = (codes: number[]) =>
+    statuses.some((code) => codes.includes(code));
+
   if (statuses.some((code) => code === 401 || code === 403)) {
 
     return "concurrency_test_auth";
@@ -1510,6 +1546,18 @@ const classifyConcurrencyFailure = (statuses: number[]) => {
 
     return "concurrency_test_rate_limited";
 
+  }
+
+  if (hasAny([404])) {
+    return "concurrency_test_not_found";
+  }
+
+  if (hasAny([400, 405, 415, 422])) {
+    return "concurrency_test_bad_request";
+  }
+
+  if (hasAny([408, 504])) {
+    return "concurrency_test_timeout";
   }
 
   if (statuses.some((code) => code >= 500)) {
@@ -1544,6 +1592,8 @@ const testApiConcurrency = async (
 
   maxConcurrency = 16,
 
+  model?: string,
+
 ) => {
 
   const url = buildModelsUrl(baseUrl);
@@ -1559,6 +1609,7 @@ const testApiConcurrency = async (
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
   const max = Math.min(Math.max(1, Math.floor(maxConcurrency)), 64);
+  const body = JSON.stringify(buildConcurrencyTestPayload(resolvedModel));
 
   const runBatch = async (count: number) => {
 
@@ -1566,7 +1617,11 @@ const testApiConcurrency = async (
 
     const tasks = Array.from({ length: count }, () =>
 
-      requestWithTimeout(url, { method: "GET", headers }, Math.max(1000, timeoutMs))
+      requestWithTimeout(
+        url,
+        { method: "POST", headers, body },
+        Math.max(1000, timeoutMs),
+      )
 
         .then((res) => res.status)
 
@@ -1859,34 +1914,27 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
     "pipelinev2-profiles-list",
 
-    async (_event, kind: ProfileKind) => {
+    async (_event, kind: ProfileKind, options?: ProfilesListOptions) => {
 
       if (!PROFILE_KINDS.includes(kind)) return [];
 
+      const { preferLocal } = normalizeProfilesListOptions(options);
+
       const localDir = await ensureLocalDir();
 
-      const baseUrl = await ensureServer();
-
-      if (baseUrl) {
-
-        try {
-
-          const result = await requestJson(baseUrl, `/profiles/${kind}`);
-
-          if (result.ok && hasServerProfilesList(result.data)) {
-
-            markPipelineV2ServerOk();
-
-            return result.data;
-
+      if (!preferLocal) {
+        const baseUrl = await ensureServer();
+        if (baseUrl) {
+          try {
+            const result = await requestJson(baseUrl, `/profiles/${kind}`);
+            if (result.ok && hasServerProfilesList(result.data)) {
+              markPipelineV2ServerOk();
+              return result.data;
+            }
+          } catch (error: any) {
+            markPipelineV2Local("fetch_failed", error?.message || "fetch_failed");
           }
-
-        } catch (error: any) {
-
-          markPipelineV2Local("fetch_failed", error?.message || "fetch_failed");
-
         }
-
       }
 
       const refs = await listProfileRefsLocal(kind, localDir);
@@ -2199,6 +2247,8 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
         maxConcurrency?: number;
 
+        model?: string;
+
       },
 
     ) =>
@@ -2213,6 +2263,8 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
         payload?.maxConcurrency,
 
+        payload?.model,
+
       ),
 
   );
@@ -2221,4 +2273,7 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
 export const __testOnly = {
   buildNextProfileIndexCache,
+  buildConcurrencyTestPayload,
+  classifyConcurrencyFailure,
+  normalizeProfilesListOptions,
 };

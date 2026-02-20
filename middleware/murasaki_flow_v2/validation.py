@@ -121,7 +121,6 @@ def validate_profile(
                 result.errors.append("missing_model")
         elif api_type == "pool":
             endpoints = data.get("endpoints")
-            members = data.get("members")
             has_endpoints = False
             missing_model = False
             if isinstance(endpoints, list):
@@ -132,16 +131,13 @@ def validate_profile(
                         has_endpoints = True
                         if not item.get("model"):
                             missing_model = True
-            has_members = isinstance(members, list) and bool(members)
-            if not has_endpoints and not has_members:
+            has_members = data.get("members") not in (None, "", [])
+            if not has_endpoints:
                 result.errors.append("missing_pool_endpoints")
             if has_endpoints and missing_model:
                 result.errors.append("missing_pool_model")
-            if has_members and store:
-                for member in members:
-                    member_id = str(member or "")
-                    if member_id and not _exists(store, "api", member_id):
-                        _error_missing_ref("api", member_id, result)
+            if has_members:
+                result.errors.append("pool_members_unsupported")
         else:
             _warn_unknown_type(api_type, result)
         if data.get("rpm") is not None and data.get("rpm") != "":

@@ -37,4 +37,15 @@ describe("profile index cache helpers", () => {
       name: "B",
     });
   });
+
+  it("normalizeProfilesListOptions coerces preferLocal flag", () => {
+    const { normalizeProfilesListOptions } = __testOnly;
+    expect(normalizeProfilesListOptions()).toEqual({ preferLocal: false });
+    expect(normalizeProfilesListOptions({ preferLocal: true })).toEqual({
+      preferLocal: true,
+    });
+    expect(normalizeProfilesListOptions({ preferLocal: false })).toEqual({
+      preferLocal: false,
+    });
+  });
 });

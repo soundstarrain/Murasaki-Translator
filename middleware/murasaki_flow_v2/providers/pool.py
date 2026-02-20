@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, TYPE_CHECKING
-import itertools
 import random
 import threading
 import math
@@ -19,8 +18,9 @@ class PoolProvider(BaseProvider):
     def __init__(self, profile: Dict[str, Any], registry: "ProviderRegistry"):
         super().__init__(profile)
         self.registry = registry
-        self.strategy = str(profile.get("strategy") or "round_robin")
         self._endpoints = self._normalize_endpoints(profile.get("endpoints") or [])
+        if not self._endpoints:
+            raise ProviderError("Pool provider requires endpoints")
         self._endpoint_providers = [
             OpenAICompatProvider(self._build_endpoint_profile(item))
             for item in self._endpoints
@@ -28,18 +28,6 @@ class PoolProvider(BaseProvider):
         self._endpoint_weights = [
             self._normalize_weight(item.get("weight")) for item in self._endpoints
         ]
-        self._endpoint_rr = itertools.cycle(
-            self._build_weighted_indices(self._endpoint_weights)
-        )
-        members = profile.get("members") or []
-        if not self._endpoints:
-            if not isinstance(members, list) or not members:
-                raise ProviderError("Pool provider requires non-empty members")
-            self.members = [str(m) for m in members]
-            self._rr = itertools.cycle(self.members)
-        else:
-            self.members = []
-            self._rr = itertools.cycle([])
         self._lock = threading.Lock()
 
     def _normalize_endpoints(self, raw: Any) -> List[Dict[str, Any]]:
@@ -72,15 +60,6 @@ class PoolProvider(BaseProvider):
             return 1.0
         return weight
 
-    def _build_weighted_indices(self, weights: List[float]) -> List[int]:
-        if not weights:
-            return [0]
-        indices: List[int] = []
-        for idx, weight in enumerate(weights):
-            count = max(1, int(round(weight)))
-            indices.extend([idx] * count)
-        return indices if indices else [0]
-
     def _build_endpoint_profile(self, endpoint: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "base_url": endpoint.get("base_url"),
@@ -94,19 +73,13 @@ class PoolProvider(BaseProvider):
 
     def _pick_endpoint_index(self) -> int:
         with self._lock:
-            if self.strategy == "random":
-                return random.choices(
-                    range(len(self._endpoint_weights)),
-                    weights=self._endpoint_weights,
-                    k=1,
-                )[0]
-            return next(self._endpoint_rr)
-
-    def _pick(self) -> str:
-        with self._lock:
-            if self.strategy == "random":
-                return random.choice(self.members)
-            return next(self._rr)
+            if not self._endpoint_weights:
+                return 0
+            return random.choices(
+                range(len(self._endpoint_weights)),
+                weights=self._endpoint_weights,
+                k=1,
+            )[0]
 
     def _endpoint_id(self, index: int) -> str:
         return f"endpoint:{index}"
@@ -125,25 +98,15 @@ class PoolProvider(BaseProvider):
     def build_request(
         self, messages: List[Dict[str, str]], settings: Dict[str, Any]
     ) -> ProviderRequest:
-        if self._endpoint_providers:
-            idx = self._pick_endpoint_index()
-            provider = self._endpoint_providers[idx]
-            request = provider.build_request(messages, settings)
-            request.provider_id = self._endpoint_id(idx)
-            return request
-        provider_id = self._pick()
-        provider = self.registry.get_provider(provider_id)
+        idx = self._pick_endpoint_index()
+        provider = self._endpoint_providers[idx]
         request = provider.build_request(messages, settings)
-        request.provider_id = provider_id
+        request.provider_id = self._endpoint_id(idx)
         return request
 
     def send(self, request: ProviderRequest) -> ProviderResponse:
-        if self._endpoint_providers:
-            idx = self._endpoint_from_request(request)
-            if idx is None:
-                idx = self._pick_endpoint_index()
-            provider = self._endpoint_providers[idx]
-            return provider.send(request)
-        provider_id = request.provider_id or self._pick()
-        provider = self.registry.get_provider(provider_id)
+        idx = self._endpoint_from_request(request)
+        if idx is None:
+            idx = self._pick_endpoint_index()
+        provider = self._endpoint_providers[idx]
         return provider.send(request)

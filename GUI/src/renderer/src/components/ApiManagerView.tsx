@@ -252,9 +252,7 @@ type ApiFormState = {
   apiKey: string;
   model: string;
   group: string;
-  members: string;
   poolEndpoints: PoolEndpointForm[];
-  strategy: "round_robin" | "random";
   headers: string;
   params: string;
   timeout: string;
@@ -564,9 +562,7 @@ const DEFAULT_API_FORM: ApiFormState = {
   apiKey: "",
   model: "",
   group: "",
-  members: "",
   poolEndpoints: [createPoolEndpoint()],
-  strategy: "round_robin",
   headers: "",
   params: "",
   timeout: "",
@@ -1193,10 +1189,11 @@ const formatErrorCode = (code: string, texts: any) => {
   }
   if (code === "missing_base_url") return texts.validationMissingBaseUrl;
   if (code === "missing_model") return texts.validationMissingModel;
-  if (code === "missing_members") return texts.validationMissingMembers;
   if (code === "missing_pool_endpoints")
     return texts.validationMissingPoolEndpoints;
   if (code === "missing_pool_model") return texts.validationMissingPoolModel;
+  if (code === "pool_members_unsupported")
+    return texts.validationPoolMembersUnsupported;
   if (code === "missing_pattern") return texts.validationMissingPattern;
   if (code === "missing_json_path") return texts.validationMissingJsonPath;
   if (code === "missing_script") return texts.validationMissingScript;
@@ -1225,6 +1222,12 @@ const formatErrorCode = (code: string, texts: any) => {
     return texts.concurrencyAutoTestAuth;
   if (code === "concurrency_test_rate_limited")
     return texts.concurrencyAutoTestRateLimited;
+  if (code === "concurrency_test_not_found")
+    return texts.concurrencyAutoTestNotFound;
+  if (code === "concurrency_test_bad_request")
+    return texts.concurrencyAutoTestBadRequest;
+  if (code === "concurrency_test_timeout")
+    return texts.concurrencyAutoTestTimeout;
   if (code === "concurrency_test_server_error")
     return texts.concurrencyAutoTestServerError;
   if (code === "concurrency_test_network")
@@ -1348,8 +1351,14 @@ const validateProfile = (
           typeof item === "object" &&
           (item.base_url || item.baseUrl),
       );
-      const hasMembers = Array.isArray(data.members) && data.members.length > 0;
-      if (!hasEndpoints && !hasMembers) {
+      const hasMembers = Boolean(
+        (Array.isArray(data.members) && data.members.length > 0) ||
+          (data.members !== undefined &&
+            data.members !== null &&
+            !Array.isArray(data.members) &&
+            String(data.members).trim()),
+      );
+      if (!hasEndpoints) {
         errors.push(texts.validationMissingPoolEndpoints);
       }
       if (hasEndpoints) {
@@ -1365,18 +1374,7 @@ const validateProfile = (
         }
       }
       if (hasMembers) {
-        const missing = data.members.filter(
-          (member: string) => !index.api.includes(String(member)),
-        );
-        missing.forEach((member: string) => {
-          errors.push(unknownRef("api", String(member)));
-        });
-      }
-      if (
-        data.strategy &&
-        !["round_robin", "random"].includes(String(data.strategy))
-      ) {
-        warnings.push(invalidType(String(data.strategy)));
+        errors.push(texts.validationPoolMembersUnsupported);
       }
       if (data.concurrency !== undefined) {
         const raw = Number.parseInt(String(data.concurrency), 10);
@@ -1763,6 +1761,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const [pipelineSummaryIndex, setPipelineSummaryIndex] = useState<
     Record<string, PipelineSummary>
   >({});
+  const [pipelineIndexReady, setPipelineIndexReady] = useState(false);
+  const [pipelineIndexLoading, setPipelineIndexLoading] = useState(false);
   const [isPipelineSummaryLoading, setIsPipelineSummaryLoading] = useState(false);
   const [pipelineView, setPipelineView] = useState<"overview" | "editor">(
     "overview",
@@ -2150,6 +2150,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   );
   const [pendingPipelineLink, setPendingPipelineLink] = useState(false);
   const loadProfilesSeq = useRef(0);
+  const pipelineIndexSeq = useRef(0);
   const pipelineSummarySeq = useRef(0);
   const loadDetailSeq = useRef(0);
   const apiTestSeq = useRef(0);
@@ -2636,10 +2637,87 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     }
   };
 
+  const warmPipelineIndex = async (
+    requestId: number,
+    preload?: Partial<Record<ProfileKind, any[]>>,
+  ) => {
+    if (pipelineIndexLoading) return;
+    const indexRequest = ++pipelineIndexSeq.current;
+    setPipelineIndexLoading(true);
+    try {
+      await loadProfileIndex(requestId, preload, PROFILE_KINDS);
+    } finally {
+      if (indexRequest === pipelineIndexSeq.current) {
+        if (requestId === loadProfilesSeq.current) {
+          setPipelineIndexReady(true);
+        }
+        setPipelineIndexLoading(false);
+      }
+    }
+  };
+
   // Load profiles
   const loadProfiles = async () => {
     const requestId = ++loadProfilesSeq.current;
     setIsProfilesLoading(true);
+    const shouldFastLoadPipeline =
+      kind === "pipeline" &&
+      pipelineView === "overview" &&
+      (profilesLoadedKind !== "pipeline" || !pipelineIndexReady);
+
+    if (shouldFastLoadPipeline) {
+      const preload: Partial<Record<ProfileKind, any[]>> = {};
+      try {
+        const list = await window.api?.pipelineV2ProfilesList?.("pipeline", {
+          preferLocal: true,
+        });
+        if (Array.isArray(list)) preload.pipeline = list;
+        const filtered = Array.isArray(list)
+          ? list.filter((item) => !isHiddenProfile("pipeline", item.id))
+          : [];
+        if (requestId !== loadProfilesSeq.current) return;
+        setProfiles(
+          filtered.map((item) => ({
+            id: String(item.id),
+            name: normalizeDefaultProfileName(item.id, item.name || item.id),
+            kind: "pipeline" as const,
+          })),
+        );
+        setProfileMeta((prev) => ({
+          ...prev,
+          pipeline: Object.fromEntries(
+            filtered.map((item) => [
+              item.id,
+              normalizeDefaultProfileName(item.id, item.name || item.id),
+            ]),
+          ),
+        }));
+        setProfileIndex((prev) => ({
+          ...prev,
+          pipeline: filtered.map((item) => String(item.id)),
+        }));
+      } catch (e) {
+        console.error("Failed to load pipeline list:", e);
+        if (requestId === loadProfilesSeq.current) {
+          setProfiles([]);
+          setProfileIndex((prev) => ({ ...prev, pipeline: [] }));
+          setProfileMeta((prev) => ({ ...prev, pipeline: {} }));
+        }
+      } finally {
+        if (requestId === loadProfilesSeq.current) {
+          setIsProfilesLoading(false);
+          setProfilesLoadedKind(kind);
+        }
+      }
+      if (
+        requestId === loadProfilesSeq.current &&
+        !pipelineIndexReady &&
+        !pipelineIndexLoading
+      ) {
+        void warmPipelineIndex(requestId, preload);
+      }
+      return;
+    }
     const preload: Partial<Record<ProfileKind, any[]>> = {};
     const indexKinds: ProfileKind[] =
       kind === "pipeline"
@@ -2737,6 +2815,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       if (requestId === loadProfilesSeq.current) {
         setIsProfilesLoading(false);
         setProfilesLoadedKind(kind);
+        if (kind === "pipeline") {
+          setPipelineIndexReady(true);
+          setPipelineIndexLoading(false);
+        }
       }
     }
   };
@@ -2792,6 +2874,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
   useEffect(() => {
     if (kind !== "pipeline") return;
+    if (pipelineView !== "overview") return;
+    if (!pipelineIndexReady) return;
     setPipelineSummaryIndex((prev) =>
       prunePipelineSummaryIndex(prev, visiblePipelineIds),
     );
@@ -2842,7 +2926,15 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       }
     };
     loadSummaries();
-  }, [kind, visiblePipelineIds, pipelineSummaryIndex]);
+  }, [kind, pipelineView, pipelineIndexReady, visiblePipelineIds, pipelineSummaryIndex]);
+
+  useEffect(() => {
+    if (kind !== "pipeline") return;
+    if (pipelineView !== "editor") return;
+    if (pipelineIndexReady || pipelineIndexLoading) return;
+    const requestId = loadProfilesSeq.current;
+    void warmPipelineIndex(requestId);
+  }, [kind, pipelineView, pipelineIndexReady, pipelineIndexLoading]);
 
   useEffect(() => {
     if (pendingSelection && pendingSelection.kind === kind) {
@@ -3548,6 +3640,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         apiKey,
         timeoutMs,
         maxConcurrency,
+        model: apiForm.model.trim(),
       });
       if (requestId !== apiConcurrencySeq.current) return;
       if (result?.ok) {
@@ -4188,11 +4281,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         normalizedEndpoints.length > 0
           ? normalizedEndpoints
           : [createPoolEndpoint()];
-      const membersText = Array.isArray(data.members)
-        ? data.members.join("\n")
-        : data.members !== undefined && data.members !== null
-          ? String(data.members)
-          : "";
       setApiForm({
         id: data.id || "",
         name: data.name || "",
@@ -4203,9 +4291,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           : data.api_key || "",
         model: data.model || "",
         group: data.group || "",
-        members: membersText,
         poolEndpoints,
-        strategy: data.strategy === "random" ? "random" : "round_robin",
         headers: JSON.stringify(apiHeaders, null, 2),
         params: paramsText,
         timeout:
@@ -4409,13 +4495,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     yamlSource: string,
     targetKind: ProfileKind = kind,
   ) => {
-      try {
-        const data = safeLoadYaml(yamlSource) as any;
-        if (!data || typeof data !== "object") return;
-        lastProfileDataRef.current[targetKind] = data;
-        syncFormsFromData(targetKind, data);
-      } catch { }
-    };
+    try {
+      const data = safeLoadYaml(yamlSource) as any;
+      if (!data || typeof data !== "object") return;
+      lastProfileDataRef.current[targetKind] = data;
+      syncFormsFromData(targetKind, data);
+    } catch { }
+  };
 
   const localizeTemplateName = (templateYaml: string, displayName?: string) => {
     if (!displayName) return templateYaml;
@@ -4663,13 +4749,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           })
           .filter(Boolean);
         if (endpoints.length) payload.endpoints = endpoints;
-        if (!endpoints.length) {
-          payload.members = newForm.members
-            .split("\n")
-            .map((s) => s.trim())
-            .filter(Boolean);
-        }
-        if (newForm.strategy === "random") payload.strategy = newForm.strategy;
       }
 
       const headers = resolveCachedJsonField(
@@ -4755,8 +4834,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           "model",
           "api_key",
           "endpoints",
-          "members",
-          "strategy",
           "headers",
           "params",
           "timeout",
@@ -5151,17 +5228,17 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         </Tooltip>
 
         <Tooltip content={texts.kinds.parser}>
-            <button
-              onClick={() => {
-                if (kind !== "parser") {
-                  guardUnsaved(() => {
-                    setSelectedId(null);
-                    commitYamlText("", { baseline: true });
-                    setKind("parser");
-                    setSearchTerm("");
-                  });
-                }
-              }}
+          <button
+            onClick={() => {
+              if (kind !== "parser") {
+                guardUnsaved(() => {
+                  setSelectedId(null);
+                  commitYamlText("", { baseline: true });
+                  setKind("parser");
+                  setSearchTerm("");
+                });
+              }
+            }}
             className={cn(
               "h-10 w-10 rounded-xl flex items-center justify-center transition-all duration-200",
               kind === "parser"
@@ -5214,13 +5291,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                     setKind(targetKind);
                   });
                 }}
-                  className={cn(
-                    "flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
-                    kind === targetKind
-                      ? "border-border/70 bg-muted/40 text-foreground dark:bg-primary/20 dark:text-primary-foreground dark:border-primary/30"
-                      : "border-border/60 bg-background/60 text-muted-foreground hover:border-border dark:hover:text-primary",
-                  )}
-                >
+                className={cn(
+                  "flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
+                  kind === targetKind
+                    ? "border-border/70 bg-muted/40 text-foreground dark:bg-primary/20 dark:text-primary-foreground dark:border-primary/30"
+                    : "border-border/60 bg-background/60 text-muted-foreground hover:border-border dark:hover:text-primary",
+                )}
+              >
                 {texts.kinds[targetKind]}
               </button>
             ))}
@@ -5340,10 +5417,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   );
 
   const renderApiForm = () => {
-    const memberCount = apiForm.members
-      .split("\n")
-      .map((item) => item.trim())
-      .filter(Boolean).length;
     const endpointCount = apiForm.poolEndpoints.filter((item) =>
       item.baseUrl.trim(),
     ).length;
@@ -5351,7 +5424,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       (item) => item.baseUrl.trim() && item.model.trim(),
     ).length;
     const poolReady =
-      endpointCount > 0 ? endpointReadyCount === endpointCount : memberCount > 0;
+      endpointCount > 0 && endpointReadyCount === endpointCount;
     const requiredItems =
       apiForm.apiType === "openai_compat"
         ? [
@@ -6047,52 +6120,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                     </div>
                   </div>
                 ))}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                <div className="space-y-2">
-                  <Label>{texts.formFields.membersLabel}</Label>
-                  <textarea
-                    spellCheck={false}
-                    className="flex min-h-[96px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    value={apiForm.members}
-                    onChange={(e) =>
-                      updateYamlFromApiForm({
-                        ...apiForm,
-                        members: e.target.value,
-                      })
-                    }
-                    placeholder={texts.formPlaceholders.members}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    {texts.formHints.members}
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label>{texts.formFields.strategyLabel}</Label>
-                  <SelectField
-                    value={apiForm.strategy}
-                    onChange={(e) =>
-                      updateYamlFromApiForm({
-                        ...apiForm,
-                        strategy:
-                          e.target.value === "random"
-                            ? "random"
-                            : "round_robin",
-                      })
-                    }
-                  >
-                    <option value="round_robin">
-                      {texts.apiTypeOptions.poolRoundRobin}
-                    </option>
-                    <option value="random">
-                      {texts.apiTypeOptions.poolRandom}
-                    </option>
-                  </SelectField>
-                  <p className="text-xs text-muted-foreground">
-                    {texts.formHints.strategy}
-                  </p>
-                </div>
               </div>
 
               {texts.poolEndpointHint?.trim() ? (
@@ -7198,7 +7225,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               <Label>{texts.policyFields.nameLabel}</Label>
               <Input
                 value={policyForm.name}
-                className="text-lg font-medium"
                 onChange={(e) => {
                   const nextName = e.target.value;
                   const nextId = shouldAutoUpdateId("policy", nextName)
@@ -7434,7 +7460,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               <Label>{texts.chunkFields.nameLabel}</Label>
               <Input
                 value={chunkForm.name}
-                className="text-lg font-medium"
                 onChange={(e) => {
                   const nextName = e.target.value;
                   const nextId = shouldAutoUpdateId("chunk", nextName)
@@ -7461,7 +7486,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 <Label>{texts.chunkFields.targetCharsLabel}</Label>
                 <Input
                   type="number"
-                  className="text-lg font-mono"
+                  className="font-mono"
                   value={chunkForm.targetChars}
                   onChange={(e) => updateChunk({ targetChars: e.target.value })}
                 />
@@ -7473,7 +7498,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 <Label>{texts.chunkFields.maxCharsLabel}</Label>
                 <Input
                   type="number"
-                  className="text-lg font-mono"
+                  className="font-mono"
                   value={chunkForm.maxChars}
                   onChange={(e) => updateChunk({ maxChars: e.target.value })}
                 />
@@ -7669,6 +7694,22 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     return (
       <div className="space-y-6">
         <FormSection title={texts.composer.title} desc={texts.composer.desc}>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div className="col-span-2 space-y-2">
+              <Label>{texts.formFields?.nameLabel || "名称"}</Label>
+              <Input
+                value={pipelineComposer.name}
+                onChange={(e) => {
+                  const nextName = e.target.value;
+                  const nextId = shouldAutoUpdateId("pipeline", nextName)
+                    ? buildAutoProfileId("pipeline", nextName, pipelineComposer.id)
+                    : pipelineComposer.id;
+                  applyPipelineChange({ name: nextName, id: nextId });
+                }}
+                placeholder={lang === "en" ? "Give this plan a name..." : "为方案起个名字..."}
+              />
+            </div>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -8423,13 +8464,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                   <div
                     key={id}
                     onClick={() => handleSelectProfile(id, "api")}
-                  className={cn(
-                    "group relative flex flex-col justify-between p-6 rounded-2xl border cursor-pointer transition-all duration-300 ease-out select-none min-h-[160px]",
-                    isSelected
-                      ? "bg-muted/40 border-border/70 shadow-[0_0_0_1px_rgba(0,0,0,0.04)] dark:bg-primary/15 dark:border-primary/40"
-                      : "bg-card border-border/60 hover:border-border/80 hover:shadow-lg hover:-translate-y-1"
-                  )}
-                >
+                    className={cn(
+                      "group relative flex flex-col justify-between p-6 rounded-2xl border cursor-pointer transition-all duration-300 ease-out select-none min-h-[160px]",
+                      isSelected
+                        ? "bg-muted/40 border-border/70 shadow-[0_0_0_1px_rgba(0,0,0,0.04)] dark:bg-primary/15 dark:border-primary/40"
+                        : "bg-card border-border/60 hover:border-border/80 hover:shadow-lg hover:-translate-y-1"
+                    )}
+                  >
                     {/* Selected Badge */}
                     <div
                       className={cn(
@@ -8439,10 +8480,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                           : "opacity-0 scale-90"
                       )}
                     >
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase bg-muted-foreground/80 text-background shadow-sm dark:bg-primary dark:text-primary-foreground">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>{t.selected}</span>
-                    </div>
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase bg-muted-foreground/80 text-background shadow-sm dark:bg-primary dark:text-primary-foreground">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>{t.selected}</span>
+                      </div>
                     </div>
 
                     {/* Header */}
@@ -8473,7 +8514,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               })}
 
               {/* Empty State for My Models if none */}
-            {items.length === 0 && (
+              {items.length === 0 && (
                 <div className="col-span-full py-10 flex flex-col items-center justify-center text-center text-muted-foreground border-2 border-dashed border-border/50 rounded-2xl bg-muted/20">
                   <Server className="w-10 h-10 mb-3 opacity-20" />
                   <p>{texts.apiGridEmptyTitle}</p>
@@ -8874,6 +8915,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       if (kind === "pipeline" && pipelineView === "overview") {
         return renderPipelineOverviewSkeleton();
       }
+      return renderLoadingState();
+    }
+
+    if (kind === "pipeline" && pipelineView === "editor" && !pipelineIndexReady) {
       return renderLoadingState();
     }
 

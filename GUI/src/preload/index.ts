@@ -63,8 +63,10 @@ const api = {
       runId,
     }),
   pipelineV2ProfilesPath: () => ipcRenderer.invoke("pipelinev2-profiles-path"),
-  pipelineV2ProfilesList: (kind: string) =>
-    ipcRenderer.invoke("pipelinev2-profiles-list", kind),
+  pipelineV2ProfilesList: (
+    kind: string,
+    options?: { preferLocal?: boolean },
+  ) => ipcRenderer.invoke("pipelinev2-profiles-list", kind, options),
   pipelineV2ProfilesLoad: (kind: string, id: string) =>
     ipcRenderer.invoke("pipelinev2-profiles-load", kind, id),
   pipelineV2ProfilesLoadBatch: (kind: string, ids: string[]) =>
@@ -94,6 +96,7 @@ const api = {
     apiKey?: string;
     timeoutMs?: number;
     maxConcurrency?: number;
+    model?: string;
   }) => ipcRenderer.invoke("pipelinev2-api-concurrency-test", payload),
   pipelineV2Run: (payload: {
     filePath: string;
@@ -101,6 +104,7 @@ const api = {
     profilesDir: string;
     outputPath?: string;
   }) => ipcRenderer.invoke("pipelinev2-run", payload),
+  pipelineV2Stop: () => ipcRenderer.send("stop-pipelinev2"),
   getHardwareSpecs: () => ipcRenderer.invoke("get-hardware-specs"),
   stopTranslation: () => ipcRenderer.send("stop-translation"),
   getGlossaries: () => ipcRenderer.invoke("get-glossaries"),

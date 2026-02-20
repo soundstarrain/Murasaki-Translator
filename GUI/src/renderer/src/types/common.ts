@@ -60,6 +60,10 @@ export interface FileConfig {
   outputDir?: string;
   glossaryPath?: string;
   useGlobalDefaults?: boolean;
+
+  // V2 Engine Mode
+  engineMode?: "v1" | "v2";
+  v2PipelineId?: string;
 }
 
 export interface QueueItem {

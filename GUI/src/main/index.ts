@@ -413,7 +413,7 @@ function cleanupTempDirectory(): void {
       for (const file of files) {
         try {
           fs.unlinkSync(join(tempDir, file));
-        } catch (_) {}
+        } catch (_) { }
       }
       console.log(`[App] Cleaned ${files.length} temp files`);
     }
@@ -434,7 +434,7 @@ function cleanupTempDirectory(): void {
           continue;
         try {
           fs.unlinkSync(join(middlewareDir, file));
-        } catch {}
+        } catch { }
       }
     }
   } catch (e) {
@@ -492,6 +492,7 @@ app.whenReady().then(() => {
   registerPipelineV2Runner({
     getPythonPath,
     getMiddlewarePath,
+    getMainWindow: () => mainWindow,
     sendLog: ({ runId, message, level }) => {
       if (!mainWindow) return;
       mainWindow.webContents.send("pipelinev2-log", {
@@ -589,17 +590,17 @@ const getScriptPythonPath = (): string => {
   const middlewarePythonCandidates =
     process.platform === "win32"
       ? [
-          join(middlewarePath, ".venv", "Scripts", "python.exe"),
-          join(middlewarePath, "python_env", "python.exe"),
-        ]
+        join(middlewarePath, ".venv", "Scripts", "python.exe"),
+        join(middlewarePath, "python_env", "python.exe"),
+      ]
       : [
-          join(middlewarePath, ".venv", "bin", "python3"),
-          join(middlewarePath, ".venv", "bin", "python"),
-          join(middlewarePath, "python_env", "bin", "python3"),
-          join(middlewarePath, "python_env", "bin", "python"),
-          join(middlewarePath, "python_env", "python3"),
-          join(middlewarePath, "python_env", "python"),
-        ];
+        join(middlewarePath, ".venv", "bin", "python3"),
+        join(middlewarePath, ".venv", "bin", "python"),
+        join(middlewarePath, "python_env", "bin", "python3"),
+        join(middlewarePath, "python_env", "bin", "python"),
+        join(middlewarePath, "python_env", "python3"),
+        join(middlewarePath, "python_env", "python"),
+      ];
 
   if (is.dev) {
     if (process.env.ELECTRON_PYTHON_PATH)
@@ -733,10 +734,10 @@ const spawnPythonProcess = (
     cwd: string;
     env?: NodeJS.ProcessEnv;
     stdio?:
-      | "pipe"
-      | "inherit"
-      | "ignore"
-      | Array<"pipe" | "inherit" | "ignore" | "ipc" | null>;
+    | "pipe"
+    | "inherit"
+    | "ignore"
+    | Array<"pipe" | "inherit" | "ignore" | "ipc" | null>;
   },
 ) => {
   // 1. Base Environment
@@ -1066,12 +1067,12 @@ const remoteNetworkStats = {
   lastEventAt: undefined as number | undefined,
   lastError: undefined as
     | {
-        at: number;
-        kind: "connection" | "http" | "upload" | "download" | "retry" | "ws";
-        message: string;
-        path?: string;
-        statusCode?: number;
-      }
+      at: number;
+      kind: "connection" | "http" | "upload" | "download" | "retry" | "ws";
+      message: string;
+      path?: string;
+      statusCode?: number;
+    }
     | undefined,
   lastSyncAt: undefined as number | undefined,
 };
@@ -1264,7 +1265,7 @@ const appendRemoteEvent = (event: RemoteNetworkEvent) => {
     remoteNetworkStats.latencyCount += 1;
     remoteNetworkStats.avgLatencyMs = Math.round(
       remoteNetworkStats.latencyTotalMs /
-        Math.max(1, remoteNetworkStats.latencyCount),
+      Math.max(1, remoteNetworkStats.latencyCount),
     );
   }
 
@@ -1379,9 +1380,9 @@ const formatRemoteError = (error: unknown) => {
           : lower.includes("invalid response")
             ? "REMOTE_PROTOCOL"
             : lower.includes("network") ||
-                lower.includes("fetch failed") ||
-                lower.includes("econnreset") ||
-                lower.includes("etimedout")
+              lower.includes("fetch failed") ||
+              lower.includes("econnreset") ||
+              lower.includes("etimedout")
               ? "REMOTE_NETWORK"
               : "REMOTE_UNKNOWN";
 
@@ -1420,10 +1421,10 @@ const buildRemoteErrorResponse = (error: unknown, fallbackMessage?: string) => {
 const getSanitizedRemoteSession = () =>
   remoteSession
     ? {
-        url: remoteSession.url,
-        connectedAt: remoteSession.connectedAt,
-        source: remoteSession.source,
-      }
+      url: remoteSession.url,
+      connectedAt: remoteSession.connectedAt,
+      source: remoteSession.source,
+    }
     : null;
 
 const buildRemoteNetworkStatus = () => ({
@@ -2137,7 +2138,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           }
         }
       }
-    } catch {}
+    } catch { }
 
     try {
       const { stdout } = await execWithTimeout(
@@ -2159,7 +2160,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           return;
         }
       }
-    } catch {}
+    } catch { }
 
     if (process.platform === "win32") {
       try {
@@ -2185,7 +2186,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.gpu = { name, driver: driver || undefined, vram };
           return;
         }
-      } catch {}
+      } catch { }
 
       try {
         const { stdout } = await execWithTimeout(
@@ -2210,7 +2211,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.gpu = { name, driver: driver || undefined, vram };
           return;
         }
-      } catch {}
+      } catch { }
     }
 
     if (process.platform === "darwin") {
@@ -2235,7 +2236,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.gpu = { name: String(name), driver: "METAL", vram };
           return;
         }
-      } catch {}
+      } catch { }
     }
 
     if (process.platform === "linux") {
@@ -2259,7 +2260,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
             return;
           }
         }
-      } catch {}
+      } catch { }
 
       try {
         const { stdout } = await execWithTimeout("lspci", 4000);
@@ -2273,7 +2274,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           };
           return;
         }
-      } catch {}
+      } catch { }
 
       try {
         const { stdout } = await execWithTimeout("glxinfo -B", 4000);
@@ -2286,7 +2287,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
             driver: "Detected via glxinfo",
           };
         }
-      } catch {}
+      } catch { }
     }
   })();
 
@@ -2316,7 +2317,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.python = { version, path: executable };
           return;
         }
-      } catch {}
+      } catch { }
     }
 
     if (primary.type === "bundle" && fs.existsSync(primary.path)) {
@@ -2349,7 +2350,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           result.cuda = { version: `driver ${first}`, available: true };
           return;
         }
-      } catch {}
+      } catch { }
       result.cuda = { version: "N/A", available: false };
     }
   })();
@@ -2379,7 +2380,7 @@ ipcMain.handle("get-system-diagnostics", async () => {
           version: versionMatch ? versionMatch[1] : undefined,
         };
         return;
-      } catch {}
+      } catch { }
       result.vulkan = { available: false };
     }
   })();
@@ -3659,7 +3660,7 @@ ipcMain.handle(
         for (const path of tempArtifacts) {
           try {
             fs.unlinkSync(path);
-          } catch (_) {}
+          } catch (_) { }
         }
         if (code !== 0) {
           resolve({
@@ -4364,7 +4365,7 @@ const runTranslationViaRemoteApi = async (
       if (!logsContainProgress && !recentlySawProgress) {
         const percentRaw =
           typeof status.progress === "number" &&
-          Number.isFinite(status.progress)
+            Number.isFinite(status.progress)
             ? status.progress <= 1
               ? status.progress * 100
               : status.progress
@@ -5141,7 +5142,7 @@ ipcMain.on(
         for (const tmpFile of tempRuleFiles) {
           try {
             fs.unlinkSync(tmpFile);
-          } catch (_) {}
+          } catch (_) { }
         }
       });
     } catch (e: unknown) {
@@ -5180,13 +5181,13 @@ ipcMain.on("stop-translation", () => {
         // Fallback
         try {
           pythonProcess?.kill();
-        } catch (_) {}
+        } catch (_) { }
       });
       // 超时兜底：3s 后若进程仍然存活
       setTimeout(() => {
         try {
           pythonProcess?.kill("SIGKILL");
-        } catch (_) {}
+        } catch (_) { }
       }, 3000);
     } else {
       pythonProcess.kill();
@@ -5277,7 +5278,7 @@ ipcMain.handle(
           if (tempFile && fs.existsSync(tempFile)) {
             try {
               fs.unlinkSync(tempFile);
-            } catch (_) {}
+            } catch (_) { }
           }
 
           if (code === 0) {
@@ -5585,7 +5586,7 @@ ipcMain.handle("hf-download-cancel", async () => {
       } catch {
         try {
           hfDownloadProcess.kill();
-        } catch {}
+        } catch { }
       }
     } else {
       hfDownloadProcess.kill("SIGTERM");

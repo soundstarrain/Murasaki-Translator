@@ -25,6 +25,9 @@ from murasaki_flow_v2.providers.base import ProviderError
 from murasaki_flow_v2.utils.adaptive_concurrency import AdaptiveConcurrency
 from murasaki_flow_v2.utils.line_format import extract_line_for_policy, parse_jsonl_entries
 from murasaki_flow_v2.utils import processing as v2_processing
+from murasaki_flow_v2.utils.log_protocol import (
+    ProgressTracker, emit_output_path, emit_retry, emit_error, emit_warning,
+)
 
 MAX_CONCURRENCY = 64
 
@@ -355,6 +358,13 @@ class PipelineRunner:
 
         translated_blocks: List[Optional[TextBlock]] = [None] * len(blocks)
 
+        # --- Dashboard 日志协议 ---
+        tracker = ProgressTracker(
+            total_blocks=len(blocks),
+            total_source_lines=len(source_lines),
+            total_source_chars=sum(len(l) for l in source_lines),
+        )
+
         def translate_block(idx: int, block: TextBlock) -> Tuple[int, TextBlock]:
             context_cfg = prompt_profile.get("context") or {}
             line_index = None
@@ -431,6 +441,12 @@ class PipelineRunner:
                 try:
                     request = provider.build_request(messages, settings)
                     response = provider.send(request)
+                    # 记录 API 请求统计（token usage）
+                    _usage = (response.raw or {}).get("data", {}).get("usage", {})
+                    tracker.note_request(
+                        input_tokens=_usage.get("prompt_tokens", 0) or 0,
+                        output_tokens=_usage.get("completion_tokens", 0) or 0,
+                    )
                     if use_jsonl and target_line_ids:
                         translated = self._parse_jsonl_response(
                             response.text, target_line_ids
@@ -478,6 +494,20 @@ class PipelineRunner:
                     if adaptive is not None and isinstance(exc, ProviderError):
                         adaptive.note_error(last_error)
                     attempt += 1
+                    error_type = (
+                        "line_mismatch" if isinstance(exc, LinePolicyError)
+                        else "empty" if isinstance(exc, ParserError)
+                        else "provider_error"
+                    )
+                    # 提取 HTTP 状态码（如果是 ProviderError）
+                    _status_code = None
+                    if isinstance(exc, ProviderError):
+                        import re as _re
+                        _m = _re.search(r"HTTP (\d{3})", str(exc))
+                        if _m:
+                            _status_code = int(_m.group(1))
+                    tracker.note_retry(_status_code)
+                    emit_retry(idx + 1, attempt, error_type)
                     if attempt > max_retries:
                         if (
                             isinstance(exc, LinePolicyError)
@@ -537,6 +567,7 @@ class PipelineRunner:
                             _, translated_block = future.result()
                             translated_blocks[idx] = translated_block
                             adaptive.note_success()
+                            tracker.block_done(idx, blocks[idx].prompt_text, translated_block.prompt_text)
                         except Exception:
                             for pending in futures:
                                 pending.cancel()
@@ -546,6 +577,7 @@ class PipelineRunner:
             for idx, block in enumerate(blocks):
                 _, translated_block = translate_block(idx, block)
                 translated_blocks[idx] = translated_block
+                tracker.block_done(idx, block.prompt_text, translated_block.prompt_text)
         else:
             with ThreadPoolExecutor(max_workers=concurrency) as executor:
                 futures = {
@@ -557,6 +589,7 @@ class PipelineRunner:
                     try:
                         _, translated_block = future.result()
                         translated_blocks[idx] = translated_block
+                        tracker.block_done(idx, blocks[idx].prompt_text, translated_block.prompt_text)
                     except Exception:
                         for pending in futures:
                             pending.cancel()
@@ -570,6 +603,8 @@ class PipelineRunner:
         if not output_path:
             base, ext = os.path.splitext(input_path)
             output_path = f"{base}_translated{ext}"
+
+        emit_output_path(output_path)
 
         if processing_processor and processing_processor.options.enable_quality:
             output_lines = [b.prompt_text for b in translated_blocks]
@@ -605,4 +640,5 @@ class PipelineRunner:
             self._normalize_txt_blocks(translated_blocks)
 
         doc.save(output_path, translated_blocks)
+        tracker.emit_final_stats()
         return output_path

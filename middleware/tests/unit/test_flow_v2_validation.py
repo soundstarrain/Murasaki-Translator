@@ -118,16 +118,15 @@ def test_flow_v2_validation_pipeline_invalid_concurrency():
 
 
 @pytest.mark.unit
-def test_flow_v2_validation_pool_member_missing(tmp_path):
-    store = ProfileStore(str(tmp_path))
-    store.ensure_dirs(["api", "prompt", "parser", "policy", "chunk", "pipeline"])
+def test_flow_v2_validation_pool_members_unsupported():
     data = {
         "id": "pool_api",
         "type": "pool",
-        "members": ["missing_api"],
+        "members": ["api_a"],
+        "endpoints": [{"base_url": "https://api.example.com/v1", "model": "demo"}],
     }
-    result = validate_profile("api", data, store=store)
-    assert any(item.startswith("missing_reference:api:") for item in result.errors)
+    result = validate_profile("api", data)
+    assert "pool_members_unsupported" in result.errors
 
 
 @pytest.mark.unit

@@ -34,6 +34,8 @@ const formatErrorCode = (code: string, texts: any) => {
   if (code === "missing_base_url") return texts.validationMissingBaseUrl;
   if (code === "missing_model") return texts.validationMissingModel;
   if (code === "missing_members") return texts.validationMissingMembers;
+  if (code === "pool_members_unsupported")
+    return texts.validationPoolMembersUnsupported;
   if (code === "missing_pattern") return texts.validationMissingPattern;
   if (code === "missing_json_path") return texts.validationMissingJsonPath;
   if (code === "invalid_timeout") return texts.validationInvalidTimeout;

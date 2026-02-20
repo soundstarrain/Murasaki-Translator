@@ -39,21 +39,21 @@ export interface TriggerEvent {
   time: string;
   /** Type of trigger event */
   type:
-    | "empty_retry"
-    | "rep_penalty_increase"
-    | "line_mismatch"
-    | "anchor_missing"
-    | "parse_fallback"
-    | "kana_residue"
-    | "hangeul_residue"
-    | "high_similarity"
-    | "glossary_missed"
-    | "warning_line_mismatch"
-    | "warning_kana_residue"
-    | "warning_hangeul_residue"
-    | "warning_high_similarity"
-    | "warning_glossary_missed"
-    | "warning_quality";
+  | "empty_retry"
+  | "rep_penalty_increase"
+  | "line_mismatch"
+  | "anchor_missing"
+  | "parse_fallback"
+  | "kana_residue"
+  | "hangeul_residue"
+  | "high_similarity"
+  | "glossary_missed"
+  | "warning_line_mismatch"
+  | "warning_kana_residue"
+  | "warning_hangeul_residue"
+  | "warning_high_similarity"
+  | "warning_glossary_missed"
+  | "warning_quality";
   /** Block number where the event occurred (0 if not applicable) */
   block: number;
   /** Human-readable message describing the event */
@@ -126,6 +126,28 @@ export interface TranslationRecord {
   logs: string[];
   /** llama 引擎日志（可选） */
   llamaLogs?: string[];
+
+  // === V2 Pipeline 专有字段 ===
+  /** 引擎版本：v1 本地推理 / v2 API Pipeline */
+  engineVersion?: "v1" | "v2";
+  /** V2 Pipeline 配置信息 */
+  v2Config?: {
+    pipelineId: string;
+    pipelineName: string;
+    providerName?: string;
+    promptName?: string;
+    parserName?: string;
+    chunkType?: "line" | "legacy";
+  };
+  /** V2 API 统计（仅 V2 模式） */
+  v2Stats?: {
+    totalRequests: number;
+    totalRetries: number;
+    totalErrors: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    errorStatusCodes?: Record<string, number>;
+  };
 }
 
 // ============================================================================
@@ -411,85 +433,154 @@ function RecordDetailContent({
     );
   }
 
+  const isV2 = fullRecord.engineVersion === "v2";
+  const v2s = fullRecord.v2Stats;
+  const v2c = fullRecord.v2Config;
+
   return (
     <CardContent className="pt-0 border-t">
       <div className="space-y-4 pt-4">
-        {/* Stats */}
-        <div className="grid grid-cols-7 gap-3 text-sm">
-          <div>
-            <p className="text-muted-foreground text-xs">
-              {t.historyView.stats.blocks}
-            </p>
-            <p className="font-medium">
-              {fullRecord.completedBlocks}/{fullRecord.totalBlocks}
-            </p>
-          </div>
-          <div>
-            <p className="text-muted-foreground text-xs">
-              {t.historyView.stats.lines}
-            </p>
-            <p className="font-medium">
-              {fullRecord.sourceLines || 0}/{fullRecord.totalLines || 0}
-            </p>
-          </div>
-          <div>
-            <p className="text-muted-foreground text-xs">
-              {t.historyView.stats.chars}
-            </p>
-            <p className="font-medium">
-              {(fullRecord.sourceChars || 0).toLocaleString()}/
-              {(fullRecord.totalChars || 0).toLocaleString()}
-            </p>
-          </div>
-          <div>
-            <p className="text-muted-foreground text-xs">
-              {t.historyView.stats.speed}
-            </p>
-            <p className="font-medium">
-              {avgSpeedDisplay} {speedUnit}
-            </p>
-          </div>
-          <div>
-            <p className="text-muted-foreground text-xs">
-              {t.historyView.stats.concurrency}
-            </p>
-            <p className="font-medium">{config.concurrency ?? 1}</p>
-          </div>
-          <div>
-            <p className="text-muted-foreground text-xs">
-              {t.historyView.stats.temperature}
-            </p>
-            <p className="font-medium">
-              {formatMaybe(config.temperature, "-")}
-            </p>
-          </div>
-          <div>
-            <p className="text-muted-foreground text-xs">
-              {t.historyView.stats.retries}
-            </p>
-            <p className="font-medium">
-              {
-                fullRecord.triggers.filter(
-                  (tr) =>
-                    tr.type === "empty_retry" ||
-                    tr.type === "line_mismatch" ||
-                    tr.type === "anchor_missing" ||
-                    tr.type === "rep_penalty_increase" ||
-                    tr.type === "glossary_missed",
-                ).length
-              }
-            </p>
-          </div>
-        </div>
 
-        {/* Model Info */}
-        {fullRecord.modelName && (
-          <p className="text-xs text-muted-foreground">
-            {t.historyView.labels.model}{" "}
-            <span className="font-medium text-foreground">
-              {fullRecord.modelName}
-            </span>
-          </p>
+        {/* ========== V2 API 统计面板 ========== */}
+        {isV2 ? (
+          <>
+            {/* Pipeline 信息 */}
+            {v2c && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>Pipeline: <span className="font-medium text-foreground">{v2c.pipelineName || v2c.pipelineId}</span></span>
+                {v2c.providerName && <span>Provider: <span className="font-medium text-foreground">{v2c.providerName}</span></span>}
+                {v2c.chunkType && <span>{lang === "en" ? "Mode" : "模式"}: <span className="font-medium text-foreground">{v2c.chunkType === "line" ? (lang === "en" ? "Line" : "行翻译") : (lang === "en" ? "Block" : "块翻译")}</span></span>}
+              </div>
+            )}
+
+            {/* 翻译统计 - 行/字符/速度 */}
+            <div className="grid grid-cols-4 gap-3 text-sm">
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.blocks}</p>
+                <p className="font-medium">{fullRecord.completedBlocks}/{fullRecord.totalBlocks}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.lines}</p>
+                <p className="font-medium">{fullRecord.sourceLines || 0}/{fullRecord.totalLines || 0}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.chars}</p>
+                <p className="font-medium">{(fullRecord.sourceChars || 0).toLocaleString()}/{(fullRecord.totalChars || 0).toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.speed}</p>
+                <p className="font-medium">{avgSpeedDisplay} {speedUnit}</p>
+              </div>
+            </div>
+
+            {/* API 请求统计 */}
+            {v2s && (
+              <div className="grid grid-cols-4 gap-3 text-sm">
+                <div>
+                  <p className="text-muted-foreground text-xs">{lang === "en" ? "Requests" : "总请求"}</p>
+                  <p className="font-medium">{v2s.totalRequests.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">{t.historyView.stats.retries}</p>
+                  <p className="font-medium">{v2s.totalRetries.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">{lang === "en" ? "Errors" : "总错误"}</p>
+                  <p className="font-medium text-destructive">{v2s.totalErrors}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">{lang === "en" ? "Success Rate" : "成功率"}</p>
+                  <p className="font-medium">{v2s.totalRequests > 0 ? ((1 - v2s.totalErrors / v2s.totalRequests) * 100).toFixed(1) : "0"}%</p>
+                </div>
+              </div>
+            )}
+
+            {/* Token 用量 */}
+            {v2s && (v2s.totalInputTokens > 0 || v2s.totalOutputTokens > 0) && (
+              <div className="grid grid-cols-3 gap-3 text-sm">
+                <div>
+                  <p className="text-muted-foreground text-xs">{lang === "en" ? "Input Tokens" : "输入 Token"}</p>
+                  <p className="font-medium">{v2s.totalInputTokens.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">{lang === "en" ? "Output Tokens" : "输出 Token"}</p>
+                  <p className="font-medium">{v2s.totalOutputTokens.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">{lang === "en" ? "Total Tokens" : "总 Token"}</p>
+                  <p className="font-medium">{(v2s.totalInputTokens + v2s.totalOutputTokens).toLocaleString()}</p>
+                </div>
+              </div>
+            )}
+
+            {/* 错误状态码分布 */}
+            {v2s?.errorStatusCodes && Object.keys(v2s.errorStatusCodes).length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-1.5">{lang === "en" ? "Error Status Codes" : "错误状态码分布"}</p>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(v2s.errorStatusCodes)
+                    .sort(([, a], [, b]) => b - a)
+                    .map(([code, count]) => (
+                      <span key={code} className="inline-flex items-center gap-1 text-xs bg-destructive/10 text-destructive rounded px-2 py-0.5">
+                        HTTP {code}: {count}{lang === "en" ? "x" : " 次"}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          /* ========== V1 原有统计面板 ========== */
+          <>
+            {/* Stats */}
+            <div className="grid grid-cols-7 gap-3 text-sm">
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.blocks}</p>
+                <p className="font-medium">{fullRecord.completedBlocks}/{fullRecord.totalBlocks}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.lines}</p>
+                <p className="font-medium">{fullRecord.sourceLines || 0}/{fullRecord.totalLines || 0}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.chars}</p>
+                <p className="font-medium">{(fullRecord.sourceChars || 0).toLocaleString()}/{(fullRecord.totalChars || 0).toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.speed}</p>
+                <p className="font-medium">{avgSpeedDisplay} {speedUnit}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.concurrency}</p>
+                <p className="font-medium">{config.concurrency ?? 1}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.temperature}</p>
+                <p className="font-medium">{formatMaybe(config.temperature, "-")}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">{t.historyView.stats.retries}</p>
+                <p className="font-medium">
+                  {fullRecord.triggers.filter(
+                    (tr) =>
+                      tr.type === "empty_retry" ||
+                      tr.type === "line_mismatch" ||
+                      tr.type === "anchor_missing" ||
+                      tr.type === "rep_penalty_increase" ||
+                      tr.type === "glossary_missed",
+                  ).length}
+                </p>
+              </div>
+            </div>
+
+            {/* Model Info */}
+            {fullRecord.modelName && (
+              <p className="text-xs text-muted-foreground">
+                {t.historyView.labels.model}{" "}
+                <span className="font-medium text-foreground">{fullRecord.modelName}</span>
+              </p>
+            )}
+          </>
         )}
 
         {/* Triggers - Collapsible */}
@@ -944,12 +1035,11 @@ export function HistoryView({ lang, onNavigate }: HistoryViewProps) {
       ``,
       e.configTitle,
       `${e.temp} ${formatMaybe(config.temperature)}`,
-      `${e.lineCheck} ${
-        config.lineCheck === undefined
-          ? t.none
-          : config.lineCheck
-            ? t.historyView.toggleOn
-            : t.historyView.toggleOff
+      `${e.lineCheck} ${config.lineCheck === undefined
+        ? t.none
+        : config.lineCheck
+          ? t.historyView.toggleOn
+          : t.historyView.toggleOff
       }`,
       `${e.repPenalty} ${formatMaybe(config.repPenaltyBase)}`,
       `${e.maxRetries} ${formatMaybe(config.maxRetries)}`,

@@ -191,6 +191,52 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     // Monitors
     const [monitorData, setMonitorData] = useState<MonitorData | null>(null);
 
+    // --- V1/V2 引擎模式 ---
+    const [engineMode, setEngineMode] = useState<"v1" | "v2">(
+      () => (localStorage.getItem("config_engine_mode") as "v1" | "v2") || "v1",
+    );
+    const [v2PipelineId, setV2PipelineId] = useState<string>(() => {
+      // 优先读 Dashboard 自己的存储，再 fallback 到 ApiManager 的选择
+      const dashboardVal = localStorage.getItem("config_v2_pipeline_id");
+      if (dashboardVal) return dashboardVal;
+      try {
+        const apiMgrVal = localStorage.getItem("murasaki.v2.active_pipeline_id");
+        if (apiMgrVal) return JSON.parse(apiMgrVal) as string;
+      } catch { /* ignore */ }
+      return "";
+    });
+    const [v2Profiles, setV2Profiles] = useState<Array<{ id: string; name: string; providerName?: string }>>([]);
+    const engineModeRef = useRef(engineMode);
+    useEffect(() => { engineModeRef.current = engineMode; }, [engineMode]);
+    useEffect(() => { localStorage.setItem("config_engine_mode", engineMode); }, [engineMode]);
+    useEffect(() => { localStorage.setItem("config_v2_pipeline_id", v2PipelineId); }, [v2PipelineId]);
+
+    // V2 Pipeline profiles 加载
+    useEffect(() => {
+      if (!active || engineMode !== "v2") return;
+      window.api?.pipelineV2ProfilesList?.("pipeline").then((profiles: any[]) => {
+        if (Array.isArray(profiles)) {
+          setV2Profiles(profiles.map((p: any) => ({
+            id: p.id,
+            name: p.name || p.id,
+            providerName: p.providerName,
+          })));
+          // 如果当前没选择但ApiManager有选择，自动同步
+          if (!v2PipelineId && profiles.length > 0) {
+            try {
+              const apiMgrVal = localStorage.getItem("murasaki.v2.active_pipeline_id");
+              if (apiMgrVal) {
+                const parsed = JSON.parse(apiMgrVal) as string;
+                if (profiles.some((p: any) => p.id === parsed)) {
+                  setV2PipelineId(parsed);
+                }
+              }
+            } catch { /* ignore */ }
+          }
+        }
+      });
+    }, [active, engineMode]);
+
     const [modelPath, setModelPath] = useState<string>("");
     const [promptPreset, setPromptPreset] = useState<string>(
       () => localStorage.getItem("config_preset") || "novel",
@@ -1012,18 +1058,18 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                     : data.type === "glossary"
                       ? retryMessages.glossaryCoverage
                         .replace("{coverage}", coverageText)
-                  : data.type === "empty"
-                    ? retryMessages.emptyBlock
-                      .replace("{block}", String(data.block))
-                    : data.type === "anchor_missing"
-                      ? retryMessages.anchorMissing
-                        .replace("{block}", String(data.block))
-                      : retryMessages.lineMismatch
-                        .replace("{block}", String(data.block))
-                        .replace(
-                          "{diff}",
-                          String(data.src_lines - data.dst_lines),
-                        ),
+                      : data.type === "empty"
+                        ? retryMessages.emptyBlock
+                          .replace("{block}", String(data.block))
+                        : data.type === "anchor_missing"
+                          ? retryMessages.anchorMissing
+                            .replace("{block}", String(data.block))
+                          : retryMessages.lineMismatch
+                            .replace("{block}", String(data.block))
+                            .replace(
+                              "{diff}",
+                              String(data.src_lines - data.dst_lines),
+                            ),
               });
             } catch (e) {
               console.error("JSON_RETRY Parse Error:", e, log);
@@ -1444,7 +1490,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       }
       const nextQueue = queue.map((item) =>
         item.status === "failed"
-          ? { ...item, status: "pending", error: undefined }
+          ? { ...item, status: "pending" as const, error: undefined }
           : item,
       );
       setQueue(nextQueue);
@@ -1883,7 +1929,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             : localStorage.getItem("config_save_cot") === "true",
         modelPath: effectiveModelPath,
         remoteModel: isRemoteMode ? effectiveModelPath : undefined,
-        executionMode: isRemoteMode ? "remote" : "local",
+        executionMode: (isRemoteMode ? "remote" : "local") as "local" | "remote",
       };
 
       // Create history record
@@ -1896,7 +1942,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       // 重置远程信息(新任务开始)
       remoteInfoRef.current = null;
 
-      const finalConfig = { ...config, highFidelity: undefined };
+      const finalConfig = { ...config, highFidelity: undefined, outputDir: config.outputDir ?? undefined };
       const recordModelLabel =
         effectiveModelPath.split(/[/\\]/).pop() || effectiveModelPath;
 
@@ -1928,6 +1974,81 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       );
     };
 
+    // --- V2 Pipeline 启动 ---
+    const startV2Translation = async (inputPath: string) => {
+      if (!v2PipelineId) {
+        showAlert({
+          title: lang === "en" ? "Select Plan" : "请选择翻译方案",
+          description: lang === "en" ? "Please select an API translation plan before starting." : "请先选择一个 API 翻译方案。",
+          variant: "warning",
+        });
+        return;
+      }
+
+      setIsRunning(true);
+      setDisplayElapsed(0);
+      setDisplayRemaining(0);
+      const runId = `v2_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      activeRunIdRef.current = runId;
+      localStartTimeRef.current = Date.now();
+      lastBackendElapsedRef.current = 0;
+      lastBackendUpdateRef.current = 0;
+      hasReceivedProgressRef.current = false;
+
+      if (chartRenderTimerRef.current !== null) {
+        window.clearTimeout(chartRenderTimerRef.current);
+        chartRenderTimerRef.current = null;
+      }
+      setChartData([]);
+      chartHistoriesRef.current = { chars: [], tokens: [], vram: [], gpu: [] };
+      setProgress({
+        current: 0, total: 0, percent: 0, elapsed: 0, remaining: 0,
+        speedLines: 0, speedChars: 0, speedEval: 0, speedGen: 0, retries: 0,
+      });
+      setPreviewBlocks({});
+      setLastOutputPath("");
+      localStorage.removeItem("last_preview_blocks");
+
+      // 创建 V2 历史记录
+      const recordId = Date.now().toString();
+      currentRecordIdRef.current = recordId;
+      logsBufferRef.current = [];
+      triggersBufferRef.current = [];
+      llamaLogsBufferRef.current = [];
+
+      const selectedProfile = v2Profiles.find(p => p.id === v2PipelineId);
+      const newRecord: TranslationRecord = {
+        id: recordId,
+        fileName: inputPath.split(/[/\\]/).pop() || inputPath,
+        filePath: inputPath,
+        startTime: new Date().toISOString(),
+        status: "running",
+        totalBlocks: 0,
+        completedBlocks: 0,
+        totalLines: 0,
+        triggers: [],
+        logs: [],
+        engineVersion: "v2",
+        v2Config: {
+          pipelineId: v2PipelineId,
+          pipelineName: selectedProfile?.name || v2PipelineId,
+          providerName: selectedProfile?.providerName,
+          chunkType: "legacy",
+        },
+      };
+      addRecord(newRecord);
+
+      // 获取 profiles 目录
+      const profilesDir = await window.api?.pipelineV2ProfilesPath?.() || "";
+
+      window.api?.pipelineV2Run?.({
+        filePath: inputPath,
+        pipelineId: v2PipelineId,
+        profilesDir,
+        glossaryPath: glossaryPath || undefined,
+      });
+    };
+
     // --- State for Confirmation Modal ---
     const [confirmModal, setConfirmModal] = useState<{
       isOpen: boolean;
@@ -1943,12 +2064,16 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     const handleStartQueue = async () => {
       if (queue.length === 0) return;
 
-      // Check first file (or current index if we support jumping)
-      // Currently we always start from index 0 when clicking Play?
-      // Logic: setCurrentQueueIndex(0); startTranslation(queue[0].path)
+      if (engineMode === "v2") {
+        // V2 模式直接启动，不需要模型检查
+        const inputPath = queue[0].path;
+        await startV2Translation(inputPath);
+        return;
+      }
+
+      // V1 原有逻辑
       const targetIndex = 0;
       const inputPath = queue[targetIndex].path;
-
       await checkAndStart(inputPath, targetIndex);
     };
 
@@ -2066,8 +2191,12 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     });
 
     const handleStop = () => {
-      console.log("[Dashboard] User requested stop");
-      window.api?.stopTranslation();
+      console.log(`[Dashboard] User requested stop (mode=${engineModeRef.current})`);
+      if (engineModeRef.current === "v2") {
+        window.api?.pipelineV2Stop?.();
+      } else {
+        window.api?.stopTranslation();
+      }
       // 立即更新 UI 状态(后端也会发送 process-exit 事件)
       setIsRunning(false);
       setCurrentQueueIndex(-1);
@@ -2381,7 +2510,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       );
     };
 
-    const needsModel = activeModelsCount === 0;
+    const needsModel = engineMode === "v1" && activeModelsCount === 0;
+    const needsV2Pipeline = engineMode === "v2" && !v2PipelineId;
     const canStart = queue.length > 0 && !isRunning;
     const statusText = isRunning
       ? `${t.dashboard.processing} ${currentQueueIndex + 1}/${queue.length}`
@@ -2401,43 +2531,43 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     );
     const remoteErrorMessage = isRemoteMode
       ? remoteRuntime?.lastError ||
-        remoteRuntime?.network?.lastError?.message ||
-        (remoteRuntime?.network?.errorCount
-          ? t.dashboard.remoteErrorFallback
-          : "")
+      remoteRuntime?.network?.lastError?.message ||
+      (remoteRuntime?.network?.errorCount
+        ? t.dashboard.remoteErrorFallback
+        : "")
       : "";
     const hasRemoteError = Boolean(remoteErrorMessage);
     const runNoticeConfig = runNotice
       ? {
-          success: {
-            className: "bg-emerald-500/10 border-emerald-500/30 text-emerald-600",
-            icon: CheckCircle2,
-          },
-          warning: {
-            className: "bg-amber-500/10 border-amber-500/30 text-amber-600",
-            icon: AlertTriangle,
-          },
-          error: {
-            className: "bg-red-500/10 border-red-500/30 text-red-600",
-            icon: AlertTriangle,
-          },
-        }[runNotice.type]
+        success: {
+          className: "bg-emerald-500/10 border-emerald-500/30 text-emerald-600",
+          icon: CheckCircle2,
+        },
+        warning: {
+          className: "bg-amber-500/10 border-amber-500/30 text-amber-600",
+          icon: AlertTriangle,
+        },
+        error: {
+          className: "bg-red-500/10 border-red-500/30 text-red-600",
+          icon: AlertTriangle,
+        },
+      }[runNotice.type]
       : null;
     const queueNoticeConfig = queueNotice
       ? {
-          success: {
-            className: "bg-emerald-500/10 border-emerald-500/30 text-emerald-600",
-            icon: CheckCircle2,
-          },
-          warning: {
-            className: "bg-amber-500/10 border-amber-500/30 text-amber-600",
-            icon: AlertTriangle,
-          },
-          info: {
-            className: "bg-blue-500/10 border-blue-500/30 text-blue-600",
-            icon: Info,
-          },
-        }[queueNotice.type]
+        success: {
+          className: "bg-emerald-500/10 border-emerald-500/30 text-emerald-600",
+          icon: CheckCircle2,
+        },
+        warning: {
+          className: "bg-amber-500/10 border-amber-500/30 text-amber-600",
+          icon: AlertTriangle,
+        },
+        info: {
+          className: "bg-blue-500/10 border-blue-500/30 text-blue-600",
+          icon: Info,
+        },
+      }[queueNotice.type]
       : null;
     const failedCount = queue.filter((item) => item.status === "failed").length;
     const completedCount = queue.filter((item) => item.status === "completed").length;
@@ -2721,7 +2851,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
               </div>
             )}
 
-            {/* Model Warning */}
+
+            {/* Model Warning (V1 only) */}
             {needsModel && (
               <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex items-start gap-3">
                 <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
@@ -2731,6 +2862,21 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                   </p>
                   <p className="text-xs text-amber-400 mt-1">
                     {t.dashboard.modelMissingMsg}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* API翻译方案 Warning */}
+            {needsV2Pipeline && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-amber-500 text-sm">
+                    {lang === "en" ? "No API Plan Selected" : "未选择 API 翻译方案"}
+                  </p>
+                  <p className="text-xs text-amber-400 mt-1">
+                    {lang === "en" ? "Please create and select an API translation plan in the API Manager." : "请先在「API 管理」中创建并选择一个翻译方案。"}
                   </p>
                 </div>
               </div>
@@ -2784,120 +2930,163 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             })()}
 
             {/* Config Row - Compact Property Bar Style */}
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-2 shrink-0">
-              <div
-                className={`bg-card/80 hover:bg-card px-3 py-2 rounded-lg border flex items-center gap-3 transition-all cursor-pointer ${!activeModelPath && activeModelsCount > 0 ? "border-amber-500/50 ring-1 ring-amber-500/20" : "border-border/50 hover:border-border"}`}
-              >
-                <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white">
-                  <Bot className="w-3.5 h-3.5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">
-                      {t.dashboard.modelLabel}
-                    </span>
-                    {!isRemoteMode && modelInfo && (
-                      <div className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
-                        <span className="bg-secondary/50 px-1 py-0.5 rounded font-mono">
-                          {modelInfo.paramsB || "--"}B
-                        </span>
-                        <span className="bg-secondary/50 px-1 py-0.5 rounded font-mono">
-                          {modelInfo.quant || "--"}
-                        </span>
-                        <span
-                          className={`px-1 py-0.5 rounded font-mono ${modelInfo.estimatedVramGB > 8 ? "text-amber-500 bg-amber-500/10" : "text-emerald-500 bg-emerald-500/10"}`}
-                        >
-                          {modelInfo.estimatedVramGB || "--"}G
-                        </span>
-                      </div>
-                    )}
-                    {isRemoteMode && selectedRemoteInfo?.sizeGb && (
-                      <div className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
-                        <span className="bg-secondary/50 px-1 py-0.5 rounded font-mono">
-                          {selectedRemoteInfo.sizeGb.toFixed(2)}GB
-                        </span>
-                      </div>
-                    )}
+            <div className={`grid gap-2 shrink-0 ${engineMode === "v2" ? "grid-cols-1 xl:grid-cols-2" : "grid-cols-1 xl:grid-cols-3"}`}>
+              {/* Card 1: 本地模式=Model / API模式=翻译方案 */}
+              {engineMode === "v2" ? (
+                <div
+                  className={`bg-card/80 hover:bg-card px-3 py-2 rounded-lg border flex items-center gap-3 transition-all cursor-pointer ${!v2PipelineId ? "border-amber-500/50 ring-1 ring-amber-500/20" : "border-border/50 hover:border-border"}`}
+                >
+                  <UITooltip content={lang === "en" ? "Switch to Local Mode" : "切换到本地翻译模式"}>
+                    <div
+                      onClick={() => setEngineMode("v1")}
+                      className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center text-white cursor-pointer hover:scale-110 transition-transform relative"
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      <span className="absolute -top-1 -right-1 text-[7px] bg-violet-500 text-white px-0.5 rounded font-bold leading-tight">API</span>
+                    </div>
+                  </UITooltip>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">{lang === "en" ? "API Translation Plan" : "API 翻译方案"}</span>
+                    <select
+                      className="w-full bg-transparent text-sm font-medium text-foreground outline-none cursor-pointer truncate -ml-0.5"
+                      value={v2PipelineId}
+                      onChange={(e) => setV2PipelineId(e.target.value)}
+                    >
+                      <option value="">{lang === "en" ? "Select plan..." : "请选择方案..."}</option>
+                      {v2Profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}{p.providerName ? ` (${p.providerName})` : ""}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <select
-                    className="w-full bg-transparent text-sm font-medium text-foreground outline-none cursor-pointer truncate -ml-0.5"
-                    value={activeModelPath}
-                    onChange={(e) => {
-                      const nextValue = e.target.value;
+                  <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0 opacity-40" />
+                </div>
+              ) : (
+                <div
+                  className={`bg-card/80 hover:bg-card px-3 py-2 rounded-lg border flex items-center gap-3 transition-all cursor-pointer ${!activeModelPath && activeModelsCount > 0 ? "border-amber-500/50 ring-1 ring-amber-500/20" : "border-border/50 hover:border-border"}`}
+                >
+                  <UITooltip content={lang === "en" ? "Switch to API Mode" : "切换到 API 翻译模式"}>
+                    <div
+                      onClick={() => setEngineMode("v2")}
+                      className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white cursor-pointer hover:scale-110 transition-transform relative"
+                    >
+                      <Bot className="w-3.5 h-3.5" />
+                      <span className="absolute -top-1 -right-1 text-[7px] bg-blue-500 text-white px-0.5 rounded font-bold leading-tight">{lang === "en" ? "Local" : "本地"}</span>
+                    </div>
+                  </UITooltip>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">
+                        {t.dashboard.modelLabel}
+                      </span>
+                      {!isRemoteMode && modelInfo && (
+                        <div className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                          <span className="bg-secondary/50 px-1 py-0.5 rounded font-mono">
+                            {modelInfo.paramsB || "--"}B
+                          </span>
+                          <span className="bg-secondary/50 px-1 py-0.5 rounded font-mono">
+                            {modelInfo.quant || "--"}
+                          </span>
+                          <span
+                            className={`px-1 py-0.5 rounded font-mono ${modelInfo.estimatedVramGB > 8 ? "text-amber-500 bg-amber-500/10" : "text-emerald-500 bg-emerald-500/10"}`}
+                          >
+                            {modelInfo.estimatedVramGB || "--"}G
+                          </span>
+                        </div>
+                      )}
+                      {isRemoteMode && selectedRemoteInfo?.sizeGb && (
+                        <div className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                          <span className="bg-secondary/50 px-1 py-0.5 rounded font-mono">
+                            {selectedRemoteInfo.sizeGb.toFixed(2)}GB
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    <select
+                      className="w-full bg-transparent text-sm font-medium text-foreground outline-none cursor-pointer truncate -ml-0.5"
+                      value={activeModelPath}
+                      onChange={(e) => {
+                        const nextValue = e.target.value;
+                        if (isRemoteMode) {
+                          setRemoteModelPath(nextValue);
+                          localStorage.setItem("config_remote_model", nextValue);
+                        } else {
+                          setModelPath(nextValue);
+                          localStorage.setItem("config_model", nextValue);
+                        }
+                      }}
+                    >
+                      <option value="">
+                        {activeModelsCount > 0
+                          ? t.dashboard.selectModel
+                          : t.dashboard.noModel}
+                      </option>
+                      {isRemoteMode
+                        ? remoteModels.map((model) => (
+                          <option key={model.path} value={model.path}>
+                            {model.name}
+                          </option>
+                        ))
+                        : [...models]
+                          .sort((a, b) => {
+                            const paramsA = modelsInfoMap[a]?.paramsB ?? Infinity;
+                            const paramsB = modelsInfoMap[b]?.paramsB ?? Infinity;
+                            if (paramsA !== paramsB) return paramsA - paramsB;
+                            const sizeA = modelsInfoMap[a]?.sizeGB ?? Infinity;
+                            const sizeB = modelsInfoMap[b]?.sizeGB ?? Infinity;
+                            return sizeA - sizeB;
+                          })
+                          .map((m) => (
+                            <option key={m} value={m}>
+                              {m.replace(".gguf", "")}
+                            </option>
+                          ))}
+                    </select>
+                  </div>
+                  <div
+                    title={t.modelView.refresh || "Refresh"}
+                    onClick={(e) => {
+                      e.stopPropagation();
                       if (isRemoteMode) {
-                        setRemoteModelPath(nextValue);
-                        localStorage.setItem("config_remote_model", nextValue);
+                        fetchRemoteModels();
                       } else {
-                        setModelPath(nextValue);
-                        localStorage.setItem("config_model", nextValue);
+                        fetchData();
                       }
                     }}
+                    className="p-1 hover:bg-muted rounded-full cursor-pointer transition-colors z-10 mr-1 group/refresh"
                   >
-                    <option value="">
-                      {activeModelsCount > 0
-                        ? t.dashboard.selectModel
-                        : t.dashboard.noModel}
-                    </option>
-                    {isRemoteMode
-                      ? remoteModels.map((model) => (
-                        <option key={model.path} value={model.path}>
-                          {model.name}
-                        </option>
-                      ))
-                      : [...models]
-                        .sort((a, b) => {
-                          const paramsA = modelsInfoMap[a]?.paramsB ?? Infinity;
-                          const paramsB = modelsInfoMap[b]?.paramsB ?? Infinity;
-                          if (paramsA !== paramsB) return paramsA - paramsB;
-                          const sizeA = modelsInfoMap[a]?.sizeGB ?? Infinity;
-                          const sizeB = modelsInfoMap[b]?.sizeGB ?? Infinity;
-                          return sizeA - sizeB;
-                        })
-                        .map((m) => (
-                          <option key={m} value={m}>
-                            {m.replace(".gguf", "")}
-                          </option>
-                        ))}
-                  </select>
+                    <RefreshCw className="w-3.5 h-3.5 text-muted-foreground group-hover/refresh:text-primary transition-colors" />
+                  </div>
+                  <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0 opacity-40" />
                 </div>
-                <div
-                  title={t.modelView.refresh || "Refresh"}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (isRemoteMode) {
-                      fetchRemoteModels();
-                    } else {
-                      fetchData();
-                    }
-                  }}
-                  className="p-1 hover:bg-muted rounded-full cursor-pointer transition-colors z-10 mr-1 group/refresh"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-muted-foreground group-hover/refresh:text-primary transition-colors" />
+              )}
+              {/* Card 2: Prompt Preset (V1 only) */}
+              {engineMode !== "v2" && (
+                <div className="bg-card/80 hover:bg-card px-3 py-2 rounded-lg border border-border/50 hover:border-border flex items-center gap-3 transition-all cursor-pointer">
+                  <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-violet-500 to-violet-600 flex items-center justify-center text-white">
+                    <FileText className="w-3.5 h-3.5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">
+                      Prompt Preset
+                    </span>
+                    <select
+                      className="w-full bg-transparent text-sm font-medium text-foreground outline-none cursor-pointer truncate -ml-0.5"
+                      value={promptPreset}
+                      onChange={(e) => handlePromptPresetChange(e.target.value)}
+                    >
+                      <option value="novel">{presetOptionLabel("novel")}</option>
+                      <option value="script">
+                        {presetOptionLabel("script")}
+                      </option>
+                      <option value="short">{presetOptionLabel("short")}</option>
+                    </select>
+                  </div>
+                  <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0 opacity-40" />
                 </div>
-                <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0 opacity-40" />
-              </div>
-              <div className="bg-card/80 hover:bg-card px-3 py-2 rounded-lg border border-border/50 hover:border-border flex items-center gap-3 transition-all cursor-pointer">
-                <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-violet-500 to-violet-600 flex items-center justify-center text-white">
-                  <FileText className="w-3.5 h-3.5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <span className="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">
-                    Prompt Preset
-                  </span>
-                  <select
-                    className="w-full bg-transparent text-sm font-medium text-foreground outline-none cursor-pointer truncate -ml-0.5"
-                    value={promptPreset}
-                    onChange={(e) => handlePromptPresetChange(e.target.value)}
-                  >
-                    <option value="novel">{presetOptionLabel("novel")}</option>
-                    <option value="script">
-                      {presetOptionLabel("script")}
-                    </option>
-                    <option value="short">{presetOptionLabel("short")}</option>
-                  </select>
-                </div>
-                <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0 opacity-40" />
-              </div>
+              )}
+              {/* Card 3: Glossary (always visible) */}
               <div className="bg-card/80 hover:bg-card px-3 py-2 rounded-lg border border-border/50 hover:border-border flex items-center gap-3 transition-all cursor-pointer">
                 <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center text-white">
                   <BookOpen className="w-3.5 h-3.5" />
@@ -3231,11 +3420,11 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                 <Button
                   size="icon"
                   onClick={handleStartQueue}
-                  disabled={!canStart || needsModel}
-                  className={`rounded-full w-9 h-9 shadow-md transition-all ${!canStart || needsModel ? "bg-muted text-muted-foreground" : "bg-gradient-to-br from-purple-600 to-indigo-600 hover:scale-105"}`}
+                  disabled={!canStart || needsModel || needsV2Pipeline}
+                  className={`rounded-full w-9 h-9 shadow-md transition-all ${!canStart || needsModel || needsV2Pipeline ? "bg-muted text-muted-foreground" : "bg-gradient-to-br from-purple-600 to-indigo-600 hover:scale-105"}`}
                 >
                   <Play
-                    className={`w-4 h-4 ${canStart && !needsModel ? "fill-white" : ""} ml-0.5`}
+                    className={`w-4 h-4 ${canStart && !needsModel && !needsV2Pipeline ? "fill-white" : ""} ml-0.5`}
                   />
                 </Button>
               </UITooltip>
@@ -3281,44 +3470,48 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                   </Button>
                 </div>
               )}
-              <UITooltip content={t.dashboard.alignmentTooltip}>
-                <div
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${alignmentMode
-                    ? "bg-indigo-500/15 border-indigo-500/40 text-indigo-500 dark:text-indigo-400"
-                    : "bg-secondary/50 border-border/60 text-muted-foreground hover:bg-secondary/80 hover:border-border hover:text-foreground"
-                    }`}
-                  onClick={() => {
-                    const nextValue = !alignmentMode;
-                    setAlignmentMode(nextValue);
-                    localStorage.setItem(
-                      "config_alignment_mode",
-                      String(nextValue),
-                    );
-                  }}
-                >
-                  <AlignLeft
-                    className={`w-3 h-3 ${alignmentMode ? "text-indigo-500" : "text-muted-foreground/70"}`}
-                  />
-                  <span>{t.dashboard.alignmentLabel}</span>
-                </div>
-              </UITooltip>
-              <UITooltip content={t.dashboard.cotTooltip}>
-                <div
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${saveCot
-                    ? "bg-amber-500/15 border-amber-500/40 text-amber-500 dark:text-amber-400"
-                    : "bg-secondary/50 border-border/60 text-muted-foreground hover:bg-secondary/80 hover:border-border hover:text-foreground"
-                    }`}
-                  onClick={() => {
-                    setSaveCot(!saveCot);
-                    localStorage.setItem("config_save_cot", String(!saveCot));
-                  }}
-                >
-                  <FileText
-                    className={`w-3 h-3 ${saveCot ? "text-amber-500" : "text-muted-foreground/70"}`}
-                  />
-                  <span>{t.dashboard.cotLabel}</span>
-                </div>
-              </UITooltip>
+              {engineMode !== "v2" && (
+                <UITooltip content={t.dashboard.alignmentTooltip}>
+                  <div
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${alignmentMode
+                      ? "bg-indigo-500/15 border-indigo-500/40 text-indigo-500 dark:text-indigo-400"
+                      : "bg-secondary/50 border-border/60 text-muted-foreground hover:bg-secondary/80 hover:border-border hover:text-foreground"
+                      }`}
+                    onClick={() => {
+                      const nextValue = !alignmentMode;
+                      setAlignmentMode(nextValue);
+                      localStorage.setItem(
+                        "config_alignment_mode",
+                        String(nextValue),
+                      );
+                    }}
+                  >
+                    <AlignLeft
+                      className={`w-3 h-3 ${alignmentMode ? "text-indigo-500" : "text-muted-foreground/70"}`}
+                    />
+                    <span>{t.dashboard.alignmentLabel}</span>
+                  </div>
+                </UITooltip>
+              )}
+              {engineMode !== "v2" && (
+                <UITooltip content={t.dashboard.cotTooltip}>
+                  <div
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-[10px] font-medium shadow-sm active:scale-95 ${saveCot
+                      ? "bg-amber-500/15 border-amber-500/40 text-amber-500 dark:text-amber-400"
+                      : "bg-secondary/50 border-border/60 text-muted-foreground hover:bg-secondary/80 hover:border-border hover:text-foreground"
+                      }`}
+                    onClick={() => {
+                      setSaveCot(!saveCot);
+                      localStorage.setItem("config_save_cot", String(!saveCot));
+                    }}
+                  >
+                    <FileText
+                      className={`w-3 h-3 ${saveCot ? "text-amber-500" : "text-muted-foreground/70"}`}
+                    />
+                    <span>{t.dashboard.cotLabel}</span>
+                  </div>
+                </UITooltip>
+              )}
               <div
                 className="flex items-center gap-2 cursor-pointer hover:bg-secondary/50 px-3 py-1.5 rounded-lg transition-colors"
                 onClick={() => setLogsCollapsed(!logsCollapsed)}
@@ -3431,6 +3624,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
               onSave={(config) => handleSaveFileConfig(configItem!.id, config)}
               onClose={() => setConfigItem(null)}
               remoteRuntime={remoteRuntime}
+              globalEngineMode={engineMode}
+              v2Profiles={v2Profiles}
             />
           )
         }

@@ -17,6 +17,7 @@ import json
 import sys
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -80,16 +81,33 @@ def emit_final(
     source_chars: int,
     output_lines: int,
     output_chars: int,
+    # V2 API 专属统计（可选，V1 不传）
+    total_requests: int = 0,
+    total_retries: int = 0,
+    total_errors: int = 0,
+    total_input_tokens: int = 0,
+    total_output_tokens: int = 0,
+    error_status_codes: Optional[Dict[str, int]] = None,
 ) -> None:
     """Emit JSON_FINAL summary statistics."""
-    emit("JSON_FINAL", {
+    data: Dict[str, Any] = {
         "totalTime": round(total_time, 1),
         "avgSpeed": round(avg_speed, 1),
         "sourceLines": source_lines,
         "sourceChars": source_chars,
         "outputLines": output_lines,
         "outputChars": output_chars,
-    })
+    }
+    # V2 专属字段仅在有值时才输出
+    if total_requests > 0:
+        data["totalRequests"] = total_requests
+        data["totalRetries"] = total_retries
+        data["totalErrors"] = total_errors
+        data["totalInputTokens"] = total_input_tokens
+        data["totalOutputTokens"] = total_output_tokens
+        if error_status_codes:
+            data["errorStatusCodes"] = error_status_codes
+    emit("JSON_FINAL", data)
 
 
 def emit_retry(
@@ -142,6 +160,14 @@ class ProgressTracker:
     start_time: float = field(default_factory=time.time)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
+    # --- V2 API 专属统计 ---
+    total_requests: int = 0
+    total_retries: int = 0
+    total_errors: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    error_status_codes: Counter = field(default_factory=Counter)
+
     def block_done(
         self,
         block_idx: int,
@@ -183,8 +209,34 @@ class ProgressTracker:
             preview_out = output_text[:max_preview] if len(output_text) > max_preview else output_text
             emit_preview_block(block_idx + 1, preview_src, preview_out)
 
+    def note_request(
+        self,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> None:
+        """Record a successful API request with token usage."""
+        with self._lock:
+            self.total_requests += 1
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
+
+    def note_retry(self, status_code: Optional[int] = None) -> None:
+        """Record a retry event."""
+        with self._lock:
+            self.total_retries += 1
+            if status_code is not None:
+                self.error_status_codes[status_code] += 1
+
+    def note_error(self, status_code: Optional[int] = None) -> None:
+        """Record a final error (exhausted retries)."""
+        with self._lock:
+            self.total_errors += 1
+            if status_code is not None:
+                self.error_status_codes[status_code] += 1
+
     def emit_final_stats(self) -> None:
-        """Emit JSON_FINAL with accumulated statistics."""
+        """Emit JSON_FINAL with accumulated statistics (incl. V2 API stats)."""
         elapsed = time.time() - self.start_time
         avg_speed = self.total_output_chars / max(elapsed, 0.1)
         emit_final(
@@ -194,4 +246,10 @@ class ProgressTracker:
             source_chars=self.total_source_chars,
             output_lines=self.total_output_lines,
             output_chars=self.total_output_chars,
+            total_requests=self.total_requests,
+            total_retries=self.total_retries,
+            total_errors=self.total_errors,
+            total_input_tokens=self.total_input_tokens,
+            total_output_tokens=self.total_output_tokens,
+            error_status_codes=dict(self.error_status_codes),
         )

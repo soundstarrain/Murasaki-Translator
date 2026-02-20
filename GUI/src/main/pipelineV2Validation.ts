@@ -194,7 +194,6 @@ export const validateProfileLocal = async (
       if (!data.model) result.errors.push("missing_model");
     } else if (apiType === "pool") {
       const endpoints = data.endpoints;
-      const members = data.members;
       let hasEndpoints = false;
       let missingModel = false;
       if (Array.isArray(endpoints)) {
@@ -206,22 +205,21 @@ export const validateProfileLocal = async (
           }
         }
       }
-      const hasMembers = Array.isArray(members) && members.length > 0;
-      if (!hasEndpoints && !hasMembers) {
+      const hasMembers = Boolean(
+        (Array.isArray(data.members) && data.members.length > 0) ||
+          (data.members !== undefined &&
+            data.members !== null &&
+            !Array.isArray(data.members) &&
+            String(data.members).trim()),
+      );
+      if (!hasEndpoints) {
         result.errors.push("missing_pool_endpoints");
       }
       if (hasEndpoints && missingModel) {
         result.errors.push("missing_pool_model");
       }
       if (hasMembers) {
-        for (const member of members) {
-          const memberId = String(member || "");
-          if (!memberId) continue;
-          const exists = await resolveProfilePath(profilesDir, "api", memberId);
-          if (!exists) {
-            result.errors.push(`missing_reference:api:${memberId}`);
-          }
-        }
+        result.errors.push("pool_members_unsupported");
       }
     } else {
       result.warnings.push(`unsupported_type:${apiType}`);

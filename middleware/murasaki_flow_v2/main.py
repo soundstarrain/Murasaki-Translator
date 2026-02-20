@@ -6,8 +6,16 @@ import argparse
 import os
 import sys
 
+# Windows 控制台 UTF-8 兼容（与 V1 一致）
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 from murasaki_flow_v2.registry.profile_store import ProfileStore
 from murasaki_flow_v2.pipelines.runner import PipelineRunner
+from murasaki_flow_v2.utils.log_protocol import emit_error
 
 
 def main() -> int:
@@ -74,7 +82,12 @@ def main() -> int:
     print(f"[FlowV2] ChunkPolicy: {pipeline_profile.get('chunk_policy')}")
 
     runner = PipelineRunner(store, pipeline_profile)
-    output_path = runner.run(args.file, output_path=args.output)
+    try:
+        output_path = runner.run(args.file, output_path=args.output)
+    except Exception as e:
+        emit_error(str(e), title="Pipeline V2 Fatal Error")
+        print(f"[FlowV2] Fatal error: {e}", file=sys.stderr)
+        return 1
     print(f"[FlowV2] Output saved: {output_path}")
     return 0
 
