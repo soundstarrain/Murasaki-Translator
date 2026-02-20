@@ -98,6 +98,10 @@ def validate_profile(
 
     if not data.get("id"):
         result.errors.append("missing_id")
+    else:
+        raw_id = str(data.get("id") or "").strip()
+        if not ProfileStore.is_safe_profile_id(raw_id):
+            result.errors.append("invalid_id")
 
     if kind == "api":
         api_type = str(data.get("type") or data.get("provider") or "openai_compat")

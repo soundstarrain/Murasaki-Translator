@@ -67,6 +67,8 @@ const api = {
     ipcRenderer.invoke("pipelinev2-profiles-list", kind),
   pipelineV2ProfilesLoad: (kind: string, id: string) =>
     ipcRenderer.invoke("pipelinev2-profiles-load", kind, id),
+  pipelineV2ProfilesLoadBatch: (kind: string, ids: string[]) =>
+    ipcRenderer.invoke("pipelinev2-profiles-load-batch", kind, ids),
   pipelineV2ProfilesSave: (kind: string, id: string, yamlText: string) =>
     ipcRenderer.invoke("pipelinev2-profiles-save", kind, id, yamlText),
   pipelineV2ProfilesDelete: (kind: string, id: string) =>

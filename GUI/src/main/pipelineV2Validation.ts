@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
 import { readdir, readFile } from "fs/promises";
-import { basename, extname, join } from "path";
+import { basename, extname, join, resolve, sep } from "path";
 import yaml from "js-yaml";
 
 export type ProfileKind =
@@ -15,6 +15,37 @@ type ValidationResult = {
   ok: boolean;
   errors: string[];
   warnings: string[];
+};
+
+const SAFE_PROFILE_ID = /^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/;
+
+const isSafeProfileId = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.includes("..")) return false;
+  if (/[\\/]/.test(trimmed)) return false;
+  return SAFE_PROFILE_ID.test(trimmed);
+};
+
+const isSafeYamlFilename = (value: string) => {
+  if (/[\\/]/.test(value)) return false;
+  const base = basename(value, extname(value));
+  return isSafeProfileId(base);
+};
+
+const normalizePath = (value: string) => resolve(value);
+
+const isPathWithin = (baseDir: string, target: string) => {
+  const base = normalizePath(baseDir);
+  const resolvedTarget = normalizePath(target);
+  const prefix = base.endsWith(sep) ? base : `${base}${sep}`;
+  if (process.platform === "win32") {
+    const baseLower = base.toLowerCase();
+    const prefixLower = prefix.toLowerCase();
+    const targetLower = resolvedTarget.toLowerCase();
+    return targetLower === baseLower || targetLower.startsWith(prefixLower);
+  }
+  return resolvedTarget === base || resolvedTarget.startsWith(prefix);
 };
 
 const safeLoadYaml = (raw: string): Record<string, any> | null => {
@@ -39,22 +70,27 @@ const resolveProfilePath = async (
   kind: ProfileKind,
   ref: string,
 ) => {
-  if (!ref) return null;
-  if (existsSync(ref)) return ref;
-  if (ref.endsWith(".yaml") || ref.endsWith(".yml")) {
-    const direct = join(profilesDir, kind, ref);
+  const trimmed = String(ref || "").trim();
+  if (!trimmed) return null;
+  if (existsSync(trimmed)) {
+    return isPathWithin(profilesDir, trimmed) ? trimmed : null;
+  }
+  if (trimmed.endsWith(".yaml") || trimmed.endsWith(".yml")) {
+    if (!isSafeYamlFilename(trimmed)) return null;
+    const direct = join(profilesDir, kind, trimmed);
     if (existsSync(direct)) return direct;
   }
-  const directYaml = join(profilesDir, kind, `${ref}.yaml`);
+  if (!isSafeProfileId(trimmed)) return null;
+  const directYaml = join(profilesDir, kind, `${trimmed}.yaml`);
   if (existsSync(directYaml)) return directYaml;
-  const directYml = join(profilesDir, kind, `${ref}.yml`);
+  const directYml = join(profilesDir, kind, `${trimmed}.yml`);
   if (existsSync(directYml)) return directYml;
   const dir = join(profilesDir, kind);
   const files = await listProfileFiles(dir);
   for (const file of files) {
     const raw = await readFile(join(dir, file), "utf-8").catch(() => "");
     const data = safeLoadYaml(raw);
-    if (data?.id && String(data.id) === ref) {
+    if (data?.id && String(data.id) === trimmed) {
       return join(dir, file);
     }
   }
@@ -133,6 +169,8 @@ export const validateProfileLocal = async (
 
   if (!data.id) {
     result.errors.push("missing_id");
+  } else if (!isSafeProfileId(String(data.id))) {
+    result.errors.push("invalid_id");
   }
 
   if (kind === "prompt") {

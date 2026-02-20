@@ -1,0 +1,11 @@
+id: google_client
+name: Google
+type: openai_compat
+base_url: https://generativelanguage.googleapis.com/v1beta/openai
+model: gemini-2.5-flash
+headers: {}
+params:
+  top_p: 0.95
+  max_tokens: 4096
+concurrency: 0
+rpm: 3600

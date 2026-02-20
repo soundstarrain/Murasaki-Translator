@@ -26,6 +26,8 @@ from murasaki_flow_v2.utils.adaptive_concurrency import AdaptiveConcurrency
 from murasaki_flow_v2.utils.line_format import extract_line_for_policy, parse_jsonl_entries
 from murasaki_flow_v2.utils import processing as v2_processing
 
+MAX_CONCURRENCY = 64
+
 
 class PipelineRunner:
     def __init__(self, store: ProfileStore, pipeline_profile: Dict[str, Any]):
@@ -277,7 +279,6 @@ class PipelineRunner:
         apply_line_policy = self._should_apply_line_policy(
             pipeline, line_policy, chunk_type
         )
-        line_policy_per_line = apply_line_policy
         line_policy_errors: List[Dict[str, Any]] = []
         _lpe_lock = threading.Lock()
 
@@ -445,7 +446,7 @@ class PipelineRunner:
                         )
                     last_translation = translated
                     if (
-                        line_policy_per_line
+                        apply_line_policy
                         and line_policy
                         and line_index is not None
                         and line_index < len(source_lines)
@@ -480,7 +481,7 @@ class PipelineRunner:
                     if attempt > max_retries:
                         if (
                             isinstance(exc, LinePolicyError)
-                            and line_policy_per_line
+                            and apply_line_policy
                             and line_index is not None
                             and line_index < len(source_lines)
                         ):
@@ -515,7 +516,7 @@ class PipelineRunner:
         if concurrency == 0:
             adaptive = AdaptiveConcurrency(max_limit=max(1, min(len(blocks), 16)))
         else:
-            concurrency = max(1, concurrency)
+            concurrency = max(1, min(concurrency, MAX_CONCURRENCY))
 
         if adaptive is not None and len(blocks) > 1:
             with ThreadPoolExecutor(max_workers=adaptive.max_limit) as executor:
@@ -563,37 +564,6 @@ class PipelineRunner:
             raise RuntimeError("translation_incomplete")
 
         translated_blocks = [block for block in translated_blocks if block is not None]
-
-        if line_policy and apply_line_policy and not line_policy_per_line:
-            output_lines: List[str] = []
-            for block in translated_blocks:
-                line_text = block.prompt_text
-                if block.metadata:
-                    meta = block.metadata[0]
-                    if isinstance(meta, int):
-                        compat_line = extract_line_for_policy(line_text, meta)
-                        if compat_line is not None:
-                            line_text = compat_line
-                output_lines.append(line_text)
-            # BUG-P4: 长度不匹配时跳过全局 line_policy 对齐
-            if len(output_lines) != len(source_lines):
-                print(
-                    f"[LinePolicy] Skipping global alignment: "
-                    f"source={len(source_lines)} output={len(output_lines)}"
-                )
-            else:
-                aligned_lines = line_policy.apply(source_lines, output_lines)
-                rebuilt_blocks: List[TextBlock] = []
-                for idx, line in enumerate(aligned_lines):
-                    meta = items[idx].get("meta") if idx < len(items) else None
-                    rebuilt_blocks.append(
-                        TextBlock(
-                            id=len(rebuilt_blocks) + 1,
-                            prompt_text=line,
-                            metadata=[meta] if meta is not None else [],
-                        )
-                    )
-                translated_blocks = rebuilt_blocks
 
         if not output_path:
             base, ext = os.path.splitext(input_path)

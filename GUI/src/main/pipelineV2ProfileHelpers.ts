@@ -4,5 +4,4 @@ export const canUseServerProfilesPath = (
 ) =>
   typeof serverPath === "string" && serverPath.trim().length > 0 && exists(serverPath);
 
-export const hasServerProfilesList = (data: unknown) =>
-  Array.isArray(data) && data.length > 0;
+export const hasServerProfilesList = (data: unknown) => Array.isArray(data);

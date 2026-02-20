@@ -82,11 +82,22 @@ const pickFreePort = (): Promise<number> =>
     });
   });
 
+const fetchWithTimeout = async (url: string, timeoutMs: number) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 const waitForHealth = async (baseUrl: string, timeoutMs = 8000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${baseUrl}/health`);
+      const perAttemptTimeout = Math.min(2000, Math.max(500, timeoutMs));
+      const res = await fetchWithTimeout(`${baseUrl}/health`, perAttemptTimeout);
       if (res.ok) return;
     } catch {
       // ignore

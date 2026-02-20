@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildPromptLegacyParts,
+  hasPromptSourcePlaceholder,
   shouldPreserveLegacyPromptParts,
 } from "../promptProfile";
 
@@ -40,5 +41,13 @@ describe("promptProfile helpers", () => {
     expect(
       shouldPreserveLegacyPromptParts(result.legacy, "Changed"),
     ).toBe(false);
+  });
+
+  it("detects source placeholder in user_template", () => {
+    expect(hasPromptSourcePlaceholder({ user_template: "" })).toBe(true);
+    expect(hasPromptSourcePlaceholder({ user_template: "No source" })).toBe(false);
+    expect(
+      hasPromptSourcePlaceholder({ user_template: "Use {{source}} here" }),
+    ).toBe(true);
   });
 });

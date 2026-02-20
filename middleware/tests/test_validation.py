@@ -141,3 +141,18 @@ def test_pipeline_requires_json_prompt(tmp_path: Path) -> None:
     store = ProfileStore(str(base))
     result = validate_profile("pipeline", pipeline, store=store)
     assert "parser_requires_json_prompt" in result.errors
+
+
+@pytest.mark.unit
+def test_invalid_profile_id_rejected(tmp_path: Path) -> None:
+    base = prepare_profiles(tmp_path)
+    store = ProfileStore(str(base))
+    profile = {
+        "id": "../evil",
+        "name": "Bad",
+        "type": "openai_compat",
+        "base_url": "https://api.example.com/v1",
+        "model": "test-model",
+    }
+    result = validate_profile("api", profile, store=store)
+    assert "invalid_id" in result.errors

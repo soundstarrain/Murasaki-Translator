@@ -1,3 +1,8 @@
-export type ChunkType = "legacy";
+export type ChunkType = "legacy" | "line";
 
-export const normalizeChunkType = (_value: unknown): ChunkType => "legacy";
+export const normalizeChunkType = (value: unknown): ChunkType => {
+  if (typeof value !== "string") return "legacy";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "line") return "line";
+  return "legacy";
+};

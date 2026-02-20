@@ -316,11 +316,17 @@ export interface ElectronAPI {
   pipelineV2ProfilesPath: () => Promise<string>;
   pipelineV2ProfilesList: (
     kind: string,
-  ) => Promise<{ id: string; name: string; filename: string }[]>;
+  ) => Promise<
+    { id: string; name: string; filename: string; chunk_type?: string }[]
+  >;
   pipelineV2ProfilesLoad: (
     kind: string,
     id: string,
   ) => Promise<{ id: string; name: string; yaml: string; data: any } | null>;
+  pipelineV2ProfilesLoadBatch: (
+    kind: string,
+    ids: string[],
+  ) => Promise<Array<{ id: string; result: any | null }>>;
   pipelineV2ProfilesSave: (
     kind: string,
     id: string,

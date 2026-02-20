@@ -1658,7 +1658,7 @@ export function LibraryView({
     },
     [],
   );
-  const watchNoticePrefix = t.watchNoticePrefix || "翻译监控: ";
+  const watchNoticePrefix = t.watchNoticePrefix;
   const pushWatchNotice = useCallback(
     (next: {
       type: "info" | "warning" | "error" | "success";

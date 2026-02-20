@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import shutil
 
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
@@ -52,8 +54,27 @@ def _seed_defaults(store: ProfileStore, base_dir: Path) -> None:
                 shutil.copy2(file, target)
 
 
+def _is_loopback(host: str) -> bool:
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def create_app(store: ProfileStore, base_dir: Path) -> FastAPI:
     app = FastAPI(title="Murasaki Flow V2 API", version="0.1.0")
+
+    @app.middleware("http")
+    async def local_only_middleware(request: Request, call_next):
+        client = request.client
+        host = client.host if client else ""
+        if not _is_loopback(host):
+            return JSONResponse(status_code=403, content={"detail": "forbidden"})
+        return await call_next(request)
 
     @app.get("/health")
     def health() -> Dict[str, Any]:
@@ -68,19 +89,24 @@ def create_app(store: ProfileStore, base_dir: Path) -> FastAPI:
         if kind not in PROFILE_KINDS:
             raise HTTPException(status_code=400, detail="invalid_kind")
         profiles = store.list_profiles(kind)
-        return [
-            {
+        response = []
+        for p in profiles:
+            payload = {
                 "id": p.profile_id,
                 "name": p.name,
                 "filename": os.path.basename(p.path),
             }
-            for p in profiles
-        ]
+            if kind == "chunk" and p.chunk_type:
+                payload["chunk_type"] = p.chunk_type
+            response.append(payload)
+        return response
 
     @app.get("/profiles/{kind}/{profile_id}")
     def load_profile(kind: str, profile_id: str) -> Dict[str, Any]:
         if kind not in PROFILE_KINDS:
             raise HTTPException(status_code=400, detail="invalid_kind")
+        if not ProfileStore.is_safe_profile_id(profile_id):
+            raise HTTPException(status_code=400, detail="invalid_id")
         path = store.resolve_profile_path(kind, profile_id)
         if not path:
             raise HTTPException(status_code=404, detail="not_found")
@@ -97,13 +123,18 @@ def create_app(store: ProfileStore, base_dir: Path) -> FastAPI:
     def save_profile(kind: str, profile_id: str, payload: SaveRequest) -> Dict[str, Any]:
         if kind not in PROFILE_KINDS:
             raise HTTPException(status_code=400, detail="invalid_kind")
+        if not ProfileStore.is_safe_profile_id(profile_id):
+            raise HTTPException(status_code=400, detail="invalid_id")
         try:
             data = yaml.safe_load(payload.yaml) or {}
         except yaml.YAMLError as exc:
             raise HTTPException(status_code=400, detail=f"invalid_yaml:{exc}") from exc
         if not isinstance(data, dict):
             raise HTTPException(status_code=400, detail="invalid_yaml")
-        if not data.get("id"):
+        if data.get("id"):
+            if not ProfileStore.is_safe_profile_id(str(data.get("id"))):
+                raise HTTPException(status_code=400, detail="invalid_id")
+        else:
             data["id"] = profile_id
 
         result = validate_profile(kind, data, store=store)
@@ -123,6 +154,8 @@ def create_app(store: ProfileStore, base_dir: Path) -> FastAPI:
     def delete_profile(kind: str, profile_id: str) -> Dict[str, Any]:
         if kind not in PROFILE_KINDS:
             raise HTTPException(status_code=400, detail="invalid_kind")
+        if not ProfileStore.is_safe_profile_id(profile_id):
+            raise HTTPException(status_code=400, detail="invalid_id")
         path = Path(store.base_dir) / kind / f"{profile_id}.yaml"
         if path.exists():
             path.unlink()
@@ -141,6 +174,8 @@ def create_app(store: ProfileStore, base_dir: Path) -> FastAPI:
                 raise HTTPException(status_code=400, detail=f"invalid_yaml:{exc}") from exc
         if not isinstance(data, dict):
             raise HTTPException(status_code=400, detail="invalid_yaml")
+        if data.get("id") and not ProfileStore.is_safe_profile_id(str(data.get("id"))):
+            raise HTTPException(status_code=400, detail="invalid_id")
         result = validate_profile(kind, data, store=store)
         return {"ok": result.ok, "errors": result.errors, "warnings": result.warnings}
 
@@ -159,7 +194,8 @@ def main() -> int:
     _seed_defaults(store, Path(__file__).resolve().parent)
 
     app = create_app(store, Path(__file__).resolve().parent)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    host = "127.0.0.1"
+    uvicorn.run(app, host=host, port=args.port, log_level="warning")
     return 0
 
 

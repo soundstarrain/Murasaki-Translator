@@ -50,9 +50,15 @@ import { normalizeChunkType } from "../lib/chunkProfile";
 import { buildPipelineSummary, type PipelineSummary } from "../lib/pipelineProfile";
 import {
   buildPromptLegacyParts,
+  hasPromptSourcePlaceholder,
   shouldPreserveLegacyPromptParts,
   type PromptLegacyParts,
 } from "../lib/promptProfile";
+import {
+  parseJsonlPreviewLines,
+  parseJsonPreviewValue,
+  parseTaggedLinePreviewLines,
+} from "../lib/parserPreview";
 import { KVEditor } from "./api-manager/shared/KVEditor";
 import { FormSection } from "./api-manager/shared/FormSection";
 import { TemplateSelector } from "./api-manager/shared/TemplateSelector";
@@ -73,6 +79,14 @@ import grokLogo from "../assets/brands/grok.png";
 const Input = (props: ComponentProps<typeof BaseInput>) => (
   <BaseInput spellCheck={false} {...props} />
 );
+
+const safeLoadYaml = (raw: string) => {
+  try {
+    return yaml.load(raw, { schema: yaml.JSON_SCHEMA }) as any;
+  } catch {
+    return null;
+  }
+};
 
 const SelectField = ({
   className,
@@ -155,7 +169,7 @@ const InputAffix = ({
   </div>
 );
 
-type KeyValuePair = { key: string; value: string };
+type KeyValuePair = { key: string; value: string; valueKind?: "string" };
 
 type PoolEndpointForm = {
   baseUrl: string;
@@ -172,6 +186,24 @@ const createPoolEndpoint = (): PoolEndpointForm => ({
   weight: "1",
 });
 
+const toPairValue = (
+  value: unknown,
+): Pick<KeyValuePair, "value" | "valueKind"> => {
+  if (typeof value === "string") {
+    return { value, valueKind: "string" };
+  }
+  if (value === undefined) return { value: "" };
+  if (value && typeof value === "object") {
+    try {
+      const json = JSON.stringify(value);
+      if (json !== undefined) return { value: json };
+    } catch {
+      // ignore
+    }
+  }
+  return { value: String(value) };
+};
+
 const parseKeyValuePairs = (text: string): KeyValuePair[] => {
   const trimmed = text.trim();
   if (!trimmed) return [createEmptyPair()];
@@ -182,11 +214,30 @@ const parseKeyValuePairs = (text: string): KeyValuePair[] => {
       if (!entries.length) return [createEmptyPair()];
       return entries.map(([key, value]) => ({
         key: String(key),
-        value: String(value),
+        ...toPairValue(value),
       }));
     }
   } catch { }
   return [createEmptyPair()];
+};
+
+const parseJsonValueMaybe = (raw: string) => {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const looksJson =
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    trimmed.startsWith("\"") ||
+    trimmed === "true" ||
+    trimmed === "false" ||
+    trimmed === "null" ||
+    /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(trimmed);
+  if (!looksJson) return raw;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return raw;
+  }
 };
 
 const pairsToJson = (pairs: KeyValuePair[]) => {
@@ -195,6 +246,17 @@ const pairsToJson = (pairs: KeyValuePair[]) => {
     const key = pair.key.trim();
     if (!key) continue;
     payload[key] = pair.value;
+  }
+  return Object.keys(payload).length ? JSON.stringify(payload) : "";
+};
+
+const pairsToJsonWithTypes = (pairs: KeyValuePair[]) => {
+  const payload: Record<string, unknown> = {};
+  for (const pair of pairs) {
+    const key = pair.key.trim();
+    if (!key) continue;
+    payload[key] =
+      pair.valueKind === "string" ? pair.value : parseJsonValueMaybe(pair.value);
   }
   return Object.keys(payload).length ? JSON.stringify(payload) : "";
 };
@@ -327,6 +389,7 @@ type ParserRuleForm = {
   path: string;
   pattern: string;
   sortById: boolean;
+  sortByKey: "id" | "line_number" | "";
   multiLine: "join" | "first" | "error";
   regexGroup: string;
   regexFlags: {
@@ -391,6 +454,13 @@ const DEFAULT_CHUNK_ID = "chunk_legacy_doc";
 const DEFAULT_LINE_CHUNK_ID = "chunk_line_default";
 const HIDE_ALL_PROFILE_IDS = false;
 const HIDE_PROFILE_ID_DISPLAY = new Set([DEFAULT_POLICY_ID, DEFAULT_CHUNK_ID, DEFAULT_LINE_CHUNK_ID]);
+const DEFAULT_PROTECTED_PROFILE_IDS = new Set([
+  DEFAULT_POLICY_ID,
+  DEFAULT_CHUNK_ID,
+  DEFAULT_LINE_CHUNK_ID,
+  "prompt_default",
+  "parser_any_default",
+]);
 
 const parserRuleTypes: ParserRuleType[] = [
   "jsonl",
@@ -449,14 +519,14 @@ const DEFAULT_TEMPLATES: Record<ProfileKind, string> = {
   api: `id: new_api
 name: New API
 type: openai_compat
- base_url: https://api.openai.com/v1
- api_key: ""
- model: ""
- timeout: 600
- concurrency: 0
- rpm: 3600
- headers: {}
- params: {}`,
+base_url: https://api.openai.com/v1
+api_key: ""
+model: ""
+timeout: 600
+concurrency: 0
+rpm: 3600
+headers: {}
+params: {}`,
   pipeline: `id: new_pipeline
 name: New Pipeline
 provider: ""
@@ -540,9 +610,9 @@ const DEFAULT_PIPELINE_COMPOSER: PipelineComposerState = {
   translationMode: "line",
   linePolicy: "",
   chunkPolicy: "",
-  temperature: "0.7",
+  temperature: "",
   maxRetries: "",
-  concurrency: "1",
+  concurrency: "",
   maxTokens: "",
   modelOverride: "",
   timeout: "",
@@ -611,6 +681,7 @@ const createParserRuleTemplate = (
   path: type === "json_object" || type === "jsonl" ? "translation" : "",
   pattern: type === "tagged_line" ? DEFAULT_TAGGED_PATTERN : "",
   sortById: false,
+  sortByKey: "",
   multiLine: "join",
   regexGroup: "0",
   regexFlags: {
@@ -748,6 +819,9 @@ const GrokFaviconIcon = ({ className }: { className?: string }) => (
 const TEMPLATE_CUSTOM_KEY = "murasaki.v2.custom_templates";
 const TEMPLATE_HIDDEN_KEY = "murasaki.v2.hidden_templates";
 const ACTIVE_PIPELINE_KEY = "murasaki.v2.active_pipeline_id";
+const PARSER_RECOMMEND_KEY = "murasaki.v2.parser_recommend_visible";
+const PROFILE_ORDER_KEY = "murasaki.v2.profile_order";
+const PIPELINE_GUIDE_KEY = "murasaki.v2.pipeline_guide_visible";
 
 const API_PRESETS_DATA: ApiPreset[] = [
   {
@@ -769,7 +843,7 @@ const API_PRESETS_DATA: ApiPreset[] = [
     ],
     defaultChannel: "gemini",
     icon: GoogleIcon,
-    color: "text-sky-500",
+    color: "text-muted-foreground/70 dark:text-primary",
     supportsModelList: true,
   },
   {
@@ -777,7 +851,7 @@ const API_PRESETS_DATA: ApiPreset[] = [
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4.1-mini",
     icon: OpenAIFaviconIcon,
-    color: "text-green-500",
+    color: "text-muted-foreground/70 dark:text-primary",
     supportsModelList: true,
   },
   {
@@ -785,14 +859,14 @@ const API_PRESETS_DATA: ApiPreset[] = [
     baseUrl: "https://api.anthropic.com/v1",
     model: "claude-sonnet-4-20250514",
     icon: AnthropicFaviconIcon,
-    color: "text-orange-500",
+    color: "text-muted-foreground/70 dark:text-primary",
   },
   {
     id: "deepseek",
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-chat",
     icon: DeepSeekIcon,
-    color: "text-blue-500",
+    color: "text-muted-foreground/70 dark:text-primary",
     supportsModelList: true,
   },
   {
@@ -800,7 +874,7 @@ const API_PRESETS_DATA: ApiPreset[] = [
     baseUrl: "https://api.x.ai/v1",
     model: "grok-4",
     icon: GrokFaviconIcon,
-    color: "text-rose-500",
+    color: "text-muted-foreground/70 dark:text-primary",
     supportsModelList: true,
   },
   {
@@ -808,7 +882,7 @@ const API_PRESETS_DATA: ApiPreset[] = [
     baseUrl: "https://api.mistral.ai/v1",
     model: "mistral-large-latest",
     icon: MistralIcon,
-    color: "text-slate-600",
+    color: "text-muted-foreground/70 dark:text-primary",
     supportsModelList: true,
   },
   {
@@ -834,7 +908,7 @@ const API_PRESETS_DATA: ApiPreset[] = [
     ],
     defaultChannel: "cn",
     icon: QwenIcon,
-    color: "text-amber-500",
+    color: "text-muted-foreground/70 dark:text-primary",
     supportsModelList: true,
   },
   {
@@ -855,7 +929,7 @@ const API_PRESETS_DATA: ApiPreset[] = [
     ],
     defaultChannel: "global",
     icon: MoonshotIcon,
-    color: "text-indigo-500",
+    color: "text-muted-foreground/70 dark:text-primary",
     supportsModelList: true,
   },
   {
@@ -871,7 +945,7 @@ const API_PRESETS_DATA: ApiPreset[] = [
     ],
     defaultChannel: "bigmodel",
     icon: ZhipuIcon,
-    color: "text-emerald-500",
+    color: "text-muted-foreground/70 dark:text-primary",
     supportsModelList: true,
   },
   {
@@ -879,7 +953,7 @@ const API_PRESETS_DATA: ApiPreset[] = [
     baseUrl: "https://api.siliconflow.cn/v1",
     model: "deepseek-ai/DeepSeek-V3",
     icon: SiliconFlowIcon,
-    color: "text-purple-500",
+    color: "text-muted-foreground/70 dark:text-primary",
     supportsModelList: true,
   },
   {
@@ -887,7 +961,7 @@ const API_PRESETS_DATA: ApiPreset[] = [
     baseUrl: "https://openrouter.ai/api/v1",
     model: "openrouter/auto",
     icon: OpenRouterIcon,
-    color: "text-indigo-500",
+    color: "text-muted-foreground/70 dark:text-primary",
     supportsModelList: true,
   },
 ];
@@ -1032,8 +1106,9 @@ type ParserPreviewResult = {
 };
 
 const splitLinesKeepEmpty = (text: string) => {
-  if (text === "") return [""];
-  return text.split("\\n");
+  const normalized = text.replace(/\r\n/g, "\n");
+  if (normalized === "") return [""];
+  return normalized.split("\n");
 };
 
 const formatGlossaryPreview = (raw: string) => {
@@ -1125,11 +1200,13 @@ const parseWithRegexFlags = (pattern: string, options: any) => {
   ) {
     flags += "i";
   }
-  return new RegExp(pattern, flags);
+  const normalizedPattern = pattern.replace(/\(\?P</g, "(?<");
+  return new RegExp(normalizedPattern, flags);
 };
 
 const formatErrorCode = (code: string, texts: any) => {
   if (code === "invalid_yaml") return texts.validationInvalidYaml;
+  if (code === "invalid_id") return texts.validationInvalidId;
   if (code === "missing_id") return texts.missingId;
   if (code.startsWith("missing_field:")) {
     const field = code.split(":")[1] || "";
@@ -1143,6 +1220,7 @@ const formatErrorCode = (code: string, texts: any) => {
   if (code === "missing_pool_model") return texts.validationMissingPoolModel;
   if (code === "missing_pattern") return texts.validationMissingPattern;
   if (code === "missing_json_path") return texts.validationMissingJsonPath;
+  if (code === "missing_script") return texts.validationMissingScript;
   if (code === "missing_any_parsers") return texts.validationMissingParsers;
   if (code === "invalid_concurrency") return texts.validationInvalidConcurrency;
   if (code === "invalid_rpm") return texts.validationInvalidRpm;
@@ -1211,6 +1289,16 @@ const formatServerError = (error: any, fallback: string, texts: any) => {
   }
 };
 
+const SAFE_PROFILE_ID = /^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/;
+
+const isSafeProfileId = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.includes("..")) return false;
+  if (/[\\/]/.test(trimmed)) return false;
+  return SAFE_PROFILE_ID.test(trimmed);
+};
+
 const validateProfile = (
   kind: ProfileKind,
   data: any,
@@ -1229,6 +1317,11 @@ const validateProfile = (
     texts.validationUnknownReference
       .replace("{kind}", refKind)
       .replace("{id}", id);
+  const hasSourcePlaceholder = (prompt: any) => {
+    const userTemplate = String(prompt?.user_template || "");
+    if (!userTemplate.trim()) return true;
+    return userTemplate.includes("{{source}}");
+  };
   const inferChunkTypeForValidation = (ref: string) => {
     if (!ref) return "";
     const known = chunkTypes[ref];
@@ -1246,6 +1339,14 @@ const validateProfile = (
   }
   if (!data.id) {
     errors.push(texts.missingId);
+  } else if (!isSafeProfileId(String(data.id))) {
+    errors.push(texts.validationInvalidId);
+  }
+
+  if (kind === "prompt") {
+    if (!hasSourcePlaceholder(data)) {
+      errors.push(texts.validationPromptMissingSource);
+    }
   }
 
   if (kind === "api") {
@@ -1321,10 +1422,20 @@ const validateProfile = (
         errors.push(texts.validationMissingJsonPath);
       }
     }
+    if (parserType === "jsonl") {
+      if (data.options && !data.options.path && !data.options.key) {
+        warnings.push(texts.validationMissingJsonPath);
+      }
+    }
     if (parserType === "any") {
       const parsers = data.options?.parsers || data.options?.candidates;
       if (!Array.isArray(parsers) || parsers.length === 0) {
         errors.push(texts.validationMissingParsers);
+      }
+    }
+    if (parserType === "python") {
+      if (!data.options?.script && !data.options?.path) {
+        errors.push(texts.validationMissingScript);
       }
     }
   }
@@ -1387,7 +1498,9 @@ const validateProfile = (
     });
   }
 
-  return { errors, warnings };
+  const uniqueErrors = Array.from(new Set(errors));
+  const uniqueWarnings = Array.from(new Set(warnings));
+  return { errors: uniqueErrors, warnings: uniqueWarnings };
 };
 
 interface ApiManagerViewProps {
@@ -1397,8 +1510,8 @@ interface ApiManagerViewProps {
 export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const t = translations[lang];
   const texts = t.apiManager;
-  const presetTexts = translations.zh.apiManager;
-  const { alertProps, showConfirm } = useAlertModal();
+  const fallbackTexts = translations.zh.apiManager;
+  const { alertProps, showAlert, showConfirm } = useAlertModal();
 
   const isStrategyKind = (targetKind: ProfileKind) =>
     targetKind === "policy" || targetKind === "chunk";
@@ -1414,6 +1527,23 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       ? texts.strategyKindTitle
       : texts.kinds[targetKind] || targetKind;
 
+  const getNewCardCopy = (
+    scope: "pipeline" | "prompt" | "strategy" | "parser" | "policy" | "chunk",
+  ) => {
+    const labels = texts.newProfileLabels || {};
+    const descs = texts.newProfileDescs || {};
+    const fallbackScope =
+      scope === "policy" || scope === "chunk" ? "strategy" : scope;
+    return {
+      title: labels[scope] || labels[fallbackScope] || texts.newProfile,
+      desc:
+        descs[scope] ||
+        descs[fallbackScope] ||
+        texts.newProfileDesc ||
+        "",
+    };
+  };
+
   const loadJson = <T,>(key: string, fallback: T): T => {
     try {
       const raw = window.localStorage.getItem(key);
@@ -1422,6 +1552,17 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       return parsed ?? fallback;
     } catch {
       return fallback;
+    }
+  };
+
+  const loadOptionalJson = <T,>(key: string): T | null => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as T;
+      return parsed ?? null;
+    } catch {
+      return null;
     }
   };
 
@@ -1434,8 +1575,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   };
 
   const getPresetLabel = (preset: ApiPreset) =>
-    presetTexts.presets?.[preset.id]?.label ||
     texts.presets?.[preset.id]?.label ||
+    fallbackTexts.presets?.[preset.id]?.label ||
     preset.id;
 
   const getTemplateMeta = (
@@ -1443,10 +1584,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     fallback?: { title?: string; desc?: string },
   ) => {
     const map: Record<string, { title?: string; desc?: string }> | undefined =
-      (presetTexts.templateItems as
+      (texts.templateItems as
         | Record<string, { title?: string; desc?: string }>
         | undefined) ??
-      (texts.templateItems as
+      (fallbackTexts.templateItems as
         | Record<string, { title?: string; desc?: string }>
         | undefined);
     return map?.[templateId] || fallback;
@@ -1468,20 +1609,20 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       const trimmed = String(name || "").trim();
       const aliases =
         (DEFAULT_PROFILE_NAME_ALIASES as Record<string, string[]>)[id] || [];
-      const presetNames = presetTexts.profileNames as
+      const presetNames = fallbackTexts.profileNames as
         | Record<string, string>
         | undefined;
       const textNames = texts.profileNames as
         | Record<string, string>
         | undefined;
-      const localized = presetNames?.[id] || textNames?.[id];
+      const localized = textNames?.[id] || presetNames?.[id];
       const isAliasMatch = aliases.some(
         (alias) => alias.toLowerCase() === trimmed.toLowerCase(),
       );
       if (localized && (!trimmed || isAliasMatch)) return localized;
       return trimmed || id;
     },
-    [presetTexts, texts],
+    [fallbackTexts, texts],
   );
 
   const createParserRuleId = () =>
@@ -1491,8 +1632,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     createParserRuleTemplate(type, createParserRuleId());
 
   const getPresetChannelText = (preset: ApiPreset, channelId: string) => {
-    const presetText = (presetTexts.presets?.[preset.id] ||
-      texts.presets?.[preset.id]) as
+    const presetText = (texts.presets?.[preset.id] ||
+      fallbackTexts.presets?.[preset.id]) as
       | {
         channels?: Record<string, { label?: string; desc?: string }>;
       }
@@ -1568,6 +1709,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const [pipelineSummaryIndex, setPipelineSummaryIndex] = useState<
     Record<string, PipelineSummary>
   >({});
+  const [isPipelineSummaryLoading, setIsPipelineSummaryLoading] = useState(false);
   const [pipelineView, setPipelineView] = useState<"overview" | "editor">(
     "overview",
   );
@@ -1602,12 +1744,41 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     id: string;
     kind: ProfileKind;
   } | null>(null);
+  const [pendingCreate, setPendingCreate] = useState<{
+    kind: ProfileKind;
+    yaml?: string;
+    preset?: ApiPreset | null;
+    channelId?: string;
+  } | null>(null);
+  const [profileOrder, setProfileOrder] = useState<Record<ProfileKind, string[]>>(
+    () =>
+      loadJson(PROFILE_ORDER_KEY, {
+        api: [],
+        pipeline: [],
+        prompt: [],
+        parser: [],
+        policy: [],
+        chunk: [],
+      }),
+  );
+  const orderProfileIds = useCallback(
+    (targetKind: ProfileKind, ids: string[]) => {
+      const order = profileOrder[targetKind] || [];
+      if (!order.length) return ids;
+      const orderSet = new Set(order);
+      const ordered = order.filter((id) => ids.includes(id));
+      const tail = ids.filter((id) => !orderSet.has(id));
+      return [...ordered, ...tail];
+    },
+    [profileOrder],
+  );
   const visiblePipelineIds = useMemo(
     () =>
-      profileIndex.pipeline.filter(
-        (id) => !isHiddenProfile("pipeline", id),
+      orderProfileIds(
+        "pipeline",
+        profileIndex.pipeline.filter((id) => !isHiddenProfile("pipeline", id)),
       ),
-    [profileIndex.pipeline, isHiddenProfile],
+    [profileIndex.pipeline, isHiddenProfile, orderProfileIds],
   );
 
   // Interaction states
@@ -1635,12 +1806,15 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const [glossarySelected, setGlossarySelected] = useState("");
   const [glossaryLoadError, setGlossaryLoadError] = useState("");
   const [glossaryLoading, setGlossaryLoading] = useState(false);
-  const [parserForm, setParserForm] = useState<ParserFormState>(() => ({
+  const createDefaultParserForm = (): ParserFormState => ({
     id: "",
     name: "",
     mode: "single",
     rules: [createParserRule("plain")],
-  }));
+  });
+  const [parserForm, setParserForm] = useState<ParserFormState>(() =>
+    createDefaultParserForm(),
+  );
   const [policyForm, setPolicyForm] =
     useState<PolicyFormState>(DEFAULT_POLICY_FORM);
   const [chunkForm, setChunkForm] =
@@ -1657,19 +1831,63 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
   const [templateDraftName, setTemplateDraftName] = useState("");
   const [templateDraftDesc, setTemplateDraftDesc] = useState("");
-  const [showPipelineGuide, setShowPipelineGuide] = useState(true);
+  const pipelineGuideStoredRef = useRef<boolean | null>(
+    loadOptionalJson<boolean>(PIPELINE_GUIDE_KEY),
+  );
+  const [showPipelineGuide, setShowPipelineGuide] = useState(
+    () => pipelineGuideStoredRef.current ?? true,
+  );
+  const [pipelineGuideTouched, setPipelineGuideTouched] = useState(
+    () => pipelineGuideStoredRef.current !== null,
+  );
+  const [isProfilesLoading, setIsProfilesLoading] = useState(true);
+  const [profilesLoadedKind, setProfilesLoadedKind] =
+    useState<ProfileKind | null>(null);
+  const [showParserRecommend, setShowParserRecommend] = useState(() =>
+    loadJson(PARSER_RECOMMEND_KEY, true),
+  );
   const hasAutoCollapsedGuide = useRef(false);
+  const setPipelineGuideVisibility = (next: boolean) => {
+    setShowPipelineGuide(next);
+    setPipelineGuideTouched(true);
+  };
 
   useEffect(() => {
     if (
       kind === "pipeline" &&
       profileIndex.pipeline.length > 0 &&
-      !hasAutoCollapsedGuide.current
+      !hasAutoCollapsedGuide.current &&
+      !pipelineGuideTouched
     ) {
-      setShowPipelineGuide(false);
+      setPipelineGuideVisibility(false);
       hasAutoCollapsedGuide.current = true;
     }
-  }, [kind, profileIndex.pipeline.length]);
+  }, [kind, profileIndex.pipeline.length, pipelineGuideTouched]);
+
+  useEffect(() => {
+    setProfileOrder((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      (Object.keys(profileIndex) as ProfileKind[]).forEach((targetKind) => {
+        const ids = profileIndex[targetKind] || [];
+        const existing = prev[targetKind] || [];
+        if (!ids.length && !existing.length) return;
+        const existsSet = new Set(ids);
+        const trimmed = existing.filter((id) => existsSet.has(id));
+        const trimmedSet = new Set(trimmed);
+        const appended = ids.filter((id) => !trimmedSet.has(id));
+        const merged = [...trimmed, ...appended];
+        const hasChange =
+          merged.length !== existing.length ||
+          merged.some((id, idx) => id !== existing[idx]);
+        if (hasChange) {
+          next[targetKind] = merged;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [profileIndex]);
 
   const [customTemplates, setCustomTemplates] = useState<
     Record<ProfileKind, TemplateEntry[]>
@@ -1702,11 +1920,24 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   useEffect(() => {
     apiTestSeq.current += 1;
     setApiTest({ status: "idle" });
-  }, [apiForm.baseUrl, apiForm.apiKey, apiForm.timeout, apiForm.apiType]);
+  }, [apiForm.baseUrl, apiForm.apiKey, apiForm.timeout, apiForm.apiType, apiForm.model]);
 
   useEffect(() => {
     persistJson(ACTIVE_PIPELINE_KEY, activePipelineId);
   }, [activePipelineId]);
+
+  useEffect(() => {
+    persistJson(PARSER_RECOMMEND_KEY, showParserRecommend);
+  }, [showParserRecommend]);
+
+  useEffect(() => {
+    if (!pipelineGuideTouched) return;
+    persistJson(PIPELINE_GUIDE_KEY, showPipelineGuide);
+  }, [pipelineGuideTouched, showPipelineGuide]);
+
+  useEffect(() => {
+    persistJson(PROFILE_ORDER_KEY, profileOrder);
+  }, [profileOrder]);
 
   useEffect(() => {
     if (!visiblePipelineIds.length) return;
@@ -1735,13 +1966,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       Array.isArray(aliases) &&
       aliases.some((alias) => alias.toLowerCase() === trimmed.toLowerCase());
     const profileNameMap =
-      (presetTexts.profileNames as Record<string, string> | undefined) ||
-      (texts.profileNames as Record<string, string> | undefined);
+      (texts.profileNames as Record<string, string> | undefined) ||
+      (fallbackTexts.profileNames as Record<string, string> | undefined);
     const templateItemMap =
-      (presetTexts.templateItems as
+      (texts.templateItems as
         | Record<string, { title?: string }>
         | undefined) ||
-      (texts.templateItems as
+      (fallbackTexts.templateItems as
         | Record<string, { title?: string }>
         | undefined);
     const localized = safeId ? profileNameMap?.[safeId] : undefined;
@@ -1810,7 +2041,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         resolveProfileName(p.id, p.name).toLowerCase().includes(lower) ||
         p.id.toLowerCase().includes(lower),
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- resolveProfileName only depends on texts (in deps) and presetTexts (constant)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resolveProfileName only depends on texts (in deps) and fallbackTexts (constant)
   }, [visibleProfiles, deferredSearchTerm, texts]);
 
   const getProfileLabel = (targetKind: ProfileKind, id?: string) => {
@@ -1886,9 +2117,31 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     return null;
   };
 
+  const loadProfilesBatch = async (
+    targetKind: ProfileKind,
+    ids: string[],
+  ): Promise<Array<{ id: string; result: any | null }>> => {
+    if (!ids.length) return [];
+    if (window.api?.pipelineV2ProfilesLoadBatch) {
+      const result = await window.api.pipelineV2ProfilesLoadBatch(
+        targetKind,
+        ids,
+      );
+      return Array.isArray(result) ? result : [];
+    }
+    const entries = await Promise.all(
+      ids.map(async (id) => ({
+        id,
+        result: await window.api?.pipelineV2ProfilesLoad?.(targetKind, id),
+      })),
+    );
+    return entries;
+  };
+
   const loadChunkTypeIndex = async (
     chunkIds: string[],
     requestId?: number,
+    preloadList?: Array<{ id?: string; chunk_type?: string; type?: string }>,
   ) => {
     if (!chunkIds.length) {
       if (!requestId || requestId === loadProfilesSeq.current) {
@@ -1903,12 +2156,27 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         return "legacy";
       return "";
     };
+    const preloaded = new Map<string, "" | "line" | "legacy">();
+    if (Array.isArray(preloadList)) {
+      preloadList.forEach((item) => {
+        const rawId = item?.id ? String(item.id) : "";
+        if (!rawId) return;
+        const rawType = String(item.chunk_type || item.type || "");
+        const normalized = rawType === "line" || rawType === "legacy" ? rawType : "";
+        if (normalized) preloaded.set(rawId, normalized);
+      });
+    }
     const directEntries: Array<[string, "" | "line" | "legacy"]> = [];
     const pendingIds: string[] = [];
     for (const id of chunkIds) {
       const cached = chunkTypeIndex[id];
       if (cached) {
         directEntries.push([id, cached]);
+        continue;
+      }
+      const preloadedType = preloaded.get(id);
+      if (preloadedType) {
+        directEntries.push([id, preloadedType]);
         continue;
       }
       const inferred = inferById(id);
@@ -1939,24 +2207,23 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       return;
     }
     try {
-      const entries = (await Promise.all(
-        pendingIds.map(async (id) => {
-          try {
-            const result = await window.api?.pipelineV2ProfilesLoad?.(
-              "chunk",
-              id,
-            );
-            const data =
-              result?.data ??
-              (result?.yaml ? (yaml.load(result.yaml) as any) : null);
-            const raw = String(data?.chunk_type || data?.type || "");
-            const normalized = raw === "line" || raw === "legacy" ? raw : "";
-            return [id, normalized] as [string, "" | "line" | "legacy"];
-          } catch {
-            return [id, ""] as [string, "" | "line" | "legacy"];
-          }
-        }),
-      )) as Array<[string, "" | "line" | "legacy"]>;
+      const loaded = await loadProfilesBatch("chunk", pendingIds);
+      const loadedMap = new Map(
+        loaded.map((entry) => [entry.id, entry.result]),
+      );
+      const entries = pendingIds.map((id) => {
+        try {
+          const result = loadedMap.get(id);
+          const data =
+            result?.data ??
+            (result?.yaml ? (safeLoadYaml(result.yaml) as any) : null);
+          const raw = String(data?.chunk_type || data?.type || "");
+          const normalized = raw === "line" || raw === "legacy" ? raw : "";
+          return [id, normalized] as [string, "" | "line" | "legacy"];
+        } catch {
+          return [id, ""] as [string, "" | "line" | "legacy"];
+        }
+      });
       commitEntries([...directEntries, ...entries]);
     } catch {
       commitEntries(directEntries);
@@ -1974,7 +2241,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             const result = await window.api?.pipelineV2ProfilesLoad?.("api", id);
             const data =
               result?.data ??
-              (result?.yaml ? (yaml.load(result.yaml) as any) : null);
+              (result?.yaml ? (safeLoadYaml(result.yaml) as any) : null);
             const timeoutRaw = data?.timeout;
             const concurrencyRaw = data?.concurrency;
             const entry: { timeout?: number; concurrency?: number } = {};
@@ -2003,39 +2270,39 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     }
   };
 
-  const loadProfileIndex = async (requestId?: number) => {
-    const nextIndex: Record<ProfileKind, string[]> = {
-      api: [],
-      pipeline: [],
-      prompt: [],
-      parser: [],
-      policy: [],
-      chunk: [],
-    };
+  const loadProfileIndex = async (
+    requestId?: number,
+    preload?: Partial<Record<ProfileKind, any[]>>,
+    kinds: ProfileKind[] = PROFILE_KINDS,
+  ) => {
+    const nextIndex: Record<ProfileKind, string[]> = { ...profileIndex };
     const nextMeta: Record<ProfileKind, Record<string, string>> = {
-      api: {},
-      pipeline: {},
-      prompt: {},
-      parser: {},
-      policy: {},
-      chunk: {},
+      ...profileMeta,
     };
+    let chunkList: Array<{ id?: string; chunk_type?: string; type?: string }> | null =
+      Array.isArray(preload?.chunk) ? preload?.chunk || null : null;
     try {
       const results = await Promise.all(
-        PROFILE_KINDS.map(async (targetKind) => {
+        kinds.map(async (targetKind) => {
+          const preloaded = preload?.[targetKind];
+          if (Array.isArray(preloaded)) {
+            return [targetKind, preloaded] as const;
+          }
           const list = await window.api?.pipelineV2ProfilesList?.(targetKind);
           return [targetKind, list] as const;
         }),
       );
       for (const [targetKind, list] of results) {
-        if (Array.isArray(list)) {
-          nextIndex[targetKind] = list.map((item) => item.id);
-          nextMeta[targetKind] = Object.fromEntries(
-            list.map((item) => [
-              item.id,
-              normalizeDefaultProfileName(item.id, item.name || item.id),
-            ]),
-          );
+        if (!Array.isArray(list)) continue;
+        nextIndex[targetKind] = list.map((item) => item.id);
+        nextMeta[targetKind] = Object.fromEntries(
+          list.map((item) => [
+            item.id,
+            normalizeDefaultProfileName(item.id, item.name || item.id),
+          ]),
+        );
+        if (targetKind === "chunk") {
+          chunkList = list;
         }
       }
     } catch {
@@ -2048,19 +2315,29 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     const shouldLoadChunkType =
       kind === "pipeline" || kind === "policy" || kind === "chunk";
     if (shouldLoadChunkType) {
-      await loadChunkTypeIndex(nextIndex.chunk, requestId);
+      await loadChunkTypeIndex(nextIndex.chunk, requestId, chunkList || undefined);
     }
   };
 
   // Load profiles
   const loadProfiles = async () => {
     const requestId = ++loadProfilesSeq.current;
+    setIsProfilesLoading(true);
+    const preload: Partial<Record<ProfileKind, any[]>> = {};
+    const indexKinds: ProfileKind[] =
+      kind === "pipeline"
+        ? PROFILE_KINDS
+        : isStrategyKind(kind)
+          ? ["policy", "chunk"]
+          : [kind];
     try {
       if (isStrategyKind(kind)) {
         const [policyList, chunkList] = await Promise.all([
           window.api?.pipelineV2ProfilesList?.("policy"),
           window.api?.pipelineV2ProfilesList?.("chunk"),
         ]);
+        if (Array.isArray(policyList)) preload.policy = policyList;
+        if (Array.isArray(chunkList)) preload.chunk = chunkList;
         const policyItems = Array.isArray(policyList)
           ? policyList
             .filter((item) => !isHiddenProfile("policy", item.id))
@@ -2105,6 +2382,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         }));
       } else {
         const list = await window.api?.pipelineV2ProfilesList?.(kind);
+        if (Array.isArray(list)) preload[kind] = list;
         if (Array.isArray(list)) {
           const filtered = list.filter(
             (item) => !isHiddenProfile(kind, item.id),
@@ -2131,11 +2409,17 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           setProfiles([]);
         }
       }
-      await loadProfileIndex(requestId);
+      if (requestId !== loadProfilesSeq.current) return;
+      await loadProfileIndex(requestId, preload, indexKinds);
     } catch (e) {
       console.error("Failed to load profiles:", e);
       if (requestId === loadProfilesSeq.current) {
         setProfiles([]);
+      }
+    } finally {
+      if (requestId === loadProfilesSeq.current) {
+        setIsProfilesLoading(false);
+        setProfilesLoadedKind(kind);
       }
     }
   };
@@ -2165,6 +2449,15 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     if (pendingSelection && pendingSelection.kind === kind) {
       setSelectedId(pendingSelection.id);
       setPendingSelection(null);
+    } else if (pendingCreate && pendingCreate.kind === kind) {
+      setSelectedId(null);
+      if ("preset" in pendingCreate) {
+        handlePresetSelect(pendingCreate.preset ?? null, pendingCreate.channelId);
+      } else if (pendingCreate.yaml) {
+        setYamlText(pendingCreate.yaml);
+        syncFormsFromYaml(pendingCreate.yaml, kind);
+      }
+      setPendingCreate(null);
     } else {
       setSelectedId(null);
       setYamlText("");
@@ -2175,37 +2468,59 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     if (kind !== "pipeline") return;
     if (!visiblePipelineIds.length) {
       setPipelineSummaryIndex({});
+      setIsPipelineSummaryLoading(false);
+      return;
+    }
+    const visibleSet = new Set(visiblePipelineIds);
+    setPipelineSummaryIndex((prev) => {
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([id]) => visibleSet.has(id)),
+      );
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+    const pendingIds = visiblePipelineIds.filter(
+      (id) => !pipelineSummaryIndex[id],
+    );
+    if (!pendingIds.length) {
+      setIsPipelineSummaryLoading(false);
       return;
     }
     const requestId = ++pipelineSummarySeq.current;
+    setIsPipelineSummaryLoading(true);
     const loadSummaries = async () => {
       try {
-        const entries = await Promise.all(
-          visiblePipelineIds.map(async (id) => {
-            try {
-              const result = await window.api?.pipelineV2ProfilesLoad?.(
-                "pipeline",
-                id,
-              );
-              const data =
-                result?.data ??
-                (result?.yaml ? (yaml.load(result.yaml) as any) : null);
-              return [id, buildPipelineSummary(data, { id })] as const;
-            } catch {
-              return [id, buildPipelineSummary(null, { id })] as const;
-            }
-          }),
+        const loaded = await loadProfilesBatch("pipeline", pendingIds);
+        const loadedMap = new Map(
+          loaded.map((entry) => [entry.id, entry.result]),
         );
+        const entries = pendingIds.map((id) => {
+          try {
+            const result = loadedMap.get(id);
+            const data =
+              result?.data ??
+              (result?.yaml ? (safeLoadYaml(result.yaml) as any) : null);
+            return [id, buildPipelineSummary(data, { id })] as const;
+          } catch {
+            return [id, buildPipelineSummary(null, { id })] as const;
+          }
+        });
         if (requestId !== pipelineSummarySeq.current) return;
-        setPipelineSummaryIndex(Object.fromEntries(entries));
+        setPipelineSummaryIndex((prev) => ({
+          ...prev,
+          ...Object.fromEntries(entries),
+        }));
       } catch {
         if (requestId === pipelineSummarySeq.current) {
-          setPipelineSummaryIndex({});
+          setPipelineSummaryIndex((prev) => ({ ...prev }));
+        }
+      } finally {
+        if (requestId === pipelineSummarySeq.current) {
+          setIsPipelineSummaryLoading(false);
         }
       }
     };
     loadSummaries();
-  }, [kind, visiblePipelineIds]);
+  }, [kind, visiblePipelineIds, pipelineSummaryIndex]);
 
   useEffect(() => {
     if (kind !== "pipeline") return;
@@ -2247,7 +2562,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         if (requestId !== loadDetailSeq.current) return;
         if (selectedId !== id || kind !== targetKind) return;
         setYamlText(result.yaml || "");
-        const data = result.data ?? (yaml.load(result.yaml) as any);
+        const data = result.data ?? (safeLoadYaml(result.yaml) as any);
+        if (!data || typeof data !== "object") return;
         syncFormsFromData(targetKind, data);
         setAutoIdEnabled((prev) => ({ ...prev, [targetKind]: false }));
         if (targetKind === "api") setShowApiSetup(false);
@@ -2293,7 +2609,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     (raw: string) => {
       if (!raw.trim()) return { data: null, error: "" };
       try {
-        const data = yaml.load(raw) as any;
+        const data = safeLoadYaml(raw) as any;
         if (!data || typeof data !== "object") {
           return { data: null, error: texts.validationInvalidYaml };
         }
@@ -2466,7 +2782,21 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         if (kind === "api") setShowApiSetup(true);
         return;
       }
-      const saveId = immediateParsed.data?.id || selectedId;
+      const parsedData = immediateParsed.data as any;
+      const parsedId = parsedData?.id ? String(parsedData.id).trim() : "";
+      const existingId = selectedId;
+      const isRename =
+        Boolean(existingId) && Boolean(parsedId) && parsedId !== existingId;
+      if (isRename && existingId && DEFAULT_PROTECTED_PROFILE_IDS.has(existingId)) {
+        emitToast({
+          title: texts.saveFail,
+          description: texts.defaultPresetDeleteFail,
+          variant: "error",
+        });
+        if (kind === "api") setShowApiSetup(true);
+        return;
+      }
+      const saveId = parsedId || existingId;
       if (!saveId) {
         emitToast({
           title: texts.saveFail,
@@ -2476,11 +2806,18 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         if (kind === "api") setShowApiSetup(true);
         return;
       }
+      let saveYamlText = yamlText;
+      if (parsedData && parsedId && parsedData.id !== parsedId) {
+        const patched = { ...parsedData, id: parsedId };
+        saveYamlText = yaml.dump(patched);
+        setYamlText(saveYamlText);
+        syncFormsFromData(kind, patched);
+      }
 
       const result = await window.api?.pipelineV2ProfilesSave?.(
         kind,
         saveId,
-        yamlText,
+        saveYamlText,
       );
       if (result?.ok) {
         emitToast({
@@ -2499,10 +2836,49 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           });
         }
         await loadProfiles();
-        setSelectedId(saveId);
+        if (kind === "pipeline") {
+          setPipelineView("overview");
+        }
+        setSelectedId(null);
+        setYamlText("");
         if (kind === "api" && pendingPipelineLink) {
           await updateActivePipelineProvider(saveId);
           setPendingPipelineLink(false);
+        }
+        if (isRename && existingId && existingId !== saveId) {
+          const deleteResult = await window.api?.pipelineV2ProfilesDelete?.(
+            kind,
+            existingId,
+          );
+          if (!deleteResult?.ok) {
+            emitToast({
+              title: texts.deleteFail,
+              description: formatServerError(
+                deleteResult?.error,
+                texts.deleteFail,
+                texts,
+              ),
+              variant: "warning",
+            });
+          }
+          setProfileOrder((prev) => {
+            const next = { ...prev };
+            const existing = next[kind] ? [...next[kind]] : [];
+            next[kind] = existing.map((id) => (id === existingId ? saveId : id));
+            return next;
+          });
+          if (kind === "pipeline" && activePipelineId === existingId) {
+            setActivePipelineId(saveId);
+          }
+        }
+        if (!existingId || isRename) {
+          setProfileOrder((prev) => {
+            const next = { ...prev };
+            const existing = next[kind] ? [...next[kind]] : [];
+            const filtered = existing.filter((id) => id !== saveId);
+            next[kind] = [...filtered, saveId];
+            return next;
+          });
         }
       } else {
         emitToast({
@@ -2526,6 +2902,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
   const handleDelete = async () => {
     if (!selectedId) return;
+    if (DEFAULT_PROTECTED_PROFILE_IDS.has(selectedId)) {
+      showAlert({
+        title: texts.deleteFail,
+        description: texts.defaultPresetDeleteFail,
+        variant: "warning",
+      });
+      return;
+    }
     const deleteKind = kind;
     const deleteId = selectedId;
     const selectedName = resolveProfileName(
@@ -2548,6 +2932,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             await loadProfiles();
             setSelectedId(null);
             setYamlText("");
+            if (deleteKind === "pipeline") {
+              setPipelineView("overview");
+              if (deleteId === activePipelineId) {
+                setActivePipelineId("");
+              }
+            }
           } else {
             emitToast({
               title: texts.deleteFail,
@@ -2585,26 +2975,44 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   //   setShowApiSetup(false);
   // };
 
-  const handleCreate = () => {
-    if (kind === "pipeline") {
+  const buildNewProfileYaml = (targetKind: ProfileKind) => {
+    const template = DEFAULT_TEMPLATES[targetKind];
+    const localizedYaml = localizeTemplateName(template, texts.untitledProfile);
+    return ensureUniqueTemplateId(localizedYaml, targetKind);
+  };
+
+  const handleCreateByKind = (targetKind: ProfileKind) => {
+    if (targetKind === "pipeline") {
       setPipelineView("editor");
     }
-    setAutoIdEnabled((prev) => ({ ...prev, [kind]: true }));
+    setAutoIdEnabled((prev) => ({ ...prev, [targetKind]: true }));
     setSelectedId(null);
     setEditorTab("visual");
-    if (kind === "api") setShowApiSetup(false);
-    if (kind === "api") {
+    resetFormState(targetKind);
+    if (targetKind === "api") setShowApiSetup(false);
+    if (targetKind === "api") {
+      if (kind !== targetKind) {
+        setPendingCreate({ kind: targetKind, preset: null });
+        setKind(targetKind);
+        setSearchTerm("");
+        return;
+      }
       handlePresetSelect(null);
       return;
     }
     // For non-API kinds, pre-fill template immediately
-    setYamlText("");
-    const template = DEFAULT_TEMPLATES[kind];
-    const localizedYaml = localizeTemplateName(template, texts.untitledProfile);
-    const nextYaml = ensureUniqueTemplateId(localizedYaml, kind);
+    const nextYaml = buildNewProfileYaml(targetKind);
+    if (kind !== targetKind) {
+      setPendingCreate({ kind: targetKind, yaml: nextYaml });
+      setKind(targetKind);
+      setSearchTerm("");
+      return;
+    }
     setYamlText(nextYaml);
-    syncFormsFromYaml(nextYaml);
+    syncFormsFromYaml(nextYaml, targetKind);
   };
+
+  const handleCreate = () => handleCreateByKind(kind);
 
   const handleSelectProfile = (
     id: string,
@@ -2612,7 +3020,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   ) => {
     if (targetKind !== kind) {
       setPendingSelection({ id, kind: targetKind });
-      setSelectedId(id);
       setYamlText("");
       setEditorTab("visual");
       setKind(targetKind);
@@ -2799,6 +3206,37 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     });
   };
 
+  const resetFormState = (targetKind: ProfileKind) => {
+    if (targetKind === "api") {
+      setApiForm(DEFAULT_API_FORM);
+      setShowApiSetup(false);
+      return;
+    }
+    if (targetKind === "pipeline") {
+      setPipelineComposer(DEFAULT_PIPELINE_COMPOSER);
+      return;
+    }
+    if (targetKind === "prompt") {
+      setPromptForm(DEFAULT_PROMPT_FORM);
+      setPromptLegacyParts(null);
+      setPromptPreview(DEFAULT_PROMPT_PREVIEW);
+      return;
+    }
+    if (targetKind === "parser") {
+      setParserForm(createDefaultParserForm());
+      setParserSample("");
+      setParserPreview(null);
+      return;
+    }
+    if (targetKind === "policy") {
+      setPolicyForm(DEFAULT_POLICY_FORM);
+      return;
+    }
+    if (targetKind === "chunk") {
+      setChunkForm(DEFAULT_CHUNK_FORM);
+    }
+  };
+
   const handleOpenProfilesDir = async () => {
     try {
       const profilesDir = await window.api?.pipelineV2ProfilesPath?.();
@@ -2888,7 +3326,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         pipelineId,
       );
       const data =
-        result?.data ?? (result?.yaml ? (yaml.load(result.yaml) as any) : null);
+        result?.data ?? (result?.yaml ? (safeLoadYaml(result.yaml) as any) : null);
       const nextData: any = { ...(data || {}), id: pipelineId };
       nextData.provider = providerId;
       if (!nextData.prompt) nextData.prompt = profileIndex.prompt[0] || "";
@@ -3072,14 +3510,18 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       : "join";
     const flags = extractRegexFlags(options);
     const extra = stripParserKnownOptions(options, type);
+    const sortByKey = options?.sort_by_line_number
+      ? "line_number"
+      : options?.sort_by_id
+        ? "id"
+        : "";
     return {
       ...rule,
       type,
       path: path !== undefined ? String(path) : rule.path,
       pattern: pattern !== undefined ? String(pattern) : rule.pattern,
-      sortById: Boolean(
-        options?.sort_by_id || options?.sort_by_line_number,
-      ),
+      sortById: Boolean(sortByKey),
+      sortByKey,
       multiLine: multiLine as ParserRuleForm["multiLine"],
       regexGroup:
         options?.group !== undefined ? String(options?.group) : rule.regexGroup,
@@ -3107,7 +3549,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     }
     if (rule.type === "tagged_line") {
       if (rule.pattern.trim()) options.pattern = rule.pattern.trim();
-      if (rule.sortById) options.sort_by_id = true;
+      if (rule.sortById) {
+        if (rule.sortByKey === "line_number") {
+          options.sort_by_line_number = true;
+        } else {
+          options.sort_by_id = true;
+        }
+      }
     }
     if (rule.type === "python") {
       if (rule.scriptPath.trim()) options.script = rule.scriptPath.trim();
@@ -3174,6 +3622,18 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     if (normalized.includes("legacy") || normalized.includes("doc"))
       return "legacy";
     return "";
+  };
+
+  const resolvePipelineTranslationMode = (
+    chunkPolicy: string,
+    linePolicy: string,
+    fallback: "line" | "block",
+  ) => {
+    const chunkType = inferChunkType(chunkPolicy);
+    if (chunkType === "legacy") return "block";
+    if (chunkType === "line") return "line";
+    if (linePolicy) return "line";
+    return fallback;
   };
 
   const syncFormsFromData = (targetKind: ProfileKind, data: any) => {
@@ -3295,9 +3755,21 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         translationMode,
         linePolicy: data.line_policy || "",
         chunkPolicy: data.chunk_policy || "",
-        temperature: String(data.settings?.temperature ?? "0.7"),
-        maxRetries: String(data.settings?.max_retries ?? "1"),
-        concurrency: String(data.settings?.concurrency ?? "1"),
+        temperature:
+          data.settings?.temperature !== undefined &&
+            data.settings?.temperature !== null
+            ? String(data.settings.temperature)
+            : "",
+        maxRetries:
+          data.settings?.max_retries !== undefined &&
+            data.settings?.max_retries !== null
+            ? String(data.settings.max_retries)
+            : "",
+        concurrency:
+          data.settings?.concurrency !== undefined &&
+            data.settings?.concurrency !== null
+            ? String(data.settings.concurrency)
+            : "",
         maxTokens: String(data.settings?.max_tokens ?? ""),
         modelOverride: String(data.settings?.model ?? ""),
         timeout: String(data.settings?.timeout ?? ""),
@@ -3410,7 +3882,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           options.keep_empty !== undefined
             ? Boolean(options.keep_empty)
             : Boolean(options.strict),
-        targetChars: String(options.target_chars ?? "1200"),
+        targetChars: String(options.target_chars ?? "1000"),
         maxChars: String(options.max_chars ?? "2000"),
         enableBalance:
           options.enable_balance !== undefined
@@ -3422,10 +3894,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     }
   };
 
-  const syncFormsFromYaml = (yamlSource: string) => {
+  const syncFormsFromYaml = (
+    yamlSource: string,
+    targetKind: ProfileKind = kind,
+  ) => {
     try {
-      const data = yaml.load(yamlSource) as any;
-      syncFormsFromData(kind, data);
+      const data = safeLoadYaml(yamlSource) as any;
+      if (!data || typeof data !== "object") return;
+      syncFormsFromData(targetKind, data);
     } catch { }
   };
 
@@ -3552,14 +4028,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         }
 
         if (parserType === "json_array") {
-          const data = JSON.parse(rawInput);
+          const data = parseJsonPreviewValue(rawInput);
           if (!Array.isArray(data)) throw new Error("json_array_expected");
           const lines = data.map((item) => String(item));
           return { text: lines.join("\n"), lines };
         }
 
         if (parserType === "json_object") {
-          const data = JSON.parse(rawInput);
+          const data = parseJsonPreviewValue(rawInput);
           if (!data || typeof data !== "object" || Array.isArray(data)) {
             throw new Error("json_object_expected");
           }
@@ -3572,32 +4048,23 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
         if (parserType === "jsonl") {
           const path = options.path || options.key;
-          const lines: string[] = [];
-          rawInput.split("\n").forEach((line) => {
-            if (line.trim() === "") {
-              lines.push("");
-              return;
-            }
-            const data = JSON.parse(line);
-            const value = path ? getByPath(data, String(path)) : data;
-            lines.push(String(value));
-          });
+          const lines = parseJsonlPreviewLines(
+            rawInput,
+            path ? String(path) : undefined,
+          );
           return { text: lines.join("\n"), lines };
         }
 
         if (parserType === "tagged_line") {
-          const pattern = options.pattern || "^@@(?P<id>\\d+)@@(?P<text>.*)$";
-          const regex = new RegExp(pattern);
-          const lines: string[] = [];
-          rawInput.split("\n").forEach((line) => {
-            const match = regex.exec(line.trim());
-            if (match) {
-              const text =
-                (match.groups && match.groups.text) || match[2] || "";
-              lines.push(text);
-            }
+          const lines = parseTaggedLinePreviewLines(rawInput, {
+            pattern: options.pattern || "^@@(?P<id>\\d+)@@(?P<text>.*)$",
+            sortById: Boolean(options.sort_by_id),
+            sortByLineNumber: Boolean(options.sort_by_line_number),
+            flags: options.flags,
+            multiline: options.multiline,
+            dotall: options.dotall,
+            ignorecase: options.ignorecase,
           });
-          if (!lines.length) throw new Error("no_tagged_lines");
           return { text: lines.join("\n"), lines };
         }
 
@@ -3649,7 +4116,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       if (newForm.apiType === "openai_compat") {
         payload.base_url = newForm.baseUrl;
         payload.model = newForm.model;
-        if (newForm.apiKey) payload.api_key = newForm.apiKey;
+        const apiKeys = newForm.apiKey
+          .split(/\r?\n/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+        if (apiKeys.length === 1) payload.api_key = apiKeys[0];
+        if (apiKeys.length > 1) payload.api_key = apiKeys;
       } else if (newForm.apiType === "pool") {
         const endpoints = (newForm.poolEndpoints || [])
           .map((item) => {
@@ -3790,25 +4262,25 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     applySettingInt(newComposer.maxTokens, "max_tokens");
     applySettingInt(newComposer.maxRetries, "max_retries");
     const apiRuntime = apiRuntimeIndex[newComposer.provider] || {};
-    if (apiRuntime.concurrency !== undefined) {
-      settings.concurrency = apiRuntime.concurrency;
-    } else if (newComposer.concurrency !== "") {
+    if (newComposer.concurrency !== "") {
       const rawConcurrency = Number.parseInt(newComposer.concurrency, 10);
       if (Number.isFinite(rawConcurrency)) {
         settings.concurrency = rawConcurrency;
       } else {
         settings.concurrency = newComposer.concurrency;
       }
+    } else if (apiRuntime.concurrency !== undefined) {
+      settings.concurrency = apiRuntime.concurrency;
     }
     if (newComposer.modelOverride.trim())
       settings.model = newComposer.modelOverride.trim();
-    if (apiRuntime.timeout !== undefined) {
-      settings.timeout = apiRuntime.timeout;
-    } else if (newComposer.timeout !== "") {
+    if (newComposer.timeout !== "") {
       const timeoutValue = Number.parseInt(newComposer.timeout, 10);
       if (Number.isFinite(timeoutValue)) {
         settings.timeout = timeoutValue;
       }
+    } else if (apiRuntime.timeout !== undefined) {
+      settings.timeout = apiRuntime.timeout;
     }
     if (newComposer.headers) {
       try {
@@ -3857,6 +4329,26 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     setYamlText(yaml.dump(payload));
   };
 
+  useEffect(() => {
+    if (kind !== "pipeline") return;
+    const nextMode = resolvePipelineTranslationMode(
+      pipelineComposer.chunkPolicy,
+      pipelineComposer.linePolicy,
+      pipelineComposer.translationMode,
+    );
+    if (nextMode === pipelineComposer.translationMode) return;
+    updateYamlFromPipelineComposer({
+      ...pipelineComposer,
+      translationMode: nextMode,
+    });
+  }, [
+    kind,
+    pipelineComposer.chunkPolicy,
+    pipelineComposer.linePolicy,
+    pipelineComposer.translationMode,
+    chunkTypeIndex,
+  ]);
+
   const updateYamlFromPromptForm = (newForm: PromptFormState) => {
     setPromptForm(newForm);
     const toNumber = (value: string, fallback = 0) => {
@@ -3897,7 +4389,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     if (
       resolvedSourceLinesRaw !== "" &&
       Number.isFinite(resolvedSourceLines) &&
-      resolvedSourceLines > 0
+      resolvedSourceLines >= 0
     ) {
       payload.context.source_lines = resolvedSourceLines;
     }
@@ -3919,9 +4411,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       if (newForm.emptyLine) checks.push("empty_line");
       if (newForm.similarity) checks.push("similarity");
       if (newForm.kanaTrace) checks.push("kana_trace");
+      options.trim = newForm.trim;
       if (checks.length) {
         options.checks = checks;
-        options.trim = newForm.trim;
       }
       if (newForm.similarity) {
         const threshold = Number(newForm.similarityThreshold);
@@ -3946,6 +4438,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         chunk_type: chunkType,
       };
       const options: any = {};
+      if (chunkType === "line") {
+        options.strict = newForm.lineStrict;
+        options.keep_empty = newForm.keepEmpty;
+      }
       const target = parseInt(newForm.targetChars, 10);
       if (Number.isFinite(target)) options.target_chars = target;
       const maxChars = parseInt(newForm.maxChars, 10);
@@ -4004,7 +4500,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           { kind: "pipeline" as const, icon: Workflow, label: texts.kinds.pipeline },
           { kind: "api" as const, icon: Server, label: texts.kinds.api },
           { kind: "prompt" as const, icon: MessageSquare, label: texts.kinds.prompt },
-          { kind: "parser" as const, icon: FileJson, label: texts.kinds.parser },
         ].map(({ kind: targetKind, icon: Icon, label }) => (
           <Tooltip key={targetKind} content={label}>
             <button
@@ -4019,8 +4514,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               className={cn(
                 "h-10 w-10 rounded-xl flex items-center justify-center transition-all duration-200",
                 kind === targetKind
-                  ? "bg-primary text-primary-foreground shadow-md scale-105"
-                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground hover:scale-105"
+                  ? "bg-muted/60 text-foreground shadow-sm scale-105 dark:bg-primary/30 dark:text-primary-foreground dark:shadow-md"
+                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground hover:scale-105 dark:hover:text-primary"
               )}
             >
               <Icon className="h-5 w-5" />
@@ -4041,11 +4536,32 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             className={cn(
               "h-10 w-10 rounded-xl flex items-center justify-center transition-all duration-200",
               kind === "policy" || kind === "chunk"
-                ? "bg-primary text-primary-foreground shadow-md scale-105"
-                : "text-muted-foreground hover:bg-muted/50 hover:text-foreground hover:scale-105",
+                ? "bg-muted/60 text-foreground shadow-sm scale-105 dark:bg-primary/30 dark:text-primary-foreground dark:shadow-md"
+                : "text-muted-foreground hover:bg-muted/50 hover:text-foreground hover:scale-105 dark:hover:text-primary",
             )}
           >
             <Scissors className="h-5 w-5" />
+          </button>
+        </Tooltip>
+
+        <Tooltip content={texts.kinds.parser}>
+          <button
+            onClick={() => {
+              if (kind !== "parser") {
+                setSelectedId(null);
+                setYamlText("");
+                setKind("parser");
+                setSearchTerm("");
+              }
+            }}
+            className={cn(
+              "h-10 w-10 rounded-xl flex items-center justify-center transition-all duration-200",
+              kind === "parser"
+                ? "bg-muted/60 text-foreground shadow-sm scale-105 dark:bg-primary/30 dark:text-primary-foreground dark:shadow-md"
+                : "text-muted-foreground hover:bg-muted/50 hover:text-foreground hover:scale-105 dark:hover:text-primary",
+            )}
+          >
+            <FileJson className="h-5 w-5" />
           </button>
         </Tooltip>
       </div>
@@ -4088,13 +4604,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                   setSearchTerm("");
                   setKind(targetKind);
                 }}
-                className={cn(
-                  "flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
-                  kind === targetKind
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border/60 bg-background/60 text-muted-foreground hover:border-border",
-                )}
-              >
+                  className={cn(
+                    "flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
+                    kind === targetKind
+                      ? "border-border/70 bg-muted/40 text-foreground dark:bg-primary/20 dark:text-primary-foreground dark:border-primary/30"
+                      : "border-border/60 bg-background/60 text-muted-foreground hover:border-border dark:hover:text-primary",
+                  )}
+                >
                 {texts.kinds[targetKind]}
               </button>
             ))}
@@ -4104,7 +4620,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
       <div className="p-3">
         <div className="relative group">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
+          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground group-focus-within:text-foreground dark:group-focus-within:text-primary transition-colors" />
           <Input
             placeholder={texts.searchPlaceholder}
             className="pl-9 h-9 bg-muted/40 border-transparent focus:bg-background focus:border-input transition-all"
@@ -4115,45 +4631,53 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-1 scroller-hide">
-        {filteredProfiles.map((p) => {
-          const isSelected = selectedId === p.id && kind === p.kind;
-          return (
-            <button
-              key={`${p.kind}_${p.id}`}
-              onClick={() => handleSelectProfile(p.id, p.kind)}
-              className={cn(
-                "w-full text-left px-4 py-4 rounded-2xl text-sm transition-all flex items-center gap-3 group border border-border/40 bg-background/70",
-                "shadow-[0_1px_0_0_rgba(0,0,0,0.02)] hover:shadow-sm hover:bg-muted/30 hover:border-border/70",
-                isSelected
-                  ? "bg-primary/10 text-primary border-primary/30 shadow-sm ring-1 ring-primary/10"
-                  : "text-foreground",
-              )}
-            >
-              <div className="flex-1 min-w-0">
-                <div className={cn("font-medium truncate transition-colors", isSelected ? "text-primary" : "text-foreground")}>
-                  {resolveProfileName(p.id, p.name)}
-                </div>
-                <div
+        {isProfilesLoading || profilesLoadedKind !== kind ? (
+          <div className="h-full flex items-center justify-center text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : (
+          <>
+            {filteredProfiles.map((p) => {
+              const isSelected = selectedId === p.id && kind === p.kind;
+              return (
+                <button
+                  key={`${p.kind}_${p.id}`}
+                  onClick={() => handleSelectProfile(p.id, p.kind)}
                   className={cn(
-                    "text-[10px] text-muted-foreground truncate font-mono mt-0.5 h-4",
-                    HIDE_ALL_PROFILE_IDS || HIDE_PROFILE_ID_DISPLAY.has(p.id)
-                      ? "opacity-0"
-                      : "opacity-70",
+                    "w-full text-left px-4 py-4 rounded-2xl text-sm transition-all flex items-center gap-3 group border border-border/40 bg-background/70",
+                    "shadow-[0_1px_0_0_rgba(0,0,0,0.02)] hover:shadow-sm hover:bg-muted/30 hover:border-border/70",
+                    isSelected
+                      ? "bg-muted/40 text-foreground border-border/70 shadow-sm ring-1 ring-border/40 dark:bg-primary/15 dark:text-primary-foreground dark:border-primary/40 dark:ring-primary/30"
+                      : "text-foreground",
                   )}
                 >
-                  {p.id}
-                </div>
-              </div>
-              {isSelected && <ChevronRight className="h-4 w-4 opacity-50 text-primary animate-in slide-in-from-left-1 duration-200" />}
-            </button>
-          );
-        })}
+                  <div className="flex-1 min-w-0">
+                    <div className={cn("font-medium truncate transition-colors", isSelected ? "text-foreground dark:text-primary-foreground" : "text-foreground")}>
+                      {resolveProfileName(p.id, p.name)}
+                    </div>
+                    <div
+                      className={cn(
+                        "text-[10px] text-muted-foreground truncate font-mono mt-0.5 h-4",
+                        HIDE_ALL_PROFILE_IDS || HIDE_PROFILE_ID_DISPLAY.has(p.id)
+                          ? "opacity-0"
+                          : "opacity-70",
+                      )}
+                    >
+                      {p.id}
+                    </div>
+                  </div>
+                  {isSelected && <ChevronRight className="h-4 w-4 opacity-50 text-muted-foreground dark:text-primary animate-in slide-in-from-left-1 duration-200" />}
+                </button>
+              );
+            })}
 
-        {filteredProfiles.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground space-y-2 opacity-60">
-            <Search className="h-8 w-8 opacity-20" />
-            <p className="text-sm">{texts.listEmpty}</p>
-          </div>
+            {filteredProfiles.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground space-y-2 opacity-60">
+                <Search className="h-8 w-8 opacity-20" />
+                <p className="text-sm">{texts.listEmpty}</p>
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -4262,7 +4786,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       setParamPairs(nextPairs);
       updateYamlFromApiForm({
         ...apiForm,
-        params: pairsToJson(nextPairs),
+        params: pairsToJsonWithTypes(nextPairs),
       });
     };
 
@@ -4405,8 +4929,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                   className={cn(
                     "flex-1 px-4 py-3 text-left transition-all",
                     apiForm.apiType === option.key
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:bg-muted/30 hover:text-foreground",
+                      ? "bg-muted/40 text-foreground dark:bg-primary/20 dark:text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted/30 hover:text-foreground dark:hover:text-primary",
                   )}
                   onClick={() =>
                     updateYamlFromApiForm({
@@ -4830,6 +5354,52 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 ))}
               </div>
 
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                <div className="space-y-2">
+                  <Label>{texts.formFields.membersLabel}</Label>
+                  <textarea
+                    spellCheck={false}
+                    className="flex min-h-[96px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={apiForm.members}
+                    onChange={(e) =>
+                      updateYamlFromApiForm({
+                        ...apiForm,
+                        members: e.target.value,
+                      })
+                    }
+                    placeholder={texts.formPlaceholders.members}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {texts.formHints.members}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label>{texts.formFields.strategyLabel}</Label>
+                  <SelectField
+                    value={apiForm.strategy}
+                    onChange={(e) =>
+                      updateYamlFromApiForm({
+                        ...apiForm,
+                        strategy:
+                          e.target.value === "random"
+                            ? "random"
+                            : "round_robin",
+                      })
+                    }
+                  >
+                    <option value="round_robin">
+                      {texts.apiTypeOptions.poolRoundRobin}
+                    </option>
+                    <option value="random">
+                      {texts.apiTypeOptions.poolRandom}
+                    </option>
+                  </SelectField>
+                  <p className="text-xs text-muted-foreground">
+                    {texts.formHints.strategy}
+                  </p>
+                </div>
+              </div>
+
               {texts.poolEndpointHint?.trim() ? (
                 <div className="text-xs text-muted-foreground">
                   {texts.poolEndpointHint}
@@ -5085,6 +5655,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     const showPromptId = showIdField.prompt;
     const isJsonlPrompt =
       String(promptForm.sourceFormat || "").trim().toLowerCase() === "jsonl";
+    const sourceFormatOptions = [
+      { value: "", label: texts.promptOptions.sourceFormat.auto },
+      { value: "jsonl", label: texts.promptOptions.sourceFormat.jsonl },
+      { value: "plain", label: texts.promptOptions.sourceFormat.plain },
+      { value: "json_object", label: texts.promptOptions.sourceFormat.jsonObject },
+      { value: "json_array", label: texts.promptOptions.sourceFormat.jsonArray },
+      { value: "tagged_line", label: texts.promptOptions.sourceFormat.taggedLine },
+    ];
     return (
       <div className="space-y-5">
         <FormSection
@@ -5219,6 +5797,27 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 prefix={<Hash className="h-3.5 w-3.5" />}
                 suffix="ln"
               />
+            </div>
+            <div className="space-y-2">
+              <Label>{texts.promptFields.sourceFormatLabel}</Label>
+              <SelectField
+                value={promptForm.sourceFormat}
+                onChange={(e) =>
+                  updateYamlFromPromptForm({
+                    ...promptForm,
+                    sourceFormat: e.target.value,
+                  })
+                }
+              >
+                {sourceFormatOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </SelectField>
+              <p className="text-xs text-muted-foreground">
+                {texts.promptHints.sourceFormat}
+              </p>
             </div>
             <div className="space-y-2">
               <Label>{texts.promptFields.joinerLabel}</Label>
@@ -5648,7 +6247,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                         className="h-4 w-4 rounded border-border/60"
                         checked={rule.sortById}
                         onChange={(e) =>
-                          updateRuleAt(globalIndex, { sortById: e.target.checked })
+                          updateRuleAt(globalIndex, {
+                            sortById: e.target.checked,
+                            sortByKey:
+                              e.target.checked && !rule.sortByKey
+                                ? "id"
+                                : rule.sortByKey,
+                          })
                         }
                       />
                       <span>{texts.parserRuleSortLabel}</span>
@@ -5865,8 +6470,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       <div className="w-full px-4 py-8">
         {/* Section 1: Basic Info */}
         <FormSection
-          title={texts.policySections.modeTitle || "分行策略设置"}
-          desc={texts.policySections.modeDesc || "配置原文与译文行数不一致时的处理逻辑"}
+          title={texts.policySections.modeTitle}
+          desc={texts.policySections.modeDesc}
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {showPolicyId && (
@@ -5902,13 +6507,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 className={cn(
                   "cursor-pointer rounded-xl border p-4 transition-all hover:shadow-md",
                   policyForm.policyType === "strict"
-                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-                    : "border-border/60 bg-card hover:bg-accent/50"
+                    ? "border-border/70 bg-muted/40 ring-1 ring-border/40 dark:bg-primary/15 dark:border-primary/40 dark:ring-primary/20"
+                    : "border-border/60 bg-card hover:bg-muted/30"
                 )}
               >
                 <div className="flex items-center justify-between mb-2">
                   <div className="font-semibold text-foreground">{texts.policyOptions.strict}</div>
-                  {policyForm.policyType === "strict" && <CheckCircle2 className="w-5 h-5 text-primary" />}
+                  {policyForm.policyType === "strict" && <CheckCircle2 className="w-5 h-5 text-foreground dark:text-primary" />}
                 </div>
                 <p className="text-xs text-muted-foreground leading-relaxed">
                   {texts.policyHints.strict}
@@ -5920,13 +6525,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 className={cn(
                   "cursor-pointer rounded-xl border p-4 transition-all hover:shadow-md",
                   policyForm.policyType === "tolerant"
-                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-                    : "border-border/60 bg-card hover:bg-accent/50"
+                    ? "border-border/70 bg-muted/40 ring-1 ring-border/40 dark:bg-primary/15 dark:border-primary/40 dark:ring-primary/20"
+                    : "border-border/60 bg-card hover:bg-muted/30"
                 )}
               >
                 <div className="flex items-center justify-between mb-2">
                   <div className="font-semibold text-foreground">{texts.policyOptions.tolerant}</div>
-                  {policyForm.policyType === "tolerant" && <CheckCircle2 className="w-5 h-5 text-primary" />}
+                  {policyForm.policyType === "tolerant" && <CheckCircle2 className="w-5 h-5 text-foreground dark:text-primary" />}
                 </div>
                 <p className="text-xs text-muted-foreground leading-relaxed">
                   {texts.policyHints.tolerant}
@@ -5935,10 +6540,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             </div>
           </div>
           {/* Section 2: Error Handling */}
-          <div className="pt-8 border-t border-primary/5 space-y-4">
+          <div className="pt-8 border-t border-border/40 dark:border-primary/20 space-y-4">
             <div className="space-y-1">
-              <div className="text-sm font-semibold text-foreground/80">{"异常处理"}</div>
-              <p className="text-xs text-muted-foreground">配置当原文与译文行数不一致时的处理策略</p>
+              <div className="text-sm font-semibold text-foreground/80">
+                {texts.policySections.errorTitle}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {texts.policySections.errorDesc}
+              </p>
             </div>
             <div className="grid grid-cols-1 gap-6">
               <div className="space-y-3">
@@ -6095,8 +6704,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     return (
       <div className="w-full px-4 py-8">
         <FormSection
-          title={texts.chunkSections.modeTitle || "分块策略设置"}
-          desc={texts.chunkSections.modeDesc || "配置文本切分规则与智能平衡参数"}
+          title={texts.chunkSections.modeTitle}
+          desc={texts.chunkSections.modeDesc}
         >
           {/* Section 1: Basic Info */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -6123,14 +6732,70 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 }}
               />
             </div>
+            <div className="space-y-2">
+              <Label>{texts.chunkFields.legacyModeLabel}</Label>
+              <SelectField
+                value={chunkForm.chunkType}
+                onChange={(e) =>
+                  updateChunk({
+                    chunkType:
+                      e.target.value === "line" ? "line" : "legacy",
+                  })
+                }
+              >
+                <option value="legacy">{texts.chunkOptions.legacy}</option>
+                <option value="line">{texts.chunkOptions.line}</option>
+              </SelectField>
+              <p className="text-xs text-muted-foreground">
+                {chunkForm.chunkType === "line"
+                  ? texts.chunkHints.line
+                  : texts.chunkHints.legacy}
+              </p>
+            </div>
           </div>
 
           {/* Section 2: Splitting Rules */}
           <div className="pt-8 border-t border-primary/5 space-y-4">
             <div className="space-y-1">
-              <div className="text-sm font-semibold text-foreground/80">分块规则</div>
-              <p className="text-xs text-muted-foreground">配置文本切分的字符限制和目标</p>
+              <div className="text-sm font-semibold text-foreground/80">
+                {texts.chunkSections.rulesTitle}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {texts.chunkSections.rulesDesc}
+              </p>
             </div>
+            {chunkForm.chunkType === "line" && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-2">
+                  <Label>{texts.chunkFields.lineStrictLabel}</Label>
+                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-card px-3 py-2">
+                    <span className="text-xs text-muted-foreground">
+                      {texts.chunkHints.lineStrict}
+                    </span>
+                    <Switch
+                      checked={chunkForm.lineStrict}
+                      onCheckedChange={(next) =>
+                        updateChunk({ lineStrict: next })
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>{texts.chunkFields.keepEmptyLabel}</Label>
+                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-card px-3 py-2">
+                    <span className="text-xs text-muted-foreground">
+                      {texts.chunkHints.keepEmpty}
+                    </span>
+                    <Switch
+                      checked={chunkForm.keepEmpty}
+                      onCheckedChange={(next) =>
+                        updateChunk({ keepEmpty: next })
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <div className="space-y-2">
                 <Label>{texts.chunkFields.targetCharsLabel}</Label>
@@ -6162,8 +6827,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           {/* Section 3: Balance Settings (In-Card Expansion) */}
           <div className="pt-8 border-t border-primary/5 space-y-4">
             <div className="space-y-1">
-              <div className="text-sm font-semibold text-foreground/80">智能平衡</div>
-              <p className="text-xs text-muted-foreground">自动调整分块大小以保持平衡</p>
+              <div className="text-sm font-semibold text-foreground/80">
+                {texts.chunkSections.balanceTitle}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {texts.chunkSections.balanceDesc}
+              </p>
             </div>
             <div className="space-y-6">
               {renderSwitchCard(
@@ -6214,13 +6883,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
   const renderPipelineForm = () => {
     const showPipelineId = showIdField.pipeline;
-    const resolveTranslationMode = (chunkPolicy: string, linePolicy: string) => {
-      const chunkType = inferChunkType(chunkPolicy);
-      if (chunkType === "legacy") return "block";
-      if (chunkType === "line") return "line";
-      if (linePolicy) return "line";
-      return pipelineComposer.translationMode;
-    };
+    const pipelineChunkType = inferChunkType(pipelineComposer.chunkPolicy);
+    const modeMismatchHint =
+      pipelineComposer.translationMode === "line" && pipelineChunkType === "legacy"
+        ? texts.composer.hints.modeMismatchLine
+        : pipelineComposer.translationMode === "block" && pipelineChunkType === "line"
+          ? texts.composer.hints.modeMismatchBlock
+          : "";
 
     const applyPipelineChange = (patch: Partial<PipelineComposerState>) => {
       const nextChunkPolicy =
@@ -6234,7 +6903,17 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       updateYamlFromPipelineComposer({
         ...pipelineComposer,
         ...patch,
-        translationMode: resolveTranslationMode(nextChunkPolicy, nextLinePolicy),
+        translationMode: resolvePipelineTranslationMode(
+          nextChunkPolicy,
+          nextLinePolicy,
+          pipelineComposer.translationMode,
+        ),
+      });
+    };
+    const updatePipelineSettings = (patch: Partial<PipelineComposerState>) => {
+      updateYamlFromPipelineComposer({
+        ...pipelineComposer,
+        ...patch,
       });
     };
 
@@ -6291,8 +6970,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       : "";
     const hasStrategyValue =
       !strategyValue || strategyOptions.some((item) => item.value === strategyValue);
-    const allowFallback = strategyChunkType !== "legacy";
-    const strategyOptionsFinal = hasStrategyValue || !allowFallback
+    const strategyOptionsFinal = hasStrategyValue
       ? strategyOptions
       : [
         {
@@ -6403,6 +7081,40 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           </div>
         </div>
 
+        <FormSection
+          title={texts.composer.fields.translationModeLabel}
+          desc={texts.composer.modeDesc}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>{texts.composer.fields.translationModeLabel}</Label>
+              <SelectField
+                value={pipelineComposer.translationMode}
+                onChange={(e) =>
+                  applyPipelineChange({
+                    translationMode:
+                      e.target.value === "block" ? "block" : "line",
+                  })
+                }
+              >
+                <option value="line">{texts.composer.modeOptions.line}</option>
+                <option value="block">{texts.composer.modeOptions.block}</option>
+              </SelectField>
+              <p className="text-xs text-muted-foreground">
+                {pipelineComposer.translationMode === "line"
+                  ? texts.composer.modeHints.line
+                  : texts.composer.modeHints.block}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>{texts.scheme.fields.strategy}</Label>
+              <div className="rounded-lg border border-border/60 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+                {modeMismatchHint || texts.scheme.hints.linePolicyOptional}
+              </div>
+            </div>
+          </div>
+        </FormSection>
+
         <FormSection title={texts.scheme.title} desc={texts.scheme.desc}>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -6457,30 +7169,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label>{texts.scheme.fields.parser}</Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => jumpToKind("parser", pipelineComposer.parser)}
-                >
-                  {texts.scheme.actions.editParser}
-                </Button>
-              </div>
-              <SelectField
-                value={pipelineComposer.parser}
-                onChange={(e) => applyPipelineChange({ parser: e.target.value })}
-              >
-                <option value="">{texts.scheme.placeholders.parser}</option>
-                {visibleProfileIndex.parser.map((id) => (
-                  <option key={id} value={id}>
-                    {formatOptionLabel("parser", id)}
-                  </option>
-                ))}
-              </SelectField>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
                 <Label>{texts.scheme.fields.strategy}</Label>
                 <Button
                   variant="ghost"
@@ -6502,6 +7190,30 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 {strategyOptionsFinal.map((option) => (
                   <option key={option.value} value={option.value} disabled={option.disabled}>
                     {option.label}
+                  </option>
+                ))}
+              </SelectField>
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>{texts.scheme.fields.parser}</Label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => jumpToKind("parser", pipelineComposer.parser)}
+                >
+                  {texts.scheme.actions.editParser}
+                </Button>
+              </div>
+              <SelectField
+                value={pipelineComposer.parser}
+                onChange={(e) => applyPipelineChange({ parser: e.target.value })}
+              >
+                <option value="">{texts.scheme.placeholders.parser}</option>
+                {visibleProfileIndex.parser.map((id) => (
+                  <option key={id} value={id}>
+                    {formatOptionLabel("parser", id)}
                   </option>
                 ))}
               </SelectField>
@@ -6539,6 +7251,200 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             )}
           </div>
         </FormSection>
+
+        <FormSection
+          title={texts.composer.sections.samplingTitle}
+          desc={texts.composer.sections.samplingDesc}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>{texts.composer.fields.temperatureLabel}</Label>
+              <InputAffix
+                type="number"
+                step="0.1"
+                value={pipelineComposer.temperature}
+                onChange={(e) =>
+                  updatePipelineSettings({ temperature: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.temperature}
+                prefix={<Thermometer className="h-3.5 w-3.5" />}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{texts.composer.fields.topPLabel}</Label>
+              <InputAffix
+                type="number"
+                step="0.1"
+                value={pipelineComposer.topP}
+                onChange={(e) =>
+                  updatePipelineSettings({ topP: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.topP}
+                prefix={<Percent className="h-3.5 w-3.5" />}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{texts.composer.fields.presencePenaltyLabel}</Label>
+              <InputAffix
+                type="number"
+                step="0.1"
+                value={pipelineComposer.presencePenalty}
+                onChange={(e) =>
+                  updatePipelineSettings({ presencePenalty: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.presencePenalty}
+                prefix={<Activity className="h-3.5 w-3.5" />}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{texts.composer.fields.frequencyPenaltyLabel}</Label>
+              <InputAffix
+                type="number"
+                step="0.1"
+                value={pipelineComposer.frequencyPenalty}
+                onChange={(e) =>
+                  updatePipelineSettings({ frequencyPenalty: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.frequencyPenalty}
+                prefix={<Zap className="h-3.5 w-3.5" />}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{texts.composer.fields.seedLabel}</Label>
+              <InputAffix
+                type="number"
+                step="1"
+                value={pipelineComposer.seed}
+                onChange={(e) =>
+                  updatePipelineSettings({ seed: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.seed}
+                prefix={<Hash className="h-3.5 w-3.5" />}
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label>{texts.composer.fields.stopLabel}</Label>
+              <Input
+                value={pipelineComposer.stop}
+                onChange={(e) =>
+                  updatePipelineSettings({ stop: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.stop}
+              />
+            </div>
+          </div>
+        </FormSection>
+
+        <FormSection
+          title={texts.composer.sections.requestTitle}
+          desc={texts.composer.sections.requestDesc}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>{texts.composer.fields.maxRetriesLabel}</Label>
+              <InputAffix
+                type="number"
+                step="1"
+                value={pipelineComposer.maxRetries}
+                onChange={(e) =>
+                  updatePipelineSettings({ maxRetries: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.maxRetries}
+                prefix={<Repeat className="h-3.5 w-3.5" />}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{texts.composer.fields.concurrencyLabel}</Label>
+              <InputAffix
+                type="number"
+                step="1"
+                value={pipelineComposer.concurrency}
+                onChange={(e) =>
+                  updatePipelineSettings({ concurrency: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.concurrency}
+                prefix={<Cpu className="h-3.5 w-3.5" />}
+              />
+              <p className="text-xs text-muted-foreground">
+                {texts.composer.hints.concurrency}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>{texts.composer.fields.maxTokensLabel}</Label>
+              <InputAffix
+                type="number"
+                step="1"
+                value={pipelineComposer.maxTokens}
+                onChange={(e) =>
+                  updatePipelineSettings({ maxTokens: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.maxTokens}
+                prefix={<Hash className="h-3.5 w-3.5" />}
+                suffix="tok"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{texts.composer.fields.timeoutLabel}</Label>
+              <InputAffix
+                type="number"
+                step="1"
+                value={pipelineComposer.timeout}
+                onChange={(e) =>
+                  updatePipelineSettings({ timeout: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.timeout}
+                prefix={<Clock className="h-3.5 w-3.5" />}
+                suffix="s"
+              />
+              <p className="text-xs text-muted-foreground">
+                {texts.composer.hints.timeout}
+              </p>
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label>{texts.composer.fields.modelOverrideLabel}</Label>
+              <Input
+                value={pipelineComposer.modelOverride}
+                onChange={(e) =>
+                  updatePipelineSettings({ modelOverride: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.modelOverride}
+              />
+              <p className="text-xs text-muted-foreground">
+                {texts.composer.hints.modelOverride}
+              </p>
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label>{texts.composer.fields.headersLabel}</Label>
+              <textarea
+                spellCheck={false}
+                className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
+                value={pipelineComposer.headers}
+                onChange={(e) =>
+                  updatePipelineSettings({ headers: e.target.value })
+                }
+                placeholder={texts.composer.placeholders.headers}
+              />
+            </div>
+          </div>
+        </FormSection>
+
+        <FormSection
+          title={texts.composer.sections.advancedTitle}
+          desc={texts.composer.sections.advancedDesc}
+        >
+          <div className="space-y-2">
+            <Label>{texts.composer.fields.extraParamsLabel}</Label>
+            <textarea
+              spellCheck={false}
+              className="flex min-h-[140px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
+              value={pipelineComposer.extraParams}
+              onChange={(e) =>
+                updatePipelineSettings({ extraParams: e.target.value })
+              }
+              placeholder={texts.composer.placeholders.extraParams}
+            />
+          </div>
+        </FormSection>
       </div>
     );
   };
@@ -6547,8 +7453,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     const Icon = icon;
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground bg-background/50 p-4">
-        <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center mb-8 animate-in zoom-in-50 duration-500 shadow-inner">
-          <Icon className="h-10 w-10 text-primary opacity-80" />
+        <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-muted/40 to-muted/10 dark:from-primary/30 dark:to-primary/10 flex items-center justify-center mb-8 animate-in zoom-in-50 duration-500 shadow-inner border border-border/60 dark:border-primary/30">
+          <Icon className="h-10 w-10 text-muted-foreground dark:text-primary opacity-80" />
         </div>
         <h3 className="text-2xl font-bold text-foreground tracking-tight mb-3">
           {title}
@@ -6564,38 +7470,106 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     );
   };
 
+  const renderPipelineOverviewSkeleton = () => {
+    const skeletonItems = Array.from({ length: 6 }, (_, index) => index);
+    const detailSlots = [0, 1, 2, 3];
+
+    return (
+      <div className="flex-1 overflow-y-auto bg-background/50">
+        <div className="p-6 lg:p-10 max-w-[1800px] mx-auto space-y-6">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between border-b border-border/40 pb-4">
+              <div className="space-y-2">
+                <div className="h-6 w-40 rounded bg-muted/50 animate-pulse" />
+                <div className="h-4 w-64 rounded bg-muted/40 animate-pulse" />
+              </div>
+              <div className="h-8 w-24 rounded-full bg-muted/40 animate-pulse" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4 pb-10">
+            {skeletonItems.map((index) => (
+              <div
+                key={`pipeline-skeleton-${index}`}
+                className="flex flex-col p-5 rounded-xl border border-border/60 bg-card/60 min-h-[240px]"
+              >
+                <div className="flex items-start gap-4 mb-6">
+                  <div className="w-12 h-12 rounded-xl bg-muted/50 animate-pulse" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 w-2/3 rounded bg-muted/50 animate-pulse" />
+                    <div className="h-3 w-1/3 rounded bg-muted/40 animate-pulse" />
+                  </div>
+                </div>
+                <div className="mt-auto grid grid-cols-2 gap-3">
+                  {detailSlots.map((slot) => (
+                    <div
+                      key={`pipeline-skeleton-slot-${index}-${slot}`}
+                      className="flex flex-col gap-2 p-2.5 rounded-lg bg-secondary/30 border border-border/50"
+                    >
+                      <div className="h-2.5 w-10 rounded bg-muted/40 animate-pulse" />
+                      <div className="h-3 w-full rounded bg-muted/50 animate-pulse" />
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 flex items-center justify-end">
+                  <div className="h-8 w-16 rounded bg-muted/40 animate-pulse" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderPipelineOverview = () => {
     const stepTexts = Array.isArray(texts.pipelineEmptySteps)
       ? texts.pipelineEmptySteps
       : [];
+    const stepPalette = [
+      {
+        color:
+          "from-muted/40 to-muted/10 border border-border/60 dark:from-primary/30 dark:to-primary/10 dark:border-primary/30",
+        iconColor: "text-muted-foreground dark:text-primary",
+      },
+      {
+        color:
+          "from-muted/40 to-muted/10 border border-border/60 dark:from-primary/30 dark:to-primary/10 dark:border-primary/30",
+        iconColor: "text-muted-foreground dark:text-primary",
+      },
+      {
+        color:
+          "from-muted/40 to-muted/10 border border-border/60 dark:from-primary/30 dark:to-primary/10 dark:border-primary/30",
+        iconColor: "text-muted-foreground dark:text-primary",
+      },
+      {
+        color:
+          "from-muted/40 to-muted/10 border border-border/60 dark:from-primary/30 dark:to-primary/10 dark:border-primary/30",
+        iconColor: "text-muted-foreground dark:text-primary",
+      },
+    ];
+
     const steps = [
       {
         kind: "api" as const,
         icon: Server,
-        color: "bg-blue-500/10",
-        iconColor: "text-blue-500/80",
       },
       {
         kind: "prompt" as const,
         icon: MessageSquare,
-        color: "bg-indigo-500/10",
-        iconColor: "text-indigo-500/80",
-      },
-      {
-        kind: "parser" as const,
-        icon: FileJson,
-        color: "bg-violet-500/10",
-        iconColor: "text-violet-500/80",
       },
       {
         kind: "chunk" as const,
         icon: Scissors,
-        color: "bg-purple-500/10",
-        iconColor: "text-purple-500/80",
+      },
+      {
+        kind: "parser" as const,
+        icon: FileJson,
       },
     ].map((step, index) => ({
       ...step,
       ...(stepTexts[index] || {}),
+      ...(stepPalette[index] || {}),
       index: index + 1,
     }));
 
@@ -6616,6 +7590,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
     const pipelineCardItems = filteredProfiles;
 
+    const handleSelectPipelineCard = (pipelineId: string) => {
+      setSelectedId(pipelineId);
+      setEditorTab("visual");
+      setPipelineView("overview");
+    };
+
     const jumpToKind = (targetKind: ProfileKind) => {
       if (kind === targetKind) return;
       setSelectedId(null);
@@ -6635,20 +7615,22 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               <div className="flex items-center justify-between border-b border-border/40 pb-4 animate-in slide-in-from-top-2 fade-in duration-300">
                 <div className="flex items-center gap-2">
                   <h2 className="text-2xl font-bold tracking-tight flex items-baseline gap-2">
-                    我的配置方案
+                    {texts.pipelineOverviewTitle}
                     <span className="text-muted-foreground text-sm font-medium opacity-80">
                       {pipelineCardItems.length}
                     </span>
                   </h2>
                 </div>
                 <Button
-                  onClick={() => setShowPipelineGuide(true)}
+                  onClick={() => setPipelineGuideVisibility(true)}
                   variant="ghost"
                   size="sm"
-                  className="gap-2 text-muted-foreground hover:text-primary transition-colors h-8 px-3 rounded-lg hover:bg-primary/10"
+                  className="gap-2 text-muted-foreground hover:text-foreground dark:hover:text-primary transition-colors h-8 px-3 rounded-lg hover:bg-muted/30 dark:hover:bg-primary/10"
                 >
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span className="text-xs font-medium">显示向导</span>
+                  <span className="text-xs font-medium">
+                    {texts.pipelineOverviewShowGuide}
+                  </span>
                   <ChevronDown className="w-3.5 h-3.5 transition-transform duration-300" />
                 </Button>
               </div>
@@ -6656,21 +7638,25 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               /* Hero Header */
               <div className="flex items-center justify-between animate-in slide-in-from-top-2 fade-in duration-300">
                 <div className="space-y-1 text-center md:text-left">
-                  <h2 className="text-3xl font-bold tracking-tight text-primary">
-                    {hasPipelines ? "方案管理中心" : texts.pipelineEmptyTitle}
+                  <h2 className="text-3xl font-bold tracking-tight text-foreground dark:text-primary">
+                    {hasPipelines
+                      ? texts.pipelineOverviewManageTitle
+                      : texts.pipelineEmptyTitle}
                   </h2>
                   <p className="text-muted-foreground text-lg leading-relaxed">
-                    {hasPipelines ? "管理已有的翻译方案，或创建新的配置" : texts.pipelineEmptyDesc}
+                    {hasPipelines
+                      ? texts.pipelineOverviewManageDesc
+                      : texts.pipelineEmptyDesc}
                   </p>
                 </div>
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setShowPipelineGuide(!showPipelineGuide)}
-                  className="gap-2 text-muted-foreground hover:text-primary transition-colors h-9 px-4 rounded-full bg-secondary/30 hover:bg-primary/10 border border-transparent hover:border-primary/20"
+                  onClick={() => setPipelineGuideVisibility(!showPipelineGuide)}
+                  className="gap-2 text-muted-foreground hover:text-foreground dark:hover:text-primary transition-colors h-9 px-4 rounded-full bg-secondary/30 hover:bg-muted/40 dark:hover:bg-primary/10 border border-transparent hover:border-border/40 dark:hover:border-primary/20"
                 >
                   <span className="text-xs font-semibold uppercase tracking-wider">
-                    隐藏向导
+                    {texts.pipelineOverviewHideGuide}
                   </span>
                   <ChevronDown className="h-4 w-4 rotate-180 transition-transform duration-300" />
                 </Button>
@@ -6689,11 +7675,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               {steps.map((step) => (
                 <div
                   key={step.kind}
-                  className="relative group overflow-hidden rounded-xl border border-border/50 bg-card hover:bg-secondary/20 hover:border-primary/20 hover:shadow-md transition-all duration-300 cursor-pointer p-4"
+                  className="relative group overflow-hidden rounded-xl border border-border/50 bg-card hover:bg-muted/30 hover:border-border/70 dark:hover:bg-primary/10 dark:hover:border-primary/30 hover:shadow-md transition-all duration-300 cursor-pointer p-4"
                   onClick={() => jumpToKind(step.kind)}
                 >
                   <div className="flex flex-col items-center text-center gap-3">
-                    <div className="absolute top-2 right-3 text-[11px] font-bold text-muted-foreground/30 group-hover:text-primary/50 transition-colors">
+                    <div className="absolute top-2 right-3 text-[11px] font-bold text-muted-foreground/30 group-hover:text-foreground/60 dark:group-hover:text-primary/60 transition-colors">
                       0{step.index}
                     </div>
                     <div
@@ -6705,7 +7691,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                       <step.icon className={cn("w-6 h-6", step.iconColor)} />
                     </div>
                     <div className="space-y-1">
-                      <h3 className="font-bold text-base group-hover:text-primary transition-colors">
+                      <h3 className="font-bold text-base group-hover:text-foreground dark:group-hover:text-primary transition-colors">
                         {step.title}
                       </h3>
                       <p className="text-xs text-muted-foreground/80 line-clamp-2 leading-relaxed px-1">
@@ -6724,26 +7710,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4 pb-10">
-              {/* Create New Card */}
-              <div
-                onClick={handleCreate}
-                className="group flex flex-col items-center justify-center p-5 rounded-xl border-2 border-dashed border-border/60 hover:border-primary/50 hover:bg-primary/5 cursor-pointer transition-all duration-300 min-h-[240px]"
-              >
-                <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shadow-inner">
-                  <Plus className="w-7 h-7 text-primary" />
-                </div>
-                <h3 className="font-bold text-lg text-foreground">
-                  {texts.newProfile}
-                </h3>
-                <p className="text-sm text-muted-foreground mt-2 text-center max-w-[200px]">
-                  {texts.scheme.desc}
-                </p>
-              </div>
-
               {/* Existing Pipelines */}
               {pipelineCardItems.map((item) => {
                 const isSelected = selectedId === item.id;
                 const isActive = activePipelineId === item.id;
+                const showSummarySkeleton =
+                  isPipelineSummaryLoading &&
+                  !pipelineSummaryIndex[item.id] &&
+                  item.id !== selectedId;
                 const summary = resolvePipelineCardSummary(item.id, item.name);
                 const providerLabel = summary.provider
                   ? getProfileLabel("api", summary.provider)
@@ -6767,36 +7741,40 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                     label: texts.scheme.fields.provider,
                     value: providerLabel,
                     icon: Server,
+                    skeletonWidth: "w-12",
                   },
                   {
                     key: "prompt",
                     label: texts.scheme.fields.prompt,
                     value: promptLabel,
                     icon: MessageSquare,
-                  },
-                  {
-                    key: "parser",
-                    label: texts.scheme.fields.parser,
-                    value: parserLabel,
-                    icon: FileJson,
+                    skeletonWidth: "w-16",
                   },
                   {
                     key: "strategy",
                     label: texts.scheme.fields.strategy,
                     value: strategyLabel,
                     icon: Scissors,
+                    skeletonWidth: "w-20",
+                  },
+                  {
+                    key: "parser",
+                    label: texts.scheme.fields.parser,
+                    value: parserLabel,
+                    icon: FileJson,
+                    skeletonWidth: "w-14",
                   },
                 ];
 
                 return (
                   <div
                     key={item.id}
-                    onClick={() => handleSelectProfile(item.id, "pipeline")}
+                    onClick={() => handleSelectPipelineCard(item.id)}
                     className={cn(
                       "group relative flex flex-col p-5 rounded-xl border cursor-pointer transition-all duration-300 ease-out select-none min-h-[240px]",
                       isSelected
-                        ? "bg-purple-500/5 border-purple-500/50 shadow-[0_0_0_1px_rgba(168,85,247,0.4)]"
-                        : "bg-card border-border/60 hover:border-purple-500/30 hover:shadow-lg hover:-translate-y-0.5",
+                        ? "bg-muted/40 border-border/70 shadow-[0_0_0_1px_rgba(0,0,0,0.04)] dark:bg-primary/15 dark:border-primary/40"
+                        : "bg-card border-border/60 hover:border-border/80 hover:shadow-lg hover:-translate-y-0.5",
                     )}
                   >
                     {/* Checkmark */}
@@ -6806,9 +7784,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                         isSelected ? "opacity-100 scale-100" : "opacity-0 scale-90",
                       )}
                     >
-                      <div className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase bg-purple-500 text-white shadow-sm">
+                      <div className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase bg-muted-foreground/80 text-background shadow-sm dark:bg-primary dark:text-primary-foreground">
                         <CheckCircle2 className="w-3 h-3" />
-                        <span>已选</span>
+                        <span>{t.selected}</span>
                       </div>
                     </div>
 
@@ -6818,8 +7796,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                         className={cn(
                           "p-3 rounded-xl shrink-0 transition-colors duration-300",
                           isSelected
-                            ? "bg-purple-500 text-white shadow-md"
-                            : "bg-secondary text-muted-foreground group-hover:text-purple-600 group-hover:bg-purple-500/10",
+                            ? "bg-muted/70 text-foreground shadow-sm dark:bg-primary/30 dark:text-primary-foreground"
+                            : "bg-muted/60 text-muted-foreground group-hover:text-foreground group-hover:bg-muted/80 dark:bg-primary/10 dark:text-primary/80 dark:group-hover:bg-primary/20 dark:group-hover:text-primary",
                         )}
                       >
                         <Workflow className="w-6 h-6" />
@@ -6829,7 +7807,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                           className={cn(
                             "font-bold text-base truncate transition-colors",
                             isSelected
-                              ? "text-purple-700 dark:text-purple-300"
+                              ? "text-foreground dark:text-primary-foreground"
                               : "text-foreground",
                           )}
                         >
@@ -6838,7 +7816,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                         {isActive && (
                           <div className="flex items-center gap-1 mt-1.5 text-xs font-medium text-emerald-500">
                             <Activity className="w-3 h-3" />
-                            <span>当前使用中</span>
+                            <span>{texts.pipelineCardActive}</span>
                           </div>
                         )}
                       </div>
@@ -6855,18 +7833,56 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                             <field.icon className="w-3 h-3 opacity-70" />
                             {field.label}
                           </div>
-                          <div
-                            className="text-xs font-medium truncate"
-                            title={field.value}
-                          >
-                            {field.value || "-"}
-                          </div>
+                          {showSummarySkeleton ? (
+                            <div
+                              className={cn(
+                                "h-3 rounded bg-muted/50 dark:bg-primary/20 animate-pulse",
+                                field.skeletonWidth,
+                              )}
+                            />
+                          ) : (
+                            <div
+                              className="text-xs font-medium truncate"
+                              title={field.value}
+                            >
+                              {field.value || "-"}
+                            </div>
+                          )}
                         </div>
                       ))}
+                    </div>
+                    <div className="mt-4 flex items-center justify-end">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-3 text-xs"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleSelectProfile(item.id, "pipeline");
+                        }}
+                      >
+                        {texts.pipelineCardEdit}
+                      </Button>
                     </div>
                   </div>
                 );
               })}
+
+              {/* Create New Card */}
+              <div
+                onClick={handleCreate}
+                className="group flex flex-col items-center justify-center p-5 rounded-xl border-2 border-dashed border-border/60 bg-muted/30 hover:border-border/80 hover:bg-muted/40 cursor-pointer transition-all duration-300 min-h-[240px]"
+              >
+                <div className="w-14 h-14 rounded-full bg-muted/50 border border-border/60 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform shadow-inner text-muted-foreground">
+                  <Plus className="w-7 h-7" />
+                </div>
+                <h3 className="font-bold text-lg text-foreground/80">
+                  {getNewCardCopy("pipeline").title}
+                </h3>
+                <p className="text-sm text-muted-foreground/70 mt-1 text-center max-w-[200px]">
+                  {getNewCardCopy("pipeline").desc}
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -6875,8 +7891,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   };
 
   const renderPromptGrid = () => {
-    const items = profileIndex.prompt.filter(
-      (id) => !isHiddenProfile("prompt", id),
+    const items = orderProfileIds(
+      "prompt",
+      profileIndex.prompt.filter((id) => !isHiddenProfile("prompt", id)),
     );
 
     return (
@@ -6884,13 +7901,18 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         <div className="p-6 lg:p-10 max-w-[1800px] mx-auto space-y-6">
           {/* Header */}
           <div className="flex items-center justify-between border-b border-border/40 pb-4 animate-in slide-in-from-top-2 fade-in duration-300">
-            <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-bold tracking-tight flex items-baseline gap-2">
-                {texts.kinds.prompt}
-                <span className="text-muted-foreground text-sm font-medium opacity-80">
-                  {items.length}
-                </span>
-              </h2>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <h2 className="text-2xl font-bold tracking-tight flex items-baseline gap-2">
+                  {texts.kinds.prompt}
+                  <span className="text-muted-foreground text-sm font-medium opacity-80">
+                    {items.length}
+                  </span>
+                </h2>
+              </div>
+              <p className="text-sm text-muted-foreground/80 leading-relaxed max-w-2xl">
+                {texts.promptGridDesc}
+              </p>
             </div>
           </div>
 
@@ -6909,8 +7931,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                   className={cn(
                     "group relative flex flex-col justify-between p-6 rounded-2xl border cursor-pointer transition-all duration-300 ease-out select-none min-h-[180px]",
                     isSelected
-                      ? "bg-primary/5 border-primary/50 shadow-[0_0_0_1px_rgba(var(--primary),0.4)]"
-                      : "bg-card border-border/60 hover:border-primary/30 hover:shadow-lg hover:-translate-y-1"
+                      ? "bg-muted/40 border-border/70 shadow-[0_0_0_1px_rgba(0,0,0,0.04)] dark:bg-primary/15 dark:border-primary/40"
+                      : "bg-card border-border/60 hover:border-border/80 hover:shadow-lg hover:-translate-y-1"
                   )}
                 >
                   {/* Selected Badge */}
@@ -6922,7 +7944,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                         : "opacity-0 scale-90"
                     )}
                   >
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase bg-primary text-primary-foreground shadow-sm">
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase bg-muted-foreground/80 text-background shadow-sm dark:bg-primary dark:text-primary-foreground">
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       <span>{t.selected}</span>
                     </div>
@@ -6930,11 +7952,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
                   {/* Header / Content */}
                   <div className="flex items-start gap-4">
-                    <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-500/80 shrink-0 shadow-sm border border-indigo-500/10 group-hover:scale-105 transition-transform duration-300">
+                    <div className="w-12 h-12 rounded-2xl bg-muted/50 border border-border/60 flex items-center justify-center text-muted-foreground shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-300 dark:bg-primary/20 dark:text-primary dark:border-primary/30">
                       <MessageSquare className="w-6 h-6" />
                     </div>
                     <div className="space-y-1">
-                      <h3 className="font-bold text-lg leading-tight line-clamp-2 text-foreground/90 group-hover:text-primary transition-colors">
+                      <h3 className="font-bold text-lg leading-tight line-clamp-2 text-foreground/90 group-hover:text-foreground dark:group-hover:text-primary transition-colors">
                         {name || texts.untitledProfile}
                       </h3>
                       {/* Optional: Add a tag or type if available in future */}
@@ -6946,8 +7968,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                     <span className="text-[10px] uppercase font-mono text-muted-foreground/50 tracking-wider">
                       {id}
                     </span>
-                    <div className="flex items-center gap-1 text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-x-2 group-hover:translate-x-0">
-                      <span>编辑</span>
+                    <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-x-2 group-hover:translate-x-0 dark:text-primary">
+                      <span>{texts.profileCardEdit}</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </div>
                   </div>
@@ -6958,14 +7980,17 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             {/* Create New Card (Moved to End) */}
             <div
               onClick={handleCreate}
-              className="group flex flex-col items-center justify-center p-6 rounded-2xl border-2 border-dashed border-border/60 hover:border-primary/50 hover:bg-primary/5 cursor-pointer transition-all duration-300 min-h-[180px]"
+              className="group flex flex-col items-center justify-center p-6 rounded-2xl border-2 border-dashed border-border/60 bg-muted/30 hover:border-border/80 hover:bg-muted/40 cursor-pointer transition-all duration-300 min-h-[180px]"
             >
-              <div className="w-14 h-14 rounded-full bg-indigo-500/10 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shadow-inner text-indigo-500/80">
+              <div className="w-14 h-14 rounded-full bg-muted/50 border border-border/60 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform shadow-inner text-muted-foreground">
                 <Plus className="w-7 h-7" />
               </div>
-              <h3 className="font-bold text-lg text-foreground/80 group-hover:text-primary transition-colors">
-                {texts.newProfile}
+              <h3 className="font-bold text-lg text-foreground/80 group-hover:text-foreground transition-colors">
+                {getNewCardCopy("prompt").title}
               </h3>
+              <p className="text-xs text-muted-foreground/70 mt-1 text-center max-w-[200px]">
+                {getNewCardCopy("prompt").desc}
+              </p>
             </div>
           </div>
         </div>
@@ -6975,7 +8000,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
   const renderApiGrid = () => {
     // 1. Get User's Existing API Profiles
-    const items = profileIndex.api.filter((id) => !isHiddenProfile("api", id));
+    const items = orderProfileIds(
+      "api",
+      profileIndex.api.filter((id) => !isHiddenProfile("api", id)),
+    );
 
     // 2. Prepare Presets
     // Show top 11 presets + 1 custom = 12 items
@@ -6983,8 +8011,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
     const renderPresetCard = (preset: ApiPreset) => {
       const presetText =
-        presetTexts.presets?.[preset.id] ||
-        texts.presets?.[preset.id] || {
+        texts.presets?.[preset.id] ||
+        fallbackTexts.presets?.[preset.id] || {
           label: preset.id,
           desc: "",
         };
@@ -6992,14 +8020,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       return (
         <Card
           key={preset.id}
-          className="cursor-pointer hover:border-primary/50 hover:shadow-md hover:-translate-y-0.5 transition-all group h-full min-h-[80px] flex flex-row items-center p-4 bg-card/50 gap-4"
+          className="cursor-pointer hover:border-border/80 hover:shadow-md hover:-translate-y-0.5 transition-all group h-full min-h-[80px] flex flex-row items-center p-4 bg-muted/20 gap-4 dark:bg-muted/10"
           onClick={() => handlePresetSelect(preset)}
         >
           <div
             className={cn(
               "w-10 h-10 rounded-lg flex items-center justify-center shrink-0 transition-colors",
-              preset.color || "text-muted-foreground",
-              "bg-muted/50 group-hover:bg-primary/10"
+              "text-muted-foreground/70 dark:text-primary",
+              "bg-muted/50 border border-border/60 dark:bg-primary/15 dark:border-primary/30 group-hover:bg-muted/60 dark:group-hover:bg-primary/25"
             )}
           >
             <Icon className="h-5 w-5" />
@@ -7023,7 +8051,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           {/* Section 1: My API Interface */}
           <div className="space-y-6">
             <div className="flex items-center gap-2 border-b border-border/40 pb-4">
-              <h2 className="text-2xl font-bold tracking-tight">我的API接口</h2>
+              <h2 className="text-2xl font-bold tracking-tight">
+                {texts.apiGridMyApisTitle}
+              </h2>
               <span className="text-muted-foreground text-sm font-medium opacity-80">
                 {items.length}
               </span>
@@ -7039,13 +8069,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                   <div
                     key={id}
                     onClick={() => handleSelectProfile(id, "api")}
-                    className={cn(
-                      "group relative flex flex-col justify-between p-6 rounded-2xl border cursor-pointer transition-all duration-300 ease-out select-none min-h-[160px]",
-                      isSelected
-                        ? "bg-indigo-500/5 border-indigo-500/50 shadow-[0_0_0_1px_rgba(var(--primary),0.4)]"
-                        : "bg-card border-border/60 hover:border-indigo-500/30 hover:shadow-lg hover:-translate-y-1"
-                    )}
-                  >
+                  className={cn(
+                    "group relative flex flex-col justify-between p-6 rounded-2xl border cursor-pointer transition-all duration-300 ease-out select-none min-h-[160px]",
+                    isSelected
+                      ? "bg-muted/40 border-border/70 shadow-[0_0_0_1px_rgba(0,0,0,0.04)] dark:bg-primary/15 dark:border-primary/40"
+                      : "bg-card border-border/60 hover:border-border/80 hover:shadow-lg hover:-translate-y-1"
+                  )}
+                >
                     {/* Selected Badge */}
                     <div
                       className={cn(
@@ -7055,19 +8085,19 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                           : "opacity-0 scale-90"
                       )}
                     >
-                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase bg-primary text-primary-foreground shadow-sm">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>{t.selected}</span>
-                      </div>
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase bg-muted-foreground/80 text-background shadow-sm dark:bg-primary dark:text-primary-foreground">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>{t.selected}</span>
+                    </div>
                     </div>
 
                     {/* Header */}
                     <div className="flex items-start gap-4">
-                      <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-500/80 shrink-0 shadow-sm border border-indigo-500/10 group-hover:scale-105 transition-transform duration-300">
+                      <div className="w-12 h-12 rounded-2xl bg-muted/50 border border-border/60 flex items-center justify-center text-muted-foreground shrink-0 shadow-sm group-hover:scale-105 transition-transform duration-300 dark:bg-primary/20 dark:text-primary dark:border-primary/30">
                         <Server className="w-6 h-6" />
                       </div>
                       <div className="space-y-1">
-                        <h3 className="font-bold text-lg leading-tight line-clamp-2 text-foreground/90 group-hover:text-primary transition-colors">
+                        <h3 className="font-bold text-lg leading-tight line-clamp-2 text-foreground/90 group-hover:text-foreground dark:group-hover:text-primary transition-colors">
                           {name}
                         </h3>
                         {/* ID Display */}
@@ -7079,8 +8109,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
                     {/* Footer / Action */}
                     <div className="pt-4 mt-2 flex items-end justify-end border-t border-border/30">
-                      <div className="flex items-center gap-1 text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-x-2 group-hover:translate-x-0">
-                        <span>配置</span>
+                      <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-x-2 group-hover:translate-x-0 dark:text-primary">
+                        <span>{texts.profileCardAction}</span>
                         <ArrowRight className="w-3.5 h-3.5" />
                       </div>
                     </div>
@@ -7089,11 +8119,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               })}
 
               {/* Empty State for My Models if none */}
-              {items.length === 0 && (
+            {items.length === 0 && (
                 <div className="col-span-full py-10 flex flex-col items-center justify-center text-center text-muted-foreground border-2 border-dashed border-border/50 rounded-2xl bg-muted/20">
                   <Server className="w-10 h-10 mb-3 opacity-20" />
-                  <p>暂无已保存的接口配置</p>
-                  <p className="text-sm opacity-60">请从下方选择添加</p>
+                  <p>{texts.apiGridEmptyTitle}</p>
+                  <p className="text-sm opacity-60">
+                    {texts.apiGridEmptyDesc}
+                  </p>
                 </div>
               )}
             </div>
@@ -7106,7 +8138,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               onClick={() => setPresetsOpen((prev) => !prev)}
             >
               <div className="flex items-center gap-2">
-                <h2 className="text-2xl font-bold tracking-tight">添加新接口</h2>
+                <h2 className="text-2xl font-bold tracking-tight">
+                  {texts.apiGridAddTitle}
+                </h2>
               </div>
               <div
                 className={cn(
@@ -7124,11 +8158,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
                 {/* Custom Entry */}
                 <Card
-                  className="cursor-pointer hover:border-primary/50 hover:shadow-md hover:-translate-y-0.5 transition-all border-dashed flex flex-row items-center p-4 min-h-[80px] h-full bg-transparent gap-4"
+                  className="cursor-pointer hover:border-border/80 hover:shadow-md hover:-translate-y-0.5 transition-all border-dashed flex flex-row items-center p-4 min-h-[80px] h-full bg-muted/30 hover:bg-muted/40 gap-4"
                   onClick={() => handlePresetSelect(null)}
                 >
-                  <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center shrink-0 group-hover:bg-primary/10 transition-colors">
-                    <Plus className="h-5 w-5 text-muted-foreground group-hover:text-primary" />
+                  <div className="w-10 h-10 rounded-lg bg-muted/50 border border-border/60 flex items-center justify-center shrink-0 transition-colors text-muted-foreground">
+                    <Plus className="h-5 w-5" />
                   </div>
                   <h3 className="font-semibold text-sm">{texts.customCardTitle}</h3>
                 </Card>
@@ -7163,21 +8197,112 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   }, [kind, customTemplates, hiddenTemplates]);
 
   const handleCreateBlankParser = () => {
-    const blankYaml = `meta:
-  id: new-parser-${Date.now()}
-  name: New Custom Parser
-rules: []
-`;
-    setYamlText(blankYaml);
-    setSelectedId(null);
-    setEditorTab("visual");
+    handleCreateByKind("parser");
   };
 
   const renderStrategyGrid = () => {
-    const activeKind = kind as "policy" | "chunk";
-    const items = profileIndex[activeKind].filter((id) => !isHiddenProfile(activeKind, id));
-    const kindIcon = activeKind === "policy" ? Scissors : Activity;
-    const KindIcon = kindIcon;
+    const policyItems = orderProfileIds(
+      "policy",
+      profileIndex.policy.filter((id) => !isHiddenProfile("policy", id)),
+    );
+    const chunkItems = orderProfileIds(
+      "chunk",
+      profileIndex.chunk.filter((id) => !isHiddenProfile("chunk", id)),
+    );
+    const renderStrategySection = (
+      targetKind: "policy" | "chunk",
+      items: string[],
+      KindIcon: typeof Scissors,
+    ) => (
+      <div className="space-y-6">
+        <div className="flex items-center gap-2 border-b border-border/40 pb-4">
+          <h2 className="text-xl font-bold tracking-tight">
+            {texts.kinds[targetKind]}
+          </h2>
+          <span className="text-muted-foreground text-sm font-medium opacity-80">
+            {items.length}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
+          {items.map((id) => {
+            const rawName = profileMeta[targetKind]?.[id] || "";
+            const name = resolveProfileName(id, rawName);
+            const isSelected = selectedId === id;
+
+            return (
+              <div
+                key={id}
+                onClick={() => handleSelectProfile(id, targetKind)}
+                className={cn(
+                  "group relative flex flex-col justify-between p-5 rounded-xl border cursor-pointer transition-all duration-300 ease-out select-none min-h-[140px]",
+                  isSelected
+                    ? "bg-muted/40 border-border/70 shadow-[0_0_0_1px_rgba(0,0,0,0.04)] dark:bg-primary/15 dark:border-primary/40"
+                    : "bg-card border-border/60 hover:border-border/80 hover:shadow-lg hover:-translate-y-1",
+                )}
+              >
+                {/* Selected Badge */}
+                <div
+                  className={cn(
+                    "absolute top-3 right-3 transition-all duration-300 z-10",
+                    isSelected ? "opacity-100 scale-100" : "opacity-0 scale-90",
+                  )}
+                >
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wide uppercase bg-muted-foreground/80 text-background shadow-sm dark:bg-primary dark:text-primary-foreground">
+                    <CheckCircle2 className="w-3 h-3" />
+                    <span>{t.selected}</span>
+                  </div>
+                </div>
+
+                {/* Header */}
+                <div className="flex items-start gap-4">
+                  <div
+                    className={cn(
+                      "w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-sm border group-hover:scale-105 transition-transform duration-300",
+                      "bg-muted/50 text-muted-foreground border border-border/60 dark:bg-primary/20 dark:text-primary dark:border-primary/30",
+                    )}
+                  >
+                    <KindIcon className="w-5 h-5" />
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="font-bold text-base leading-tight line-clamp-2 text-foreground/90 group-hover:text-foreground dark:group-hover:text-primary transition-colors">
+                      {name || texts.untitledProfile}
+                    </h3>
+                    <p className="text-[10px] uppercase font-mono text-muted-foreground/60 tracking-wider">
+                      {id.slice(0, 12)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="pt-3 mt-2 flex items-end justify-end border-t border-border/30">
+                  <div className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-x-2 group-hover:translate-x-0 dark:text-primary">
+                    <span>{texts.profileCardAction}</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* New Strategy Card */}
+          <div
+            onClick={() => handleCreateByKind(targetKind)}
+            className="group flex flex-col items-center justify-center p-5 rounded-xl border-2 border-dashed border-border/60 bg-muted/30 hover:border-border/80 hover:bg-muted/40 cursor-pointer transition-all duration-300 min-h-[140px]"
+          >
+            <div className="w-12 h-12 rounded-full bg-muted/50 border border-border/60 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform shadow-inner text-muted-foreground">
+              <Plus className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-base text-foreground/80 group-hover:text-foreground transition-colors">
+              {getNewCardCopy(targetKind).title}
+            </h3>
+            <p className="text-[11px] text-muted-foreground/70 mt-1 text-center max-w-[180px]">
+              {getNewCardCopy(targetKind).desc}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
 
     return (
       <div className="flex-1 overflow-y-auto bg-background/50">
@@ -7188,126 +8313,17 @@ rules: []
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <h2 className="text-2xl font-bold tracking-tight">
-                  {texts.strategyKindTitle || "分段策略"}
+                  {texts.strategyKindTitle}
                 </h2>
                 <p className="text-sm text-muted-foreground/80 leading-relaxed max-w-2xl">
-                  控制文本如何被分割和翻译结果如何被校验。选择「分行策略」管理逐行翻译的校验规则，或选择「分块策略」管理文本的分块方式。
+                  {texts.strategyGridDesc}
                 </p>
               </div>
             </div>
-
-            {/* Kind Switcher */}
-            <div className="flex items-center gap-1 p-1.5 rounded-xl bg-muted/20 border border-border/30 w-fit">
-              {(["policy", "chunk"] as const).map((targetKind) => (
-                <button
-                  key={targetKind}
-                  type="button"
-                  onClick={() => {
-                    if (kind === targetKind) return;
-                    setSelectedId(null);
-                    setYamlText("");
-                    setSearchTerm("");
-                    setKind(targetKind);
-                  }}
-                  className={cn(
-                    "px-6 py-2 rounded-lg text-sm font-semibold transition-all duration-300 min-w-[120px] justify-center",
-                    kind === targetKind
-                      ? "bg-background text-indigo-600 shadow-sm border border-border/40"
-                      : "text-muted-foreground/70 hover:text-indigo-500 hover:bg-white/50",
-                  )}
-                >
-                  {texts.kinds[targetKind]}
-                </button>
-              ))}
-            </div>
           </div>
 
-          {/* Grid */}
-          <div className="space-y-6">
-            <div className="flex items-center gap-2 border-b border-border/40 pb-4">
-              <h2 className="text-xl font-bold tracking-tight">
-                {activeKind === "policy" ? "分行策略" : "分块策略"}
-              </h2>
-              <span className="text-muted-foreground text-sm font-medium opacity-80">
-                {items.length}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
-              {items.map((id) => {
-                const rawName = profileMeta[activeKind]?.[id] || "";
-                const name = resolveProfileName(id, rawName);
-                const isSelected = selectedId === id;
-
-                return (
-                  <div
-                    key={id}
-                    onClick={() => handleSelectProfile(id, activeKind)}
-                    className={cn(
-                      "group relative flex flex-col justify-between p-5 rounded-xl border cursor-pointer transition-all duration-300 ease-out select-none min-h-[140px]",
-                      isSelected
-                        ? "bg-primary/5 border-primary/50 shadow-[0_0_0_1px_rgba(var(--primary),0.4)]"
-                        : "bg-card border-border/60 hover:border-primary/30 hover:shadow-lg hover:-translate-y-1",
-                    )}
-                  >
-                    {/* Selected Badge */}
-                    <div
-                      className={cn(
-                        "absolute top-3 right-3 transition-all duration-300 z-10",
-                        isSelected
-                          ? "opacity-100 scale-100"
-                          : "opacity-0 scale-90"
-                      )}
-                    >
-                      <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wide uppercase bg-primary text-primary-foreground shadow-sm">
-                        <CheckCircle2 className="w-3 h-3" />
-                        <span>{t.selected}</span>
-                      </div>
-                    </div>
-
-                    {/* Header */}
-                    <div className="flex items-start gap-4">
-                      <div className={cn(
-                        "w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-sm border group-hover:scale-105 transition-transform duration-300",
-                        "bg-indigo-500/10 text-indigo-500/70 border-indigo-500/10"
-                      )}>
-                        <KindIcon className="w-5 h-5" />
-                      </div>
-                      <div className="space-y-1">
-                        <h3 className="font-bold text-base leading-tight line-clamp-2 text-foreground/90 group-hover:text-primary transition-colors">
-                          {name || texts.untitledProfile}
-                        </h3>
-                        <p className="text-[10px] uppercase font-mono text-muted-foreground/60 tracking-wider">
-                          {id.slice(0, 12)}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Footer */}
-                    <div className="pt-3 mt-2 flex items-end justify-end border-t border-border/30">
-                      <div className="flex items-center gap-1 text-[10px] font-medium text-primary opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-x-2 group-hover:translate-x-0">
-                        <span>配置</span>
-                        <ArrowRight className="w-3 h-3" />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* New Strategy Card */}
-              <div
-                onClick={handleCreate}
-                className="group flex flex-col items-center justify-center p-5 rounded-xl border-2 border-dashed border-border/60 hover:border-primary/50 hover:bg-primary/5 cursor-pointer transition-all duration-300 min-h-[140px]"
-              >
-                <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform shadow-inner text-primary">
-                  <Plus className="w-6 h-6" />
-                </div>
-                <h3 className="font-bold text-base text-foreground/80 group-hover:text-primary transition-colors">
-                  {texts.newProfile}
-                </h3>
-              </div>
-            </div>
-          </div>
+          {renderStrategySection("policy", policyItems, Scissors)}
+          {renderStrategySection("chunk", chunkItems, Activity)}
         </div>
       </div>
     );
@@ -7320,7 +8336,7 @@ rules: []
 
     // items = User Parsers + System Parsers (that are not hidden by user preference)
     // We want to SHOW built-in parsers too, so we removed the !builtInIds.has(id) filter
-    const items = profileIndex.parser.filter((id) => {
+    const items = orderProfileIds("parser", profileIndex.parser).filter((id) => {
       if (id === CASCADE_ID) return true; // Always show Cascade Parser
       return !isHiddenProfile("parser", id);
     });
@@ -7350,35 +8366,52 @@ rules: []
     return (
       <div className="flex-1 overflow-y-auto bg-background/50">
         <div className="p-6 lg:p-10 max-w-[1800px] mx-auto space-y-10">
-
-          {/* Recommendation Section (Full Width) */}
-          <div className="rounded-2xl border bg-gradient-to-br from-primary/5 via-primary/5 to-transparent p-6 flex flex-col md:flex-row items-start md:items-center justify-between relative overflow-hidden group gap-6">
-            <div className="relative z-10 max-w-3xl">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-bold uppercase tracking-wider">
-                  {texts.recommended || "Recommended"}
-                </div>
+          <div className="space-y-6">
+            <div className="flex items-start justify-between border-b border-border/40 pb-4">
+              <div className="space-y-1">
+                <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+                  <span>{texts.kinds.parser}</span>
+                  <span className="text-muted-foreground text-sm font-medium opacity-80">
+                    {items.length}
+                  </span>
+                </h2>
+                <p className="text-sm text-muted-foreground/80 leading-relaxed max-w-2xl">
+                  {texts.parserGridDesc}
+                </p>
               </div>
-              <h3 className="text-xl font-bold mb-2">多级级联解析器 (Smart Cascade)</h3>
-              <p className="text-sm text-muted-foreground/80 leading-relaxed">
-                这是系统默认且最推荐的解析方案。它能够同时支持 JSON 对象、JSON 数组、正则提取以及纯文本兜底，
-                自动根据模型输出的格式进行智能适配，无需频繁切换解析器。
-              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowParserRecommend((prev) => !prev)}
+                className="text-xs text-muted-foreground hover:text-foreground dark:hover:text-primary"
+              >
+                {showParserRecommend ? t.common.collapse : t.common.expand}
+              </Button>
             </div>
 
-            {/* Decorator */}
-            <Workflow className="absolute -right-6 -bottom-6 w-48 h-48 text-primary/5 group-hover:text-primary/10 transition-colors rotate-12 pointer-events-none" />
+            {showParserRecommend && (
+              <div className="rounded-xl border bg-gradient-to-br from-muted/30 via-muted/20 to-transparent dark:from-primary/20 dark:via-primary/10 p-4 flex flex-col md:flex-row items-start md:items-center justify-between relative overflow-hidden group gap-4">
+                <div className="relative z-10 max-w-3xl">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="px-2 py-0.5 rounded-full bg-muted/50 text-muted-foreground text-[10px] font-bold uppercase tracking-wider dark:bg-primary/20 dark:text-primary">
+                      {texts.parserRecommendBadge}
+                    </div>
+                  </div>
+                  <h3 className="text-lg font-bold mb-1">
+                    {texts.parserRecommendTitle}
+                  </h3>
+                  <p className="text-sm text-muted-foreground/80 leading-relaxed">
+                    {texts.parserRecommendDesc}
+                  </p>
+                </div>
+
+                {/* Decorator */}
+                <Workflow className="absolute -right-8 -bottom-8 w-40 h-40 text-muted/50 dark:text-primary/10 group-hover:text-muted/60 dark:group-hover:text-primary/20 transition-colors rotate-12 pointer-events-none" />
+              </div>
+            )}
           </div>
 
-          {/* Section 1: My Parsers (Consolidated) */}
           <div className="space-y-6">
-            <div className="flex items-center gap-2 border-b border-border/40 pb-4">
-              <h2 className="text-2xl font-bold tracking-tight">我的解析器</h2>
-              <span className="text-muted-foreground text-sm font-medium opacity-80">
-                {items.length}
-              </span>
-            </div>
-
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
               {/* User Parsers */}
               {items.map((id) => {
@@ -7395,9 +8428,9 @@ rules: []
                     className={cn(
                       "group relative flex flex-col justify-between p-5 rounded-xl border cursor-pointer transition-all duration-300 ease-out select-none min-h-[140px]",
                       isSelected
-                        ? "bg-indigo-500/5 border-indigo-500/50 shadow-[0_0_0_1px_rgba(var(--primary),0.4)]"
-                        : "bg-card border-border/60 hover:border-indigo-500/30 hover:shadow-lg hover:-translate-y-1",
-                      isCascade && !isSelected && "border-indigo-500/30 bg-indigo-500/[0.02]"
+                        ? "bg-muted/40 border-border/70 shadow-[0_0_0_1px_rgba(0,0,0,0.04)] dark:bg-primary/15 dark:border-primary/40"
+                        : "bg-card border-border/60 hover:border-border/80 hover:shadow-lg hover:-translate-y-1",
+                      isCascade && !isSelected && "border-border/70 bg-muted/30 dark:border-primary/30 dark:bg-primary/10"
                     )}
                   >
                     {/* Selected Badge */}
@@ -7409,7 +8442,7 @@ rules: []
                           : "opacity-0 scale-90"
                       )}
                     >
-                      <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wide uppercase bg-primary text-primary-foreground shadow-sm">
+                      <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wide uppercase bg-muted-foreground/80 text-background shadow-sm dark:bg-primary dark:text-primary-foreground">
                         <CheckCircle2 className="w-3 h-3" />
                         <span>{t.selected}</span>
                       </div>
@@ -7420,25 +8453,29 @@ rules: []
                       <div className={cn(
                         "w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-sm border group-hover:scale-105 transition-transform duration-300",
                         isCascade
-                          ? "bg-indigo-500/20 text-indigo-600 border-indigo-500/20 shadow-sm"
-                          : "bg-indigo-500/10 text-indigo-500/70 border-indigo-500/10"
+                          ? "bg-muted/60 text-foreground border-border/60 shadow-sm dark:bg-primary/25 dark:text-primary-foreground dark:border-primary/30"
+                          : "bg-muted/50 text-muted-foreground border-border/60 dark:bg-primary/15 dark:text-primary/80 dark:border-primary/30"
                       )}>
                         {isCascade ? <Workflow className="w-5 h-5" /> : <FileJson className="w-5 h-5" />}
                       </div>
                       <div className="space-y-1">
-                        <h3 className="font-bold text-base leading-tight line-clamp-2 text-foreground/90 group-hover:text-primary transition-colors">
+                        <h3 className="font-bold text-base leading-tight line-clamp-2 text-foreground/90 group-hover:text-foreground dark:group-hover:text-primary transition-colors">
                           {name}
                         </h3>
                         <p className="text-[10px] uppercase font-mono text-muted-foreground/60 tracking-wider">
-                          {isCascade ? "DEFAULT / SYSTEM" : isSystem ? "SYSTEM PRESET" : id.slice(0, 8)}
+                          {isCascade
+                            ? texts.parserCardTags.default
+                            : isSystem
+                              ? texts.parserCardTags.system
+                              : id.slice(0, 8)}
                         </p>
                       </div>
                     </div>
 
                     {/* Footer */}
                     <div className="pt-3 mt-2 flex items-end justify-end border-t border-border/30">
-                      <div className="flex items-center gap-1 text-[10px] font-medium text-primary opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-x-2 group-hover:translate-x-0">
-                        <span>配置</span>
+                      <div className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-x-2 group-hover:translate-x-0 dark:text-primary">
+                        <span>{texts.profileCardAction}</span>
                         <ArrowRight className="w-3 h-3" />
                       </div>
                     </div>
@@ -7449,16 +8486,16 @@ rules: []
               {/* New Parser Card (Moved to End) */}
               <div
                 onClick={handleCreateBlankParser}
-                className="group flex flex-col items-center justify-center p-5 rounded-xl border-2 border-dashed border-border/60 hover:border-primary/50 hover:bg-primary/5 cursor-pointer transition-all duration-300 min-h-[140px]"
+                className="group flex flex-col items-center justify-center p-5 rounded-xl border-2 border-dashed border-border/60 bg-muted/30 hover:border-border/80 hover:bg-muted/40 cursor-pointer transition-all duration-300 min-h-[140px]"
               >
-                <div className="w-10 h-10 rounded-full bg-muted/40 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform shadow-inner">
-                  <Plus className="w-5 h-5 text-muted-foreground/60" />
+                <div className="w-10 h-10 rounded-full bg-muted/50 border border-border/60 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform shadow-inner text-muted-foreground">
+                  <Plus className="w-5 h-5" />
                 </div>
                 <h3 className="font-bold text-sm text-foreground">
-                  新建解析器
+                  {getNewCardCopy("parser").title}
                 </h3>
                 <p className="text-[10px] text-muted-foreground mt-0.5 text-center max-w-[150px] opacity-70">
-                  点击创建空白配置
+                  {getNewCardCopy("parser").desc}
                 </p>
               </div>
             </div>
@@ -7468,16 +8505,29 @@ rules: []
     );
   };
 
+  const renderLoadingState = () => (
+    <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground bg-background/50">
+      <Loader2 className="h-8 w-8 animate-spin" />
+      <span className="mt-3 text-sm">{t.common.loading}</span>
+    </div>
+  );
 
   const renderContent = () => {
     // If no kind selected, shouldn't happen but defensive
     if (!kind) return null;
 
+    if (isProfilesLoading || profilesLoadedKind !== kind) {
+      if (kind === "pipeline" && pipelineView === "overview") {
+        return renderPipelineOverviewSkeleton();
+      }
+      return renderLoadingState();
+    }
+
     if (kind === "pipeline" && pipelineView === "overview") {
       return renderPipelineOverview();
     }
 
-    if (kind === "prompt" && !selectedId) {
+    if (kind === "prompt" && !selectedId && !yamlText) {
       return renderPromptGrid();
     }
 
@@ -7549,10 +8599,15 @@ rules: []
                 variant="ghost"
                 size="sm"
                 className="h-8 px-2 text-xs"
-                onClick={() => setPipelineView("overview")}
+                onClick={() => {
+                  setPipelineView("overview");
+                  setSelectedId(null);
+                  setYamlText("");
+                  resetFormState("pipeline");
+                }}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
-                返回方案
+                {texts.backToPipelines}
               </Button>
             )}
             {kind === "prompt" && !!selectedId && (
@@ -7560,10 +8615,14 @@ rules: []
                 variant="ghost"
                 size="sm"
                 className="h-8 px-2 text-xs"
-                onClick={() => setSelectedId(null)}
+                onClick={() => {
+                  setSelectedId(null);
+                  setYamlText("");
+                  resetFormState("prompt");
+                }}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
-                返回列表
+                {texts.backToList}
               </Button>
             )}
             {kind === "api" && (!!selectedId || !!yamlText) && (
@@ -7574,12 +8633,11 @@ rules: []
                 onClick={() => {
                   setSelectedId(null);
                   setYamlText("");
-                  setApiForm(DEFAULT_API_FORM); // Reset form state to avoid lingering
-                  setShowApiSetup(false);
+                  resetFormState("api");
                 }}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
-                返回列表
+                {texts.backToList}
               </Button>
             )}
             {kind === "parser" && (!!selectedId || !!yamlText) && (
@@ -7590,10 +8648,11 @@ rules: []
                 onClick={() => {
                   setSelectedId(null);
                   setYamlText("");
+                  resetFormState("parser");
                 }}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
-                返回列表
+                {texts.backToList}
               </Button>
             )}
             {isStrategyKind(kind) && (!!selectedId || !!yamlText) && (
@@ -7604,10 +8663,11 @@ rules: []
                 onClick={() => {
                   setSelectedId(null);
                   setYamlText("");
+                  resetFormState(kind);
                 }}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
-                返回列表
+                {texts.backToList}
               </Button>
             )}
             <div>

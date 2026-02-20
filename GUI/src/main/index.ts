@@ -25,7 +25,10 @@ import fs from "fs";
 import { ServerManager } from "./serverManager";
 import { getLlamaServerPath, detectPlatform } from "./platform";
 import { TranslateOptions } from "./remoteClient";
-import { registerPipelineV2Profiles } from "./pipelineV2Profiles";
+import {
+  getPipelineV2ProfilesDir,
+  registerPipelineV2Profiles,
+} from "./pipelineV2Profiles";
 import { registerPipelineV2Runner } from "./pipelineV2Runner";
 
 let pythonProcess: ChildProcess | null = null;
@@ -457,10 +460,34 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  const resolveProfilesDir = () => {
+    const envDir =
+      process.env.MURASAKI_PROFILES_DIR ||
+      process.env.PIPELINE_V2_PROFILES_DIR;
+    if (envDir && envDir.trim()) return resolve(envDir.trim());
+    return getPipelineV2ProfilesDir();
+  };
+  const profilesDir = resolveProfilesDir();
+  const ensureProfilesDir = () => {
+    const legacyDir = join(getMiddlewarePath(), "pipeline_v2_profiles");
+    if (
+      legacyDir !== profilesDir &&
+      fs.existsSync(legacyDir) &&
+      !fs.existsSync(profilesDir)
+    ) {
+      try {
+        fs.mkdirSync(profilesDir, { recursive: true });
+        fs.cpSync(legacyDir, profilesDir, { recursive: true });
+      } catch (error) {
+        console.warn("[App] Profiles migration skipped:", error);
+      }
+    }
+    return profilesDir;
+  };
   registerPipelineV2Profiles({
     getPythonPath,
     getMiddlewarePath,
-    getProfilesDir: () => join(getMiddlewarePath(), "pipeline_v2_profiles"),
+    getProfilesDir: ensureProfilesDir,
   });
   registerPipelineV2Runner({
     getPythonPath,

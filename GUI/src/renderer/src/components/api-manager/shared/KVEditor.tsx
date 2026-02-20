@@ -2,7 +2,7 @@ import { ClipboardList, Plus, Trash2 } from "lucide-react";
 import { Button, Label } from "../../ui/core";
 import { emitToast } from "../../../lib/toast";
 
-type KVPair = { key: string; value: string };
+type KVPair = { key: string; value: string; valueKind?: "string" };
 
 type KVEditorStrings = {
   keyLabel: string;
@@ -32,6 +32,22 @@ type KVEditorProps = {
 const ensurePairs = (pairs: KVPair[]) =>
   pairs.length ? pairs : [{ key: "", value: "" }];
 
+const toPairValue = (value: unknown): Pick<KVPair, "value" | "valueKind"> => {
+  if (typeof value === "string") {
+    return { value, valueKind: "string" };
+  }
+  if (value === undefined) return { value: "" };
+  if (value && typeof value === "object") {
+    try {
+      const json = JSON.stringify(value);
+      if (json !== undefined) return { value: json };
+    } catch {
+      // ignore
+    }
+  }
+  return { value: String(value) };
+};
+
 const parsePairsFromText = (raw: string): KVPair[] => {
   const text = raw.trim();
   if (!text) return [];
@@ -40,7 +56,7 @@ const parsePairsFromText = (raw: string): KVPair[] => {
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return Object.entries(parsed).map(([key, value]) => ({
         key: String(key),
-        value: String(value),
+        ...toPairValue(value),
       }));
     }
   } catch {
@@ -72,7 +88,13 @@ export function KVEditor({
 }: KVEditorProps) {
   const handleChange = (index: number, field: "key" | "value", value: string) => {
     const next = pairs.map((pair, idx) =>
-      idx === index ? { ...pair, [field]: value } : pair,
+      idx === index
+        ? {
+          ...pair,
+          [field]: value,
+          ...(field === "value" ? { valueKind: undefined } : {}),
+        }
+        : pair,
     );
     onChange(ensurePairs(next));
   };

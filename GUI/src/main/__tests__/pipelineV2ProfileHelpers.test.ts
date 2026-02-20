@@ -16,10 +16,10 @@ describe("pipelineV2ProfileHelpers", () => {
     expect(canUseServerProfilesPath(123, exists)).toBe(false);
   });
 
-  it("hasServerProfilesList checks non-empty arrays", () => {
+  it("hasServerProfilesList checks array payloads", () => {
     expect(hasServerProfilesList([{ id: "a" }])).toBe(true);
     expect(hasServerProfilesList([{}])).toBe(true);
-    expect(hasServerProfilesList([])).toBe(false);
+    expect(hasServerProfilesList([])).toBe(true);
     expect(hasServerProfilesList(null)).toBe(false);
     expect(hasServerProfilesList({})).toBe(false);
   });

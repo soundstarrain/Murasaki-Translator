@@ -37,6 +37,19 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "statsGroupHint"],
   ["apiManager", "openProfilesDir"],
   ["apiManager", "openProfilesDirFail"],
+  ["apiManager", "newProfileDesc"],
+  ["apiManager", "newProfileLabels", "pipeline"],
+  ["apiManager", "newProfileLabels", "prompt"],
+  ["apiManager", "newProfileLabels", "strategy"],
+  ["apiManager", "newProfileLabels", "policy"],
+  ["apiManager", "newProfileLabels", "chunk"],
+  ["apiManager", "newProfileLabels", "parser"],
+  ["apiManager", "newProfileDescs", "pipeline"],
+  ["apiManager", "newProfileDescs", "prompt"],
+  ["apiManager", "newProfileDescs", "strategy"],
+  ["apiManager", "newProfileDescs", "policy"],
+  ["apiManager", "newProfileDescs", "chunk"],
+  ["apiManager", "newProfileDescs", "parser"],
   ["apiManager", "backToPresets"],
   ["apiManager", "presetTitle"],
   ["apiManager", "presetDesc"],
@@ -85,14 +98,38 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "listDesc"],
   ["apiManager", "listEmpty"],
   ["apiManager", "listHint"],
+  ["apiManager", "apiGridMyApisTitle"],
+  ["apiManager", "apiGridAddTitle"],
+  ["apiManager", "apiGridEmptyTitle"],
+  ["apiManager", "apiGridEmptyDesc"],
   ["apiManager", "searchPlaceholder"],
   ["apiManager", "emptySelectionTitle"],
   ["apiManager", "emptySelectionDesc"],
+  ["apiManager", "promptGridDesc"],
+  ["apiManager", "parserGridDesc"],
+  ["apiManager", "strategyGridDesc"],
+  ["apiManager", "parserRecommendBadge"],
+  ["apiManager", "parserRecommendTitle"],
+  ["apiManager", "parserRecommendDesc"],
+  ["apiManager", "parserCardTags", "default"],
+  ["apiManager", "parserCardTags", "system"],
+  ["apiManager", "profileCardAction"],
+  ["apiManager", "profileCardEdit"],
+  ["apiManager", "pipelineOverviewTitle"],
+  ["apiManager", "pipelineOverviewShowGuide"],
+  ["apiManager", "pipelineOverviewManageTitle"],
+  ["apiManager", "pipelineOverviewManageDesc"],
+  ["apiManager", "pipelineOverviewHideGuide"],
   ["apiManager", "untitledProfile"],
   ["apiManager", "actionDuplicate"],
   ["apiManager", "actionDelete"],
+  ["apiManager", "backToList"],
+  ["apiManager", "backToPipelines"],
   ["apiManager", "deleteConfirm"],
   ["apiManager", "deleteFail"],
+  ["apiManager", "defaultPresetDeleteFail"],
+  ["apiManager", "pipelineCardEdit"],
+  ["apiManager", "pipelineCardActive"],
   ["apiManager", "sectionVisualTitle"],
   ["apiManager", "sectionYamlTitle"],
   ["apiManager", "editorYamlHint"],
@@ -202,6 +239,7 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "promptFields", "afterLinesLabel"],
   ["apiManager", "promptFields", "sourceLinesLabel"],
   ["apiManager", "promptFields", "joinerLabel"],
+  ["apiManager", "promptFields", "sourceFormatLabel"],
   ["apiManager", "promptPlaceholders", "id"],
   ["apiManager", "promptPlaceholders", "name"],
   ["apiManager", "promptPlaceholders", "systemTemplate"],
@@ -212,6 +250,13 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "promptPlaceholders", "joiner"],
   ["apiManager", "promptHints", "variables"],
   ["apiManager", "promptHints", "context"],
+  ["apiManager", "promptHints", "sourceFormat"],
+  ["apiManager", "promptOptions", "sourceFormat", "auto"],
+  ["apiManager", "promptOptions", "sourceFormat", "jsonl"],
+  ["apiManager", "promptOptions", "sourceFormat", "plain"],
+  ["apiManager", "promptOptions", "sourceFormat", "jsonObject"],
+  ["apiManager", "promptOptions", "sourceFormat", "jsonArray"],
+  ["apiManager", "promptOptions", "sourceFormat", "taggedLine"],
   ["apiManager", "promptSections", "templateTitle"],
   ["apiManager", "promptSections", "templateDesc"],
   ["apiManager", "promptSections", "contextTitle"],
@@ -239,6 +284,8 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "translationModeOptions", "block"],
   ["apiManager", "apiTypeOptions", "openai"],
   ["apiManager", "apiTypeOptions", "pool"],
+  ["apiManager", "apiTypeOptions", "poolRoundRobin"],
+  ["apiManager", "apiTypeOptions", "poolRandom"],
   ["apiManager", "apiTypeHints", "openai"],
   ["apiManager", "apiTypeHints", "pool"],
   ["apiManager", "formInvalidJsonTitle"],
@@ -394,6 +441,7 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "validationPanelOk"],
   ["apiManager", "validationPanelErrors"],
   ["apiManager", "validationPanelWarnings"],
+  ["apiManager", "validationMissingScript"],
   ["apiManager", "composer", "title"],
   ["apiManager", "composer", "desc"],
   ["apiManager", "composer", "badge"],
@@ -507,9 +555,15 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "groups", "openai", "selectPlaceholder"],
   ["apiManager", "flowTitle"],
   ["apiManager", "flowAction"],
+  ["apiManager", "policySections", "errorTitle"],
+  ["apiManager", "policySections", "errorDesc"],
   ["apiManager", "policyChecksDesc", "emptyLine"],
   ["apiManager", "policyChecksDesc", "similarity"],
   ["apiManager", "policyChecksDesc", "kanaTrace"],
+  ["apiManager", "chunkSections", "rulesTitle"],
+  ["apiManager", "chunkSections", "rulesDesc"],
+  ["apiManager", "chunkSections", "balanceTitle"],
+  ["apiManager", "chunkSections", "balanceDesc"],
   ["apiManager", "policyOptions", "sourceLangAuto"],
   ["apiManager", "policyOptions", "sourceLangJa"],
   ["apiManager", "policyOptions", "sourceLangCustom"],
@@ -551,13 +605,13 @@ describe("apiManager view i18n", () => {
 
   it("uses neutral strategy placeholder for new pipelines", () => {
     expect(translations.zh.apiManager.scheme.placeholders.strategy).toBe(
-      "閫夋嫨鍒嗘绛栫暐",
+      "选择分段策略",
     );
     expect(translations.en.apiManager.scheme.placeholders.strategy).toBe(
       "Select segmentation strategy",
     );
     expect(translations.jp.apiManager.scheme.placeholders.strategy).toBe(
-      "鍒嗗壊鎴︾暐銈掗伕鎶?,
+      "分割戦略を選択",
     );
   });
 
@@ -582,6 +636,72 @@ describe("apiManager view i18n", () => {
       const keys = Object.keys(lang.apiManager.templateItems || {}).sort();
       expect(keys).toEqual(expected);
     }
+  });
+});
+
+describe("apiManager view storage keys", () => {
+  it("persists parser recommend collapse state", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain("murasaki.v2.parser_recommend_visible");
+  });
+
+  it("persists profile order state", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain("murasaki.v2.profile_order");
+  });
+
+  it("persists pipeline guide collapse state", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain("murasaki.v2.pipeline_guide_visible");
+  });
+});
+
+describe("apiManager view defaults", () => {
+  it("avoids prefilled pipeline runtime defaults", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    const match = content.match(
+      /const DEFAULT_PIPELINE_COMPOSER:[\\s\\S]*?};/,
+    );
+    expect(match).toBeTruthy();
+    const block = match?.[0] || "";
+    expect(block).toContain('temperature: ""');
+    expect(block).toContain('concurrency: ""');
   });
 });
 

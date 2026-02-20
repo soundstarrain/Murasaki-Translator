@@ -45,3 +45,9 @@ export const shouldPreserveLegacyPromptParts = (
     normalizePromptPart(legacy.combined)
   );
 };
+
+export const hasPromptSourcePlaceholder = (data: any) => {
+  const userTemplate = String(data?.user_template || "");
+  if (!userTemplate.trim()) return true;
+  return userTemplate.includes("{{source}}");
+};

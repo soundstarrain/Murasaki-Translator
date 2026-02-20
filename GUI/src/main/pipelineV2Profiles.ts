@@ -1,6 +1,6 @@
 import { app, ipcMain } from "electron";
 
-import { join, basename, extname } from "path";
+import { join, basename, extname, resolve, sep } from "path";
 
 import { existsSync } from "fs";
 
@@ -13,6 +13,8 @@ import {
   readdir,
 
   readFile,
+
+  stat,
 
   unlink,
 
@@ -61,6 +63,37 @@ const PROFILE_KINDS = [
 
 export type ProfileKind = (typeof PROFILE_KINDS)[number];
 
+const SAFE_PROFILE_ID = /^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/;
+
+const isSafeProfileId = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.includes("..")) return false;
+  if (/[\\/]/.test(trimmed)) return false;
+  return SAFE_PROFILE_ID.test(trimmed);
+};
+
+const isSafeYamlFilename = (value: string) => {
+  if (/[\\/]/.test(value)) return false;
+  const base = basename(value, extname(value));
+  return isSafeProfileId(base);
+};
+
+const normalizePath = (value: string) => resolve(value);
+
+const isPathWithin = (baseDir: string, target: string) => {
+  const base = normalizePath(baseDir);
+  const resolvedTarget = normalizePath(target);
+  const prefix = base.endsWith(sep) ? base : `${base}${sep}`;
+  if (process.platform === "win32") {
+    const baseLower = base.toLowerCase();
+    const prefixLower = prefix.toLowerCase();
+    const targetLower = resolvedTarget.toLowerCase();
+    return targetLower === baseLower || targetLower.startsWith(prefixLower);
+  }
+  return resolvedTarget === base || resolvedTarget.startsWith(prefix);
+};
+
 const PRUNE_PROFILE_IDS: Partial<Record<ProfileKind, Set<string>>> = {
 
   policy: new Set(["line_strict", "line_quality", "line_strict_pad", "line_strict_align"]),
@@ -86,6 +119,46 @@ const PRUNE_PROFILE_IDS: Partial<Record<ProfileKind, Set<string>>> = {
 
 type PatchNameEntry = { name: string; aliases?: string[] };
 
+type ProfileFileMeta = {
+  mtimeMs: number;
+  id: string;
+  name: string;
+  chunkType?: "" | "line" | "legacy";
+};
+
+const profileFileMetaCache = new Map<string, ProfileFileMeta>();
+const PROFILE_INDEX_FILE = "profiles.index.json";
+const PROFILE_INDEX_VERSION = 1;
+type ProfileIndexCache = {
+  version: number;
+  kinds: Partial<Record<ProfileKind, Record<string, ProfileFileMeta>>>;
+};
+const profileIndexDiskCache: {
+  dir: string;
+  data: ProfileIndexCache | null;
+  dirty: boolean;
+} = {
+  dir: "",
+  data: null,
+  dirty: false,
+};
+const buildNextProfileIndexCache = (
+  cache: ProfileIndexCache,
+  kind: ProfileKind,
+  filename: string,
+  meta: ProfileFileMeta | null,
+): ProfileIndexCache => {
+  const nextKinds = { ...cache.kinds };
+  const kindCache = { ...(nextKinds[kind] || {}) };
+  if (meta) {
+    kindCache[filename] = meta;
+  } else {
+    delete kindCache[filename];
+  }
+  nextKinds[kind] = kindCache;
+  return { ...cache, kinds: nextKinds };
+};
+
 const PATCH_PROFILE_NAMES: Partial<
   Record<ProfileKind, Record<string, PatchNameEntry>>
 > = {
@@ -99,7 +172,7 @@ const PATCH_PROFILE_NAMES: Partial<
       name: "纯文本解析",
       aliases: ["Plain Parser", "Plain Text Parser"],
     },
-    parser_line_strict: { name: "行号严格解析", aliases: ["Line Strict Parser"] },
+    parser_line_strict: { name: "行严格解析", aliases: ["Line Strict Parser"] },
     parser_tagged_line: { name: "行号标记解析", aliases: ["Tagged Line Parser"] },
     parser_json_array: { name: "JSON 数组解析", aliases: ["JSON Array Parser"] },
     parser_json_object: {
@@ -113,7 +186,7 @@ const PATCH_PROFILE_NAMES: Partial<
       aliases: ["Regex JSON Key Parser"],
     },
     parser_regex_codeblock: {
-      name: "正则提取代码块",
+      name: "正则提取 代码块",
       aliases: ["Regex Codeblock Parser"],
     },
     parser_regex_xml_tag: {
@@ -163,7 +236,6 @@ const PROMPT_DEFAULT_PATCH = {
     "参考术语表:{{glossary}}\\n参考上文(无需翻译):{{context_before}}\\n请翻译:{{source}}\\n参考上文(无需翻译):{{context_after}}",
   ]),
 };
-
 
 export const getPipelineV2ProfilesDir = () =>
   join(app.getPath("userData"), "pipeline_v2_profiles");
@@ -476,22 +548,27 @@ const requestJson = async (
   path: string,
 
   options?: RequestInit,
+  timeoutMs = 8000,
 
 ) => {
 
-  const res = await fetch(`${baseUrl}${path}`, {
+  const res = await requestWithTimeout(
+    `${baseUrl}${path}`,
+    {
 
-    headers: {
+      headers: {
 
-      "Content-Type": "application/json",
+        "Content-Type": "application/json",
 
-      ...(options?.headers || {}),
+        ...(options?.headers || {}),
+
+      },
+
+      ...options,
 
     },
-
-    ...options,
-
-  });
+    Math.max(1000, timeoutMs),
+  );
 
   const text = await res.text();
 
@@ -529,6 +606,8 @@ type LocalProfileRef = {
 
   path: string;
 
+  chunkType?: "" | "line" | "legacy";
+
 };
 
 const safeLoadYaml = (raw: string): Record<string, any> | null => {
@@ -549,15 +628,137 @@ const safeLoadYaml = (raw: string): Record<string, any> | null => {
 
 };
 
+const loadProfileIndexDiskCache = async (
+  profilesDir: string,
+): Promise<ProfileIndexCache> => {
+  if (profileIndexDiskCache.dir === profilesDir && profileIndexDiskCache.data) {
+    return profileIndexDiskCache.data;
+  }
+  const cachePath = join(profilesDir, PROFILE_INDEX_FILE);
+  try {
+    const raw = await readFile(cachePath, "utf-8");
+    const parsed = JSON.parse(raw) as ProfileIndexCache;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      parsed.version === PROFILE_INDEX_VERSION &&
+      parsed.kinds &&
+      typeof parsed.kinds === "object"
+    ) {
+      profileIndexDiskCache.dir = profilesDir;
+      profileIndexDiskCache.data = parsed;
+      profileIndexDiskCache.dirty = false;
+      return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  const empty: ProfileIndexCache = {
+    version: PROFILE_INDEX_VERSION,
+    kinds: {},
+  };
+  profileIndexDiskCache.dir = profilesDir;
+  profileIndexDiskCache.data = empty;
+  profileIndexDiskCache.dirty = false;
+  return empty;
+};
+
+const persistProfileIndexDiskCache = async (profilesDir: string) => {
+  if (
+    profileIndexDiskCache.dir !== profilesDir ||
+    !profileIndexDiskCache.data ||
+    !profileIndexDiskCache.dirty
+  ) {
+    return;
+  }
+  const cachePath = join(profilesDir, PROFILE_INDEX_FILE);
+  try {
+    await writeFile(
+      cachePath,
+      JSON.stringify(profileIndexDiskCache.data, null, 2),
+      "utf-8",
+    );
+    profileIndexDiskCache.dirty = false;
+  } catch {
+    // ignore
+  }
+};
+
 const dumpYaml = (data: Record<string, any>) =>
 
   yaml.dump(data, { lineWidth: 120, sortKeys: false, noRefs: true });
+
+type DefaultProfileMap = Partial<
+
+  Record<ProfileKind, Record<string, Record<string, any>>>
+
+>;
+
+const normalizeYamlForCompare = (data: Record<string, any>) =>
+
+  dumpYaml(data).trim();
+
+const isSameProfileData = (
+
+  left: Record<string, any>,
+
+  right: Record<string, any>,
+
+) => normalizeYamlForCompare(left) === normalizeYamlForCompare(right);
+
+const loadDefaultProfiles = async (
+
+  defaultsRoot: string,
+
+): Promise<DefaultProfileMap> => {
+
+  const defaults: DefaultProfileMap = {};
+
+  for (const kind of PROFILE_KINDS) {
+
+    const dir = join(defaultsRoot, kind);
+
+    if (!existsSync(dir)) continue;
+
+    const files = await readdir(dir).catch(() => []);
+
+    for (const file of files) {
+
+      const ext = extname(file).toLowerCase();
+
+      if (ext !== ".yaml" && ext !== ".yml") continue;
+
+      const fullPath = join(dir, file);
+
+      const raw = await readFile(fullPath, "utf-8").catch(() => null);
+
+      if (!raw) continue;
+
+      const data = safeLoadYaml(raw);
+
+      if (!data) continue;
+
+      const id = String(data.id || basename(file, ext));
+
+      defaults[kind] = defaults[kind] || {};
+
+      (defaults[kind] as Record<string, Record<string, any>>)[id] = data;
+
+    }
+
+  }
+
+  return defaults;
+
+};
 
 const patchAndPruneProfiles = async (
 
   kind: ProfileKind,
 
   profilesDir: string,
+
+  defaults?: DefaultProfileMap,
 
 ) => {
 
@@ -570,6 +771,7 @@ const patchAndPruneProfiles = async (
   const dir = join(profilesDir, kind);
 
   const files = await readdir(dir).catch(() => []);
+  const seenIds = new Map<string, { path: string; canonical: boolean }>();
 
   for (const file of files) {
 
@@ -588,8 +790,33 @@ const patchAndPruneProfiles = async (
     if (!data) continue;
 
     const id = String(data.id || basename(file, ext));
+    const canonical = basename(file, ext) === id;
+    const existing = seenIds.get(id);
+    if (existing) {
+      if (existing.canonical) {
+        await unlink(fullPath).catch(() => null);
+        continue;
+      }
+      if (canonical) {
+        await unlink(existing.path).catch(() => null);
+        seenIds.set(id, { path: fullPath, canonical });
+      } else {
+        await unlink(fullPath).catch(() => null);
+        continue;
+      }
+    } else {
+      seenIds.set(id, { path: fullPath, canonical });
+    }
 
-    if (removeIds?.has(id)) {
+    const defaultData = defaults?.[kind]?.[id];
+
+    const isDefaultProfile = defaultData
+
+      ? isSameProfileData(defaultData, data)
+
+      : false;
+
+    if (removeIds?.has(id) && isDefaultProfile) {
 
       await unlink(fullPath).catch(() => null);
 
@@ -603,7 +830,7 @@ const patchAndPruneProfiles = async (
 
     const patchEntry = renameMap?.[id];
 
-    if (patchEntry) {
+    if (patchEntry && isDefaultProfile) {
 
       const currentName = String(nextData.name || "").trim();
 
@@ -631,7 +858,7 @@ const patchAndPruneProfiles = async (
 
     }
 
-    if (kind === "policy" && id === "line_tolerant") {
+    if (isDefaultProfile && kind === "policy" && id === "line_tolerant") {
 
       const currentName = String(nextData.name || "").trim();
 
@@ -715,7 +942,7 @@ const patchAndPruneProfiles = async (
 
     }
 
-    if (kind === "prompt" && id === PROMPT_DEFAULT_PATCH.id) {
+    if (isDefaultProfile && kind === "prompt" && id === PROMPT_DEFAULT_PATCH.id) {
 
       const currentName = String(nextData.name || "").trim();
 
@@ -899,6 +1126,8 @@ const ensureLocalProfiles = async (
 
   if (!existsSync(defaultsRoot)) return;
 
+  const defaultProfiles = await loadDefaultProfiles(defaultsRoot);
+
   for (const kind of PROFILE_KINDS) {
 
     const sourceDir = join(defaultsRoot, kind);
@@ -923,15 +1152,15 @@ const ensureLocalProfiles = async (
 
   }
 
-  await patchAndPruneProfiles("api", profilesDir);
+  await patchAndPruneProfiles("api", profilesDir, defaultProfiles);
 
-  await patchAndPruneProfiles("prompt", profilesDir);
+  await patchAndPruneProfiles("prompt", profilesDir, defaultProfiles);
 
-  await patchAndPruneProfiles("pipeline", profilesDir);
+  await patchAndPruneProfiles("pipeline", profilesDir, defaultProfiles);
 
-  await patchAndPruneProfiles("policy", profilesDir);
+  await patchAndPruneProfiles("policy", profilesDir, defaultProfiles);
 
-  await patchAndPruneProfiles("chunk", profilesDir);
+  await patchAndPruneProfiles("chunk", profilesDir, defaultProfiles);
 
 };
 
@@ -948,6 +1177,13 @@ const listProfileRefsLocal = async (
   const files = (await readdir(dir).catch(() => [])).sort();
 
   const result: LocalProfileRef[] = [];
+  const seenIds = new Set<string>();
+  const fileSet = new Set<string>();
+  const diskFileSet = new Set<string>();
+  const diskCache = await loadProfileIndexDiskCache(profilesDir);
+  const kindDiskCache = diskCache.kinds[kind] || {};
+  const nextKindDiskCache: Record<string, ProfileFileMeta> = { ...kindDiskCache };
+  let diskCacheChanged = false;
 
   for (const file of files) {
 
@@ -956,31 +1192,127 @@ const listProfileRefsLocal = async (
     if (ext !== ".yaml" && ext !== ".yml") continue;
 
     const fullPath = join(dir, file);
+    fileSet.add(fullPath);
+    diskFileSet.add(file);
 
     const fallbackId = basename(file, ext);
+    if (!isSafeProfileId(fallbackId)) {
+      continue;
+    }
 
     let id = fallbackId;
 
     let name = fallbackId;
+    let chunkType: "" | "line" | "legacy" = "";
 
-    try {
+    const metaStat = await stat(fullPath).catch(() => null);
+    if (!metaStat) continue;
+    const cachedMeta = profileFileMetaCache.get(fullPath);
+    const diskMeta = kindDiskCache[file];
+    if (cachedMeta && cachedMeta.mtimeMs === metaStat.mtimeMs) {
+      id = cachedMeta.id;
+      name = cachedMeta.name;
+      if (kind === "chunk" && cachedMeta.chunkType) {
+        chunkType = cachedMeta.chunkType;
+      }
+      if (
+        !diskMeta ||
+        diskMeta.mtimeMs !== metaStat.mtimeMs ||
+        diskMeta.id !== id ||
+        diskMeta.name !== name
+      ) {
+        nextKindDiskCache[file] = {
+          mtimeMs: metaStat.mtimeMs,
+          id,
+          name,
+          chunkType: kind === "chunk" ? chunkType : undefined,
+        };
+        diskCacheChanged = true;
+      }
+    } else if (diskMeta && diskMeta.mtimeMs === metaStat.mtimeMs) {
+      id = diskMeta.id;
+      name = diskMeta.name;
+      if (kind === "chunk" && diskMeta.chunkType) {
+        chunkType = diskMeta.chunkType;
+      }
+      profileFileMetaCache.set(fullPath, {
+        mtimeMs: metaStat.mtimeMs,
+        id,
+        name,
+        chunkType: kind === "chunk" ? chunkType : undefined,
+      });
+    } else {
+      try {
 
-      const raw = await readFile(fullPath, "utf-8");
+        const raw = await readFile(fullPath, "utf-8");
 
-      const data = safeLoadYaml(raw);
+        const data = safeLoadYaml(raw);
 
-      if (data?.id) id = String(data.id);
+        if (data?.id) {
+          const candidate = String(data.id);
+          if (isSafeProfileId(candidate)) {
+            id = candidate;
+          }
+        }
 
-      if (data?.name) name = String(data.name);
+        if (data?.name) name = String(data.name);
+        if (kind === "chunk") {
+          const rawChunkType = String(data?.chunk_type || data?.type || "")
+            .trim()
+            .toLowerCase();
+          if (rawChunkType === "line" || rawChunkType === "legacy") {
+            chunkType = rawChunkType;
+          }
+        }
 
-    } catch {
+      } catch {
 
-      // ignore read errors
+        // ignore read errors
 
+      }
+      profileFileMetaCache.set(fullPath, {
+        mtimeMs: metaStat.mtimeMs,
+        id,
+        name,
+        chunkType: kind === "chunk" ? chunkType : undefined,
+      });
+      nextKindDiskCache[file] = {
+        mtimeMs: metaStat.mtimeMs,
+        id,
+        name,
+        chunkType: kind === "chunk" ? chunkType : undefined,
+      };
+      diskCacheChanged = true;
     }
 
-    result.push({ id, name, filename: file, path: fullPath });
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
 
+    result.push({
+      id,
+      name,
+      filename: file,
+      path: fullPath,
+      chunkType: kind === "chunk" ? chunkType : undefined,
+    });
+
+  }
+
+  for (const key of Array.from(profileFileMetaCache.keys())) {
+    if (key.startsWith(dir) && !fileSet.has(key)) {
+      profileFileMetaCache.delete(key);
+    }
+  }
+  for (const key of Object.keys(nextKindDiskCache)) {
+    if (!diskFileSet.has(key)) {
+      delete nextKindDiskCache[key];
+      diskCacheChanged = true;
+    }
+  }
+  if (diskCacheChanged) {
+    diskCache.kinds[kind] = nextKindDiskCache;
+    profileIndexDiskCache.dirty = true;
+    await persistProfileIndexDiskCache(profilesDir);
   }
 
   return result;
@@ -997,29 +1329,30 @@ const resolveProfilePathLocal = async (
 
 ): Promise<string | null> => {
 
-  if (!ref) return null;
+  const trimmed = String(ref || "").trim();
+  if (!trimmed) return null;
 
-  if (existsSync(ref)) return ref;
-
-  if (ref.endsWith(".yaml") || ref.endsWith(".yml")) {
-
-    const direct = join(profilesDir, kind, ref);
-
-    if (existsSync(direct)) return direct;
-
+  if (existsSync(trimmed)) {
+    return isPathWithin(profilesDir, trimmed) ? trimmed : null;
   }
 
-  const directYaml = join(profilesDir, kind, `${ref}.yaml`);
+  if (trimmed.endsWith(".yaml") || trimmed.endsWith(".yml")) {
+    if (!isSafeYamlFilename(trimmed)) return null;
+    const direct = join(profilesDir, kind, trimmed);
+    if (existsSync(direct)) return direct;
+  }
 
+  if (!isSafeProfileId(trimmed)) return null;
+
+  const directYaml = join(profilesDir, kind, `${trimmed}.yaml`);
   if (existsSync(directYaml)) return directYaml;
 
-  const directYml = join(profilesDir, kind, `${ref}.yml`);
-
+  const directYml = join(profilesDir, kind, `${trimmed}.yml`);
   if (existsSync(directYml)) return directYml;
 
   const refs = await listProfileRefsLocal(kind, profilesDir);
 
-  const matched = refs.find((item) => item.id === ref);
+  const matched = refs.find((item) => item.id === trimmed);
 
   return matched ? matched.path : null;
 
@@ -1043,7 +1376,9 @@ const loadProfileLocal = async (
 
   const data = safeLoadYaml(raw) || {};
 
-  const id = String(data.id || basename(path, extname(path)));
+  const fallbackId = basename(path, extname(path));
+  const rawId = String(data.id || "").trim();
+  const id = isSafeProfileId(rawId) ? rawId : fallbackId;
 
   const name = String(data.name || id);
 
@@ -1067,7 +1402,14 @@ const saveProfileLocal = async (
 
   if (!parsed) return { ok: false, error: "invalid_yaml" };
 
-  if (!parsed.id) parsed.id = ref;
+  const fallbackRef = ref.endsWith(".yaml") || ref.endsWith(".yml")
+    ? basename(ref, extname(ref))
+    : ref;
+  const rawId = String(parsed.id || fallbackRef || "").trim();
+  if (!isSafeProfileId(rawId)) {
+    return { ok: false, error: "invalid_id" };
+  }
+  parsed.id = rawId;
 
   const validation = await validateProfileLocal(kind, parsed, profilesDir);
 
@@ -1080,6 +1422,25 @@ const saveProfileLocal = async (
   const target = join(profilesDir, kind, `${parsed.id}.yaml`);
 
   await writeFile(target, dumpYaml(parsed), "utf-8");
+  const metaStat = await stat(target).catch(() => null);
+  if (metaStat) {
+    const id = String(parsed.id);
+    const name = String(parsed.name || parsed.id);
+    profileFileMetaCache.set(target, { mtimeMs: metaStat.mtimeMs, id, name });
+    const diskCache = await loadProfileIndexDiskCache(profilesDir);
+    profileIndexDiskCache.data = buildNextProfileIndexCache(
+      diskCache,
+      kind,
+      basename(target),
+      {
+        mtimeMs: metaStat.mtimeMs,
+        id,
+        name,
+      },
+    );
+    profileIndexDiskCache.dirty = true;
+    await persistProfileIndexDiskCache(profilesDir);
+  }
 
   return {
 
@@ -1333,12 +1694,45 @@ const deleteProfileLocal = async (
 
 ) => {
 
-  const path = await resolveProfilePathLocal(kind, ref, profilesDir);
+  const trimmed = String(ref || "").trim();
+  if (!trimmed) return { ok: false, error: "invalid_id" };
+  const validRef =
+    isSafeProfileId(trimmed) ||
+    isSafeYamlFilename(trimmed) ||
+    (existsSync(trimmed) && isPathWithin(profilesDir, trimmed));
+  if (!validRef) return { ok: false, error: "invalid_id" };
+
+  const path = await resolveProfilePathLocal(kind, trimmed, profilesDir);
 
   if (path && existsSync(path)) {
-
     await unlink(path).catch(() => null);
-
+    profileFileMetaCache.delete(path);
+    const diskCache = await loadProfileIndexDiskCache(profilesDir);
+    profileIndexDiskCache.data = buildNextProfileIndexCache(
+      diskCache,
+      kind,
+      basename(path),
+      null,
+    );
+    profileIndexDiskCache.dirty = true;
+    await persistProfileIndexDiskCache(profilesDir);
+  } else {
+    const diskCache = await loadProfileIndexDiskCache(profilesDir);
+    const kindCache = diskCache.kinds[kind] || {};
+    const hit = Object.entries(kindCache).find(
+      ([, meta]) => meta.id === trimmed,
+    );
+    if (hit) {
+      const [filename] = hit;
+      profileIndexDiskCache.data = buildNextProfileIndexCache(
+        diskCache,
+        kind,
+        filename,
+        null,
+      );
+      profileIndexDiskCache.dirty = true;
+      await persistProfileIndexDiskCache(profilesDir);
+    }
   }
 
   return { ok: true };
@@ -1493,6 +1887,10 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
         filename: item.filename,
 
+        ...(kind === "chunk" && item.chunkType
+          ? { chunk_type: item.chunkType }
+          : {}),
+
       }));
 
     },
@@ -1534,6 +1932,66 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
       const localDir = await ensureLocalDir();
 
       return await loadProfileLocal(kind, id, localDir);
+
+    },
+
+  );
+
+  ipcMain.handle(
+
+    "pipelinev2-profiles-load-batch",
+
+    async (_event, kind: ProfileKind, ids: string[]) => {
+
+      if (!PROFILE_KINDS.includes(kind)) return [];
+
+      const list = Array.isArray(ids)
+        ? ids.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      const uniqueIds = Array.from(new Set(list));
+      if (!uniqueIds.length) return [];
+
+      const baseUrl = await ensureServer();
+      let localDir: string | null = null;
+      const ensureLocalDirOnce = async () => {
+        if (!localDir) localDir = await ensureLocalDir();
+        return localDir;
+      };
+      let serverOk = false;
+      let errorMessage: string | null = null;
+
+      const entries = await Promise.all(
+        uniqueIds.map(async (id) => {
+          if (baseUrl) {
+            try {
+              const result = await requestJson(
+                baseUrl,
+                `/profiles/${kind}/${id}`,
+              );
+              if (result.ok) {
+                serverOk = true;
+                return { id, result: result.data };
+              }
+            } catch (error: any) {
+              if (!errorMessage) {
+                errorMessage = error?.message || "fetch_failed";
+              }
+            }
+          }
+          const dir = await ensureLocalDirOnce();
+          return { id, result: await loadProfileLocal(kind, id, dir) };
+        }),
+      );
+
+      if (baseUrl) {
+        if (serverOk) {
+          markPipelineV2ServerOk();
+        } else if (errorMessage) {
+          markPipelineV2Local("fetch_failed", errorMessage);
+        }
+      }
+
+      return entries;
 
     },
 
@@ -1723,4 +2181,8 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
   );
 
+};
+
+export const __testOnly = {
+  buildNextProfileIndexCache,
 };
