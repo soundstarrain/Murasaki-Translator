@@ -25,6 +25,7 @@ const DEFAULT_API_FORM = {
 
 const formatErrorCode = (code: string, texts: any) => {
   if (code === "invalid_yaml") return texts.validationInvalidYaml;
+  if (code === "invalid_id") return texts.validationInvalidId;
   if (code === "missing_id") return texts.missingId;
   if (code.startsWith("missing_field:")) {
     const field = code.split(":")[1] || "";
@@ -35,6 +36,15 @@ const formatErrorCode = (code: string, texts: any) => {
   if (code === "missing_members") return texts.validationMissingMembers;
   if (code === "missing_pattern") return texts.validationMissingPattern;
   if (code === "missing_json_path") return texts.validationMissingJsonPath;
+  if (code === "invalid_timeout") return texts.validationInvalidTimeout;
+  if (code.startsWith("profile_exists")) {
+    const id = code.split(":")[1] || "";
+    if (id) return texts.validationProfileExists.replace("{id}", id);
+    return texts.validationProfileExists
+      .replace("{id}", "")
+      .replace(/[:：]\s*$/, "")
+      .trim();
+  }
   if (code.startsWith("unsupported_type:")) {
     const type = code.split(":")[1] || "";
     return texts.validationInvalidType.replace("{type}", type);

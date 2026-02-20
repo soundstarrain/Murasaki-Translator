@@ -1,8 +1,9 @@
-export type ChunkType = "legacy" | "line";
+export type ChunkType = "block" | "line";
 
-export const normalizeChunkType = (value: unknown): ChunkType => {
-  if (typeof value !== "string") return "legacy";
+export const normalizeChunkType = (value: unknown): ChunkType | "" => {
+  if (typeof value !== "string") return "";
   const normalized = value.trim().toLowerCase();
   if (normalized === "line") return "line";
-  return "legacy";
+  if (normalized === "block" || normalized === "legacy") return "block";
+  return "";
 };

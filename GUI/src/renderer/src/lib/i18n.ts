@@ -799,8 +799,17 @@ export const translations = {
       deleteOk: "已删除",
       deleteFail: "删除失败",
       defaultPresetDeleteFail: "默认预设无法删除",
+      unsavedChangesTitle: "有未保存的更改",
+      unsavedChangesDesc: "当前更改尚未保存，确定要离开吗？",
+      jsonParseErrorTitle: "JSON 解析失败",
+      jsonParseErrorDesc: "{field} 不是有效的 JSON 对象，已暂时保留上一次有效内容。",
+      referenceUpdateTitle: "引用已更新",
+      referenceUpdateDesc: "已同步更新 {count} 个 Pipeline 引用",
+      referenceUpdateMissingTitle: "引用待处理",
+      referenceUpdateMissingDesc: "未找到可替换的配置，部分 Pipeline 需要手动调整。",
       pipelineCardEdit: "编辑方案",
       pipelineCardActive: "当前使用中",
+      quickEdit: "前往编辑",
       unknownError: "未知错误",
       missingId: "YAML 缺少 id",
       emptyYaml: "YAML 不能为空",
@@ -848,7 +857,15 @@ export const translations = {
       validationLinePolicyRequiresLineChunk: "分行策略启用时需要分行策略配置",
       validationLineChunkNoPolicy: "分行策略未配置行策略",
       validationInvalidConcurrency: "并发必须为大于等于 0 的整数（0 为自动）",
+      validationInvalidMaxRetries: "最大重试次数必须为大于等于 0 的整数",
       validationInvalidRpm: "RPM 必须为大于等于 1 的整数",
+      validationInvalidTimeout: "超时必须为大于 0 的数值",
+      validationInvalidTargetChars: "目标字数必须为大于 0 的数值",
+      validationInvalidMaxChars: "最大字数必须为大于 0 且不小于目标字数的数值",
+      validationInvalidBalanceThreshold: "平衡阈值必须为 0~1 之间的数值",
+      validationInvalidBalanceCount: "平衡次数必须为大于等于 1 的整数",
+      validationInvalidSimilarityThreshold: "相似度阈值必须为 0~1 之间的数值",
+      validationProfileExists: "ID 已存在: {id}",
       validationPromptMissingSource: "提示词缺少 {{source}} 占位符",
       validationParserTaggedMismatch: "标签解析器需要提示词包含标签格式",
       validationParserJsonMismatch: "JSON 解析器需要提示词声明 JSON 输出",
@@ -864,33 +881,18 @@ export const translations = {
       strategyKindTitle: "分段策略",
       scheme: {
         title: "方案选择",
-        desc: "创建新的API翻译方案",
+        desc: "选择分段策略，接口/提示词/解析器在各自配置中管理",
         fields: {
           provider: "接口",
           prompt: "提示词",
-          parser: "解析器",
-          linePolicy: "分行策略",
-          chunkPolicy: "分块策略",
           strategy: "分段策略",
+          parser: "解析器",
         },
         placeholders: {
-          provider: "选择接口",
-          prompt: "选择提示词",
-          parser: "选择解析器",
-          linePolicy: "选择分行策略",
-          chunkPolicy: "选择分块策略",
           strategy: "选择分段策略",
         },
         actions: {
-          editApi: "编辑接口",
-          editPrompt: "编辑提示词",
-          editParser: "编辑解析器",
-          editLinePolicy: "编辑分行策略",
-          editChunkPolicy: "编辑分块策略",
           editStrategy: "编辑分段",
-        },
-        hints: {
-          linePolicyOptional: "分块策略时分行策略可选；分行策略时必填",
         },
       },
       kindHelper: {
@@ -905,24 +907,6 @@ export const translations = {
       modeApi: "API 配置",
       modeAdvanced: "流程与高级",
       modeLabel: "配置模式",
-      status: {
-        title: "运行状态",
-        serverLabel: "在线模式",
-        localLabel: "本地模式",
-        serverDesc: "在线校验可用，保存会进行校验。",
-        localDesc: "服务不可用，已切换为本地文件保存。",
-        actionRetry: "重试启动",
-        actionRetrying: "重试中...",
-        actionDetails: "查看诊断",
-        actionHide: "收起诊断",
-        actionOpenDir: "打开配置目录",
-        detailTitle: "诊断信息",
-        detailError: "错误类型",
-        detailMessage: "错误详情",
-        detailHint: "请检查 Python 环境与依赖后重试。",
-        detailUnknown: "未知",
-        detailEmpty: "暂无诊断信息。",
-      },
       heroBadge: "可组合流程",
       statsApi: "API 配置",
       statsApiHint: "已登记",
@@ -1167,6 +1151,7 @@ export const translations = {
       modelListEmpty: "未返回模型列表",
       modelListSelectLabel: "选择模型",
       modelListSelectPlaceholder: "从列表中选择",
+      modelListUnsupported: "当前接口不支持模型列表",
       modelHintCombined: "请填写请求的模型标识，读取模型列表可能需要鉴权通过。",
       modelListFailFallback:
         "获取模型列表失败，请检查 API Key、base_url 与 /models 支持情况",
@@ -1268,14 +1253,15 @@ export const translations = {
       promptHints: {
         variables:
           "可用变量：{{source}} {{context_before}} {{context_after}} {{glossary}}",
-        context: "行模式可设置上下文行数与 Source 行数；块模式可保持为 0",
-        sourceFormat: "声明模型输入格式，影响解析器一致性校验",
+        context: "分行模式可设置上下文行数与 Source 行数；分块模式可保持为 0",
+        sourceFormat: "声明模型输入格式，目前仅 JSONL 会影响解析器一致性校验",
       },
       promptOptions: {
         sourceFormat: {
           auto: "自动",
           jsonl: "JSONL",
           plain: "纯文本",
+          custom: "自定义: {value}",
           jsonObject: "JSON Object",
           jsonArray: "JSON Array",
           taggedLine: "Tagged Line",
@@ -1307,7 +1293,7 @@ export const translations = {
       promptPreviewLineIndexPlaceholder: "例如 0",
       promptPreviewLineIndexHintLine:
         "用于 {{line_index}} / {{line_number}}，对应示例源文本的首行",
-      promptPreviewLineIndexHintBlock: "块模式不使用行索引，可留空",
+      promptPreviewLineIndexHintBlock: "分块模式不使用行索引，可留空",
       promptPreviewContextBeforeLabel: "示例上文",
       promptPreviewContextBeforePlaceholder: "上文内容（可多行）",
       promptPreviewContextAfterLabel: "示例下文",
@@ -1375,7 +1361,7 @@ export const translations = {
         nameLabel: "名称",
         lineStrictLabel: "严格行",
         keepEmptyLabel: "保留空行",
-        legacyModeLabel: "文档模式",
+        legacyModeLabel: "分块模式",
         targetCharsLabel: "目标字符数",
         maxCharsLabel: "最大字符数",
         enableBalanceLabel: "尾部平衡",
@@ -1385,15 +1371,15 @@ export const translations = {
       chunkOptions: {
         line: "分行策略",
         legacy: "分块策略",
-        modeDoc: "文档",
-        modeLine: "段内逐行",
+        modeDoc: "分块",
+        modeLine: "分块内逐行",
       },
       chunkHints: {
         line: "每行作为独立块",
         legacy: "按长度与标点分块",
         lineStrict: "保持每行一块",
         keepEmpty: "空行也进入输出",
-        legacyMode: "文档模式按标点和长度分段；段内逐行保持行边界",
+        legacyMode: "分块按标点和长度分段",
         targetChars: "建议 800-1500",
         maxChars: "超过将强制切分",
         enableBalance: "平衡尾部块大小",
@@ -1406,7 +1392,7 @@ export const translations = {
       },
       translationModeOptions: {
         line: "按行翻译",
-        block: "按块翻译",
+        block: "按分块翻译",
       },
       apiTypeOptions: {
         openai: "单接口（OpenAI 兼容）",
@@ -1494,7 +1480,7 @@ export const translations = {
       templatesToggleShow: "展开模板",
       templatesToggleHide: "收起模板",
       templateGroups: {
-        line: "行模式",
+        line: "分行模式",
         json: "JSON",
         tagged: "标记",
         regex: "正则",
@@ -1502,19 +1488,19 @@ export const translations = {
       },
       templateItems: {
         prompt_jsonl_line: {
-          title: "行模式·JSONL",
+          title: "分行模式·JSONL",
           desc: "逐行 JSONL 对齐输出",
         },
         prompt_plain_line: {
-          title: "行模式·纯文本",
+          title: "分行模式·纯文本",
           desc: "逐行输出译文，不使用 JSONL",
         },
         prompt_block_plain: {
-          title: "块模式·段落翻译",
+          title: "分块模式·段落翻译",
           desc: "整段翻译，source_format=plain",
         },
         prompt_glossary_focus: {
-          title: "行模式·术语优先",
+          title: "分行模式·术语优先",
           desc: "严格优先使用术语表",
         },
         parser_jsonl_object: {
@@ -1553,7 +1539,7 @@ export const translations = {
         chunk_legacy_doc: "默认分块策略",
         chunk_line_default: "默认分行策略",
         line_tolerant: "默认行配置",
-        prompt_block_plain: "块模式提示词",
+        prompt_block_plain: "分块模式提示词",
       },
       previewTitle: "配置预览",
       previewDesc: "解析当前 YAML 并展示关键字段",
@@ -1677,14 +1663,14 @@ export const translations = {
           autoLayout: "自动布局",
           fitView: "适配视图",
         },
-        modeDesc: "先选择按行或按块，再配置对应策略",
+        modeDesc: "先选择分行或分块，再配置对应策略",
         modeOptions: {
-          line: "行模式",
-          block: "块模式",
+          line: "分行模式",
+          block: "分块模式",
         },
         modeHints: {
-          line: "逐行输入输出，适合字幕/对话",
-          block: "整块输出，适合段落/文档",
+          line: "分行输入输出，适合字幕/对话",
+          block: "分块输出，适合段落/文档",
         },
         nodes: {
           provider: "接口",
@@ -1730,7 +1716,7 @@ export const translations = {
           linePolicy: "选择行策略",
           chunkPolicy: "选择分块策略",
           chunkPolicyLine: "选择行分块策略",
-          chunkPolicyBlock: "选择文档分块策略",
+          chunkPolicyBlock: "选择分块策略",
           temperature: "0.3",
           maxRetries: "2",
           concurrency: "1",
@@ -1747,15 +1733,16 @@ export const translations = {
         },
         hints: {
           linePolicy: "决定行数不一致时的处理方式",
+          applyLinePolicy: "关闭后仅保留分块，不执行行策略校验",
           chunkPolicyLine: "控制逐行切分与空行保留",
-          chunkPolicyBlock: "控制文档分块大小与策略",
-          concurrency: "并发请求数，越高越占用资源",
+          chunkPolicyBlock: "控制分块大小与策略",
+          concurrency: "留空继承 API 配置；并发请求数越高越占用资源",
           modelOverride: "仅在需要强制指定模型时使用",
-          timeout: "请求超时秒数，过低会导致失败",
+          timeout: "留空继承 API 配置；超时过低会导致失败",
           modeMismatchLine:
-            "当前分块策略为文档模式，建议切换为行分块或改用块模式。",
+            "当前分块策略为分块模式，建议切换为分行分块或改用分行模式。",
           modeMismatchBlock:
-            "当前分块策略为行模式，建议切换为文档分块或改用行模式。",
+            "当前分块策略为分行模式，建议切换为分块策略或改用分块模式。",
         },
         sections: {
           samplingTitle: "采样参数",
@@ -2011,8 +1998,8 @@ export const translations = {
       regexMode: "正则模式",
       findReplace: "查找/替换",
       onlyWarnings: "仅显示警告",
-      lineModeHint: "行模式",
-      blockModeHint: "块模式",
+      lineModeHint: "分行模式",
+      blockModeHint: "分块模式",
       sourceTitle: "原文",
       targetTitle: "译文",
       emptyContent: "暂无内容",
@@ -3687,8 +3674,19 @@ export const translations = {
       deleteOk: "Deleted",
       deleteFail: "Delete Failed",
       defaultPresetDeleteFail: "Default presets cannot be deleted",
+      unsavedChangesTitle: "Unsaved changes",
+      unsavedChangesDesc: "You have unsaved changes. Are you sure you want to leave?",
+      jsonParseErrorTitle: "Invalid JSON",
+      jsonParseErrorDesc:
+        "{field} is not a valid JSON object. Using the last valid value for now.",
+      referenceUpdateTitle: "References updated",
+      referenceUpdateDesc: "Updated {count} pipeline references.",
+      referenceUpdateMissingTitle: "References need review",
+      referenceUpdateMissingDesc:
+        "No replacement profile found. Some pipelines need manual updates.",
       pipelineCardEdit: "Edit Scheme",
       pipelineCardActive: "Active",
+      quickEdit: "Edit",
       unknownError: "Unknown error",
       missingId: "YAML missing id",
       emptyYaml: "YAML is empty",
@@ -3738,7 +3736,20 @@ export const translations = {
       validationLineChunkNoPolicy:
         "Line strategy has no line policy configured",
       validationInvalidConcurrency: "Concurrency must be an integer >= 0 (0 = auto)",
+      validationInvalidMaxRetries: "Max retries must be an integer greater than or equal to 0",
       validationInvalidRpm: "RPM must be an integer >= 1",
+      validationInvalidTimeout: "Timeout must be a number greater than 0",
+      validationInvalidTargetChars:
+        "Target chars must be a number greater than 0",
+      validationInvalidMaxChars:
+        "Max chars must be a number greater than 0 and not less than target chars",
+      validationInvalidBalanceThreshold:
+        "Balance threshold must be a number between 0 and 1",
+      validationInvalidBalanceCount:
+        "Balance count must be an integer greater than or equal to 1",
+      validationInvalidSimilarityThreshold:
+        "Similarity threshold must be a number between 0 and 1",
+      validationProfileExists: "ID already exists: {id}",
       validationPromptMissingSource: "Prompt is missing {{source}} placeholder",
       validationParserTaggedMismatch:
         "Tagged parser requires tagged output in prompt",
@@ -3757,33 +3768,18 @@ export const translations = {
       strategyKindTitle: "Segmentation",
       scheme: {
         title: "Scheme Selection",
-        desc: "Choose interface, prompt, parser, and segmentation strategy",
+        desc: "Choose a segmentation strategy; interfaces, prompts, and parsers are managed in their own profiles",
         fields: {
           provider: "Interface",
           prompt: "Prompt",
-          parser: "Parser",
-          linePolicy: "Line Strategy",
-          chunkPolicy: "Block Strategy",
           strategy: "Segmentation",
+          parser: "Parser",
         },
         placeholders: {
-          provider: "Select interface",
-          prompt: "Select prompt",
-          parser: "Select parser",
-          linePolicy: "Select line strategy",
-          chunkPolicy: "Select block strategy",
           strategy: "Select segmentation strategy",
         },
         actions: {
-          editApi: "Edit interface",
-          editPrompt: "Edit prompt",
-          editParser: "Edit parser",
-          editLinePolicy: "Edit line strategy",
-          editChunkPolicy: "Edit block strategy",
           editStrategy: "Edit segmentation",
-        },
-        hints: {
-          linePolicyOptional: "Line strategy is optional for block strategy; required for line strategy",
         },
       },
       kindHelper: {
@@ -3798,24 +3794,6 @@ export const translations = {
       modeApi: "API Config",
       modeAdvanced: "Pipeline & Advanced",
       modeLabel: "Mode",
-      status: {
-        title: "Runtime Status",
-        serverLabel: "Online Mode",
-        localLabel: "Local Mode",
-        serverDesc: "Online validation is available on save.",
-        localDesc: "Service unavailable. Using local file mode.",
-        actionRetry: "Retry Start",
-        actionRetrying: "Retrying...",
-        actionDetails: "View Diagnostics",
-        actionHide: "Hide Diagnostics",
-        actionOpenDir: "Open Profiles Folder",
-        detailTitle: "Diagnostics",
-        detailError: "Error Type",
-        detailMessage: "Error Detail",
-        detailHint: "Check Python environment and dependencies, then retry.",
-        detailUnknown: "Unknown",
-        detailEmpty: "No diagnostics available.",
-      },
       heroBadge: "Pipeline",
       statsApi: "API Profiles",
       statsApiHint: "Registered",
@@ -3987,7 +3965,7 @@ export const translations = {
         },
         {
           title: "Pick Segmentation",
-          desc: "Choose line or block strategy",
+          desc: "Choose line or chunk strategy",
           action: "Go to Strategy",
         },
         {
@@ -4069,6 +4047,7 @@ export const translations = {
       modelListEmpty: "No models returned",
       modelListSelectLabel: "Select model",
       modelListSelectPlaceholder: "Pick from list",
+      modelListUnsupported: "Model list is not supported for this provider",
       modelHintCombined:
         "Enter the model id for requests, fetching the model list may require authorization.",
       modelListFailFallback:
@@ -4175,14 +4154,16 @@ export const translations = {
       promptHints: {
         variables:
           "Available variables: {{source}} {{context_before}} {{context_after}} {{glossary}}",
-        context: "Line mode can use context/source lines; block mode can keep 0",
-        sourceFormat: "Declare the model input format to align parser validation",
+        context: "Line mode can use context/source lines; chunk mode can keep 0",
+        sourceFormat:
+          "Declare the model input format. Only JSONL currently affects parser validation.",
       },
       promptOptions: {
         sourceFormat: {
           auto: "Auto",
           jsonl: "JSONL",
           plain: "Plain Text",
+          custom: "Custom: {value}",
           jsonObject: "JSON Object",
           jsonArray: "JSON Array",
           taggedLine: "Tagged Line",
@@ -4216,7 +4197,7 @@ export const translations = {
       promptPreviewLineIndexHintLine:
         "Used for {{line_index}} / {{line_number}}; points to the first line of sample source",
       promptPreviewLineIndexHintBlock:
-        "Block mode does not use line index; leave blank",
+        "Chunk mode does not use line index; leave blank",
       promptPreviewContextBeforeLabel: "Sample Context Before",
       promptPreviewContextBeforePlaceholder: "Context before (multi-line)",
       promptPreviewContextAfterLabel: "Sample Context After",
@@ -4284,7 +4265,7 @@ export const translations = {
         nameLabel: "Name",
         lineStrictLabel: "Strict Lines",
         keepEmptyLabel: "Keep Empty Lines",
-        legacyModeLabel: "Document Mode",
+        legacyModeLabel: "Chunk Mode",
         targetCharsLabel: "Target Chars",
         maxCharsLabel: "Max Chars",
         enableBalanceLabel: "Tail Balance",
@@ -4293,16 +4274,16 @@ export const translations = {
       },
       chunkOptions: {
         line: "Line Strategy",
-        legacy: "Block Strategy",
-        modeDoc: "Document",
-        modeLine: "Line-within-block",
+        legacy: "Chunk Strategy",
+        modeDoc: "Chunk",
+        modeLine: "Line within chunk",
       },
       chunkHints: {
         line: "Each line becomes a block",
         legacy: "Chunk by length and punctuation",
         lineStrict: "Keep each line as a block",
         keepEmpty: "Include empty lines",
-        legacyMode: "Document mode splits by punctuation/length; line mode keeps line boundaries",
+        legacyMode: "Chunk mode splits by punctuation and length",
         targetChars: "Suggested 800-1500",
         maxChars: "Hard split when exceeded",
         enableBalance: "Balance tail blocks",
@@ -4315,7 +4296,7 @@ export const translations = {
       },
       translationModeOptions: {
         line: "Line-based",
-        block: "Block-based",
+        block: "Chunk-based",
       },
       apiTypeOptions: {
         openai: "Single Endpoint (OpenAI Compatible)",
@@ -4420,7 +4401,7 @@ export const translations = {
           desc: "Plain line output without JSONL",
         },
         prompt_block_plain: {
-          title: "Block Paragraph Prompt",
+          title: "Chunk Paragraph Prompt",
           desc: "Paragraph translation (source_format=plain)",
         },
         prompt_glossary_focus: {
@@ -4463,7 +4444,7 @@ export const translations = {
         chunk_legacy_doc: "Default Chunk Strategy",
         chunk_line_default: "Default Line Chunk",
         line_tolerant: "Default Line Config",
-        prompt_block_plain: "Block Prompt",
+        prompt_block_plain: "Chunk Prompt",
       },
       previewTitle: "Profile Preview",
       previewDesc: "Parse current YAML and show key fields",
@@ -4589,14 +4570,14 @@ export const translations = {
           autoLayout: "Auto Layout",
           fitView: "Fit View",
         },
-        modeDesc: "Choose line or block mode, then configure the policies",
+        modeDesc: "Choose line or chunk mode, then configure the policies",
         modeOptions: {
           line: "Line Mode",
-          block: "Block Mode",
+          block: "Chunk Mode",
         },
         modeHints: {
           line: "Line-in/line-out, suited for subtitles or dialog",
-          block: "Block output, suited for paragraphs or documents",
+          block: "Chunked output, suited for paragraphs or documents",
         },
         nodes: {
           provider: "Provider",
@@ -4642,7 +4623,7 @@ export const translations = {
           linePolicy: "Select Line Policy",
           chunkPolicy: "Select Chunk Policy",
           chunkPolicyLine: "Select Line Chunk Policy",
-          chunkPolicyBlock: "Select Document Chunk Policy",
+          chunkPolicyBlock: "Select Chunk Policy",
           temperature: "0.3",
           maxRetries: "2",
           concurrency: "1",
@@ -4659,15 +4640,18 @@ export const translations = {
         },
         hints: {
           linePolicy: "Define how to handle line count mismatches",
+          applyLinePolicy:
+            "When off, only chunking is applied and line policy is skipped.",
           chunkPolicyLine: "Control line chunking and empty line handling",
-          chunkPolicyBlock: "Control block size and chunking strategy",
-          concurrency: "Parallel requests; higher uses more resources",
+          chunkPolicyBlock: "Control chunk size and strategy",
+          concurrency:
+            "Leave empty to inherit API settings; higher concurrency uses more resources.",
           modelOverride: "Use only when you must force a specific model",
-          timeout: "Request timeout in seconds",
+          timeout: "Leave empty to inherit API settings; too low may cause failures.",
           modeMismatchLine:
-            "Selected chunk policy is block mode. Use a line chunk policy or switch to block mode.",
+            "Selected chunk policy is chunk mode. Use a line chunk policy or switch to line mode.",
           modeMismatchBlock:
-            "Selected chunk policy is line mode. Use a document chunk policy or switch to line mode.",
+            "Selected chunk policy is line mode. Use a chunk policy or switch to chunk mode.",
         },
         sections: {
           samplingTitle: "Sampling Params",
@@ -5087,7 +5071,7 @@ export const translations = {
       findReplace: "Find/Replace",
       onlyWarnings: "Only warnings",
       lineModeHint: "Line mode",
-      blockModeHint: "Block mode",
+      blockModeHint: "Chunk mode",
       sourceTitle: "Source",
       targetTitle: "Target",
       emptyContent: "No content",
@@ -6583,8 +6567,19 @@ export const translations = {
       deleteOk: "削除しました",
       deleteFail: "削除に失敗しました",
       defaultPresetDeleteFail: "既定プリセットは削除できません",
+      unsavedChangesTitle: "未保存の変更",
+      unsavedChangesDesc: "変更が保存されていません。移動してもよろしいですか？",
+      jsonParseErrorTitle: "JSON 解析エラー",
+      jsonParseErrorDesc:
+        "{field} は有効な JSON オブジェクトではありません。前回の有効値を一時的に使用します。",
+      referenceUpdateTitle: "参照を更新しました",
+      referenceUpdateDesc: "{count} 件の Pipeline 参照を更新しました。",
+      referenceUpdateMissingTitle: "参照の確認が必要",
+      referenceUpdateMissingDesc:
+        "置き換え対象が見つからず、一部の Pipeline は手動調整が必要です。",
       pipelineCardEdit: "プラン編集",
       pipelineCardActive: "使用中",
+      quickEdit: "編集へ",
       unknownError: "不明なエラー",
       missingId: "YAML に id がありません",
       emptyYaml: "YAML が空です",
@@ -6634,7 +6629,18 @@ export const translations = {
       validationLineChunkNoPolicy:
         "分行戦略に行ポリシーが設定されていません",
       validationInvalidConcurrency: "並列数は 0 以上の整数にしてください（0 は自動）",
+      validationInvalidMaxRetries: "最大再試行回数は 0 以上の整数にしてください",
       validationInvalidRpm: "RPM は 1 以上の整数にしてください",
+      validationInvalidTimeout: "タイムアウトは 0 より大きい数値にしてください",
+      validationInvalidTargetChars: "目標文字数は 0 より大きい数値にしてください",
+      validationInvalidMaxChars:
+        "最大文字数は 0 より大きく、目標文字数以上にしてください",
+      validationInvalidBalanceThreshold:
+        "バランス閾値は 0 〜 1 の数値にしてください",
+      validationInvalidBalanceCount: "バランス回数は 1 以上の整数にしてください",
+      validationInvalidSimilarityThreshold:
+        "類似度閾値は 0 〜 1 の数値にしてください",
+      validationProfileExists: "ID が既に存在します: {id}",
       validationPromptMissingSource: "プロンプトに {{source}} がありません",
       validationParserTaggedMismatch:
         "タグ解析はプロンプトにタグ形式が必要です",
@@ -6653,33 +6659,18 @@ export const translations = {
       strategyKindTitle: "分割戦略",
       scheme: {
         title: "プラン選択",
-        desc: "インターフェース・プロンプト・パーサー・分割戦略を選択",
+        desc: "分割戦略を選択します。API/プロンプト/パーサーは各プロファイルで管理します",
         fields: {
           provider: "インターフェース",
-          prompt: "Prompt",
-          parser: "Parser",
-          linePolicy: "分行戦略",
-          chunkPolicy: "分割戦略",
+          prompt: "プロンプト",
           strategy: "分割戦略",
+          parser: "パーサー",
         },
         placeholders: {
-          provider: "インターフェースを選択",
-          prompt: "プロンプトを選択",
-          parser: "パーサーを選択",
-          linePolicy: "分行戦略を選択",
-          chunkPolicy: "分割戦略を選択",
           strategy: "分割戦略を選択",
         },
         actions: {
-          editApi: "インターフェース編集",
-          editPrompt: "プロンプト編集",
-          editParser: "パーサー編集",
-          editLinePolicy: "分行戦略編集",
-          editChunkPolicy: "分割戦略編集",
           editStrategy: "分割を編集",
-        },
-        hints: {
-          linePolicyOptional: "分割戦略では分行戦略は任意；分行戦略では必須です",
         },
       },
       kindHelper: {
@@ -6694,24 +6685,6 @@ export const translations = {
       modeApi: "API 設定",
       modeAdvanced: "パイプラインと高度",
       modeLabel: "モード",
-      status: {
-        title: "稼働状態",
-        serverLabel: "オンラインモード",
-        localLabel: "ローカルモード",
-        serverDesc: "オンライン検証が利用できます。",
-        localDesc: "サービス未起動。ローカルファイルで保存します。",
-        actionRetry: "再起動を試す",
-        actionRetrying: "再試行中...",
-        actionDetails: "診断を見る",
-        actionHide: "診断を閉じる",
-        actionOpenDir: "設定フォルダを開く",
-        detailTitle: "診断情報",
-        detailError: "エラー種別",
-        detailMessage: "エラー詳細",
-        detailHint: "Python 環境と依存関係を確認して再試行してください。",
-        detailUnknown: "不明",
-        detailEmpty: "診断情報はありません。",
-      },
       heroBadge: "パイプライン",
       statsApi: "API プロファイル",
       statsApiHint: "登録済み",
@@ -6884,7 +6857,7 @@ export const translations = {
         },
         {
           title: "分割戦略",
-          desc: "行/ブロックの方式を選択",
+          desc: "行/分割の方式を選択",
           action: "Strategy へ",
         },
         {
@@ -6964,6 +6937,7 @@ export const translations = {
       modelListEmpty: "モデルが見つかりません",
       modelListSelectLabel: "モデル選択",
       modelListSelectPlaceholder: "一覧から選択",
+      modelListUnsupported: "このプロバイダはモデル一覧に対応していません",
       modelHintCombined:
         "リクエストに使うモデル ID を入力してください、モデル一覧の取得には認証が必要な場合があります。",
       modelListFailFallback:
@@ -7068,14 +7042,16 @@ export const translations = {
       promptHints: {
         variables:
           "利用可能: {{source}} {{context_before}} {{context_after}} {{glossary}}",
-        context: "行モードは文脈/Source 行数を設定、ブロックは 0 でも可",
-        sourceFormat: "モデル入力形式を指定し、パーサー整合チェックに反映します",
+        context: "行モードは文脈/Source 行数を設定、分割は 0 でも可",
+        sourceFormat:
+          "モデル入力形式を指定します。現在は JSONL のみ整合チェックに影響します。",
       },
       promptOptions: {
         sourceFormat: {
           auto: "自動",
           jsonl: "JSONL",
           plain: "プレーンテキスト",
+          custom: "カスタム: {value}",
           jsonObject: "JSON Object",
           jsonArray: "JSON Array",
           taggedLine: "Tagged Line",
@@ -7108,7 +7084,7 @@ export const translations = {
       promptPreviewLineIndexHintLine:
         "{{line_index}} / {{line_number}} 用。サンプル原文の先頭行を指します",
       promptPreviewLineIndexHintBlock:
-        "ブロックモードでは行インデックスを使用しません",
+        "分割モードでは行インデックスを使用しません",
       promptPreviewContextBeforeLabel: "前文の例",
       promptPreviewContextBeforePlaceholder: "前文（複数行可）",
       promptPreviewContextAfterLabel: "後文の例",
@@ -7176,7 +7152,7 @@ export const translations = {
         nameLabel: "名称",
         lineStrictLabel: "行厳格",
         keepEmptyLabel: "空行保持",
-        legacyModeLabel: "文書モード",
+        legacyModeLabel: "分割モード",
         targetCharsLabel: "目標文字数",
         maxCharsLabel: "最大文字数",
         enableBalanceLabel: "末尾バランス",
@@ -7186,15 +7162,15 @@ export const translations = {
       chunkOptions: {
         line: "分行戦略",
         legacy: "分割戦略",
-        modeDoc: "文書",
-        modeLine: "ブロック内行",
+        modeDoc: "分割",
+        modeLine: "分割内の行",
       },
       chunkHints: {
         line: "各行を1ブロック化",
         legacy: "長さと句読点で分割",
         lineStrict: "1行=1ブロックを維持",
         keepEmpty: "空行も保持",
-        legacyMode: "文書モードは句読点と長さで分割；行モードは行境界を維持",
+        legacyMode: "分割モードは句読点と長さで分割",
         targetChars: "推奨 800-1500",
         maxChars: "超過時に強制分割",
         enableBalance: "末尾ブロックの均衡",
@@ -7207,7 +7183,7 @@ export const translations = {
       },
       translationModeOptions: {
         line: "行翻訳",
-        block: "ブロック翻訳",
+        block: "分割翻訳",
       },
       apiTypeOptions: {
         openai: "単一エンドポイント（OpenAI 互換）",
@@ -7314,7 +7290,7 @@ export const translations = {
           desc: "JSONLなしで行単位出力",
         },
         prompt_block_plain: {
-          title: "ブロック・段落翻訳",
+          title: "分割・段落翻訳",
           desc: "段落全体を翻訳（source_format=plain）",
         },
         prompt_glossary_focus: {
@@ -7357,7 +7333,7 @@ export const translations = {
         chunk_legacy_doc: "デフォルト分割",
         chunk_line_default: "デフォルト行分割",
         line_tolerant: "デフォルト行設定",
-        prompt_block_plain: "ブロック翻訳プロンプト",
+        prompt_block_plain: "分割翻訳プロンプト",
       },
       previewTitle: "プレビュー",
       previewDesc: "現在の YAML を解析して主要項目を表示",
@@ -7484,14 +7460,14 @@ export const translations = {
           autoLayout: "自動レイアウト",
           fitView: "全体表示",
         },
-        modeDesc: "行／ブロックを選択してから関連ポリシーを設定",
+        modeDesc: "行／分割を選択してから関連ポリシーを設定",
         modeOptions: {
           line: "行モード",
-          block: "ブロックモード",
+          block: "分割モード",
         },
         modeHints: {
           line: "行ごとに入出力。字幕や会話向き",
-          block: "段落単位で出力。文書向き",
+          block: "分割出力。段落や文書向き",
         },
         nodes: {
           provider: "Provider",
@@ -7537,7 +7513,7 @@ export const translations = {
           linePolicy: "Line Policy を選択",
           chunkPolicy: "Chunk Policy を選択",
           chunkPolicyLine: "行分割ポリシーを選択",
-          chunkPolicyBlock: "文書分割ポリシーを選択",
+          chunkPolicyBlock: "分割ポリシーを選択",
           temperature: "0.3",
           maxRetries: "2",
           concurrency: "1",
@@ -7554,15 +7530,19 @@ export const translations = {
         },
         hints: {
           linePolicy: "行数不一致時の扱いを定義",
+          applyLinePolicy:
+            "オフにすると分割のみ適用され、行ポリシー検証は実行されません",
           chunkPolicyLine: "行分割と空行の扱いを制御",
-          chunkPolicyBlock: "文書分割サイズと戦略を制御",
-          concurrency: "並列数。高いほどリソース消費が増えます",
+          chunkPolicyBlock: "分割サイズと戦略を制御",
+          concurrency:
+            "空欄の場合は API 設定を継承します。並列数が高いほどリソース消費が増えます",
           modelOverride: "特定モデルを強制する場合のみ使用",
-          timeout: "リクエストのタイムアウト秒数",
+          timeout:
+            "空欄の場合は API 設定を継承します。短すぎると失敗する可能性があります",
           modeMismatchLine:
-            "選択した分割ポリシーは文書モードです。行分割ポリシーに切替えるか、ブロックモードに変更してください。",
+            "選択した分割ポリシーは分割モードです。行分割ポリシーに切替えるか、行モードに変更してください。",
           modeMismatchBlock:
-            "選択した分割ポリシーは行モードです。文書分割ポリシーに切替えるか、行モードに変更してください。",
+            "選択した分割ポリシーは行モードです。分割ポリシーに切替えるか、分割モードに変更してください。",
         },
         sections: {
           samplingTitle: "サンプリング設定",
@@ -7824,7 +7804,7 @@ export const translations = {
       findReplace: "検索/置換",
       onlyWarnings: "警告のみ",
       lineModeHint: "行モード",
-      blockModeHint: "ブロックモード",
+      blockModeHint: "分割モード",
       sourceTitle: "原文",
       targetTitle: "訳文",
       emptyContent: "内容なし",

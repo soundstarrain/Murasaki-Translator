@@ -58,6 +58,14 @@ const safeLoadYaml = (raw: string): Record<string, any> | null => {
   }
 };
 
+const normalizeChunkType = (value: unknown): "block" | "line" | "" => {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "line") return "line";
+  if (normalized === "block" || normalized === "legacy") return "block";
+  return "";
+};
+
 const listProfileFiles = async (dir: string) =>
   (await readdir(dir).catch(() => [])).filter(
     (name) =>
@@ -224,6 +232,12 @@ export const validateProfileLocal = async (
         result.errors.push("invalid_rpm");
       }
     }
+    if (data.timeout !== undefined && data.timeout !== null && data.timeout !== "") {
+      const timeoutValue = Number(data.timeout);
+      if (!Number.isFinite(timeoutValue) || timeoutValue <= 0) {
+        result.errors.push("invalid_timeout");
+      }
+    }
   }
 
   if (kind === "parser") {
@@ -261,13 +275,69 @@ export const validateProfileLocal = async (
     if (policyType && !["strict", "tolerant"].includes(policyType)) {
       result.warnings.push(`unsupported_type:${policyType}`);
     }
+    const options = data.options || {};
+    const similarityRaw =
+      options.similarity_threshold ?? options.similarity ?? options.similarityThreshold;
+    if (similarityRaw !== undefined && similarityRaw !== null && similarityRaw !== "") {
+      const similarityValue = Number(similarityRaw);
+      if (!Number.isFinite(similarityValue) || similarityValue <= 0 || similarityValue > 1) {
+        result.errors.push("invalid_similarity_threshold");
+      }
+    }
   }
 
   if (kind === "chunk") {
-    const chunkType = String(data.chunk_type || data.type || "");
-    if (!chunkType) result.errors.push("missing_field:chunk_type");
-    if (chunkType && !["legacy", "line"].includes(chunkType)) {
-      result.warnings.push(`unsupported_type:${chunkType}`);
+    const rawChunkType = String(data.chunk_type || data.type || "");
+    const chunkType = normalizeChunkType(rawChunkType);
+    if (!rawChunkType.trim()) result.errors.push("missing_field:chunk_type");
+    if (rawChunkType.trim() && !chunkType) {
+      result.warnings.push(`unsupported_type:${rawChunkType}`);
+    }
+    const options = data.options || {};
+    const targetRaw = options.target_chars ?? options.targetChars;
+    if (targetRaw !== undefined && targetRaw !== null && targetRaw !== "") {
+      const targetValue = Number(targetRaw);
+      if (!Number.isFinite(targetValue) || targetValue <= 0) {
+        result.errors.push("invalid_target_chars");
+      }
+    }
+    const maxRaw = options.max_chars ?? options.maxChars;
+    if (maxRaw !== undefined && maxRaw !== null && maxRaw !== "") {
+      const maxValue = Number(maxRaw);
+      if (!Number.isFinite(maxValue) || maxValue <= 0) {
+        result.errors.push("invalid_max_chars");
+      } else if (
+        targetRaw !== undefined &&
+        targetRaw !== null &&
+        targetRaw !== "" &&
+        Number.isFinite(Number(targetRaw)) &&
+        maxValue < Number(targetRaw)
+      ) {
+        result.errors.push("invalid_max_chars");
+      }
+    }
+    const balanceThresholdRaw =
+      options.balance_threshold ?? options.balanceThreshold;
+    if (
+      balanceThresholdRaw !== undefined &&
+      balanceThresholdRaw !== null &&
+      balanceThresholdRaw !== ""
+    ) {
+      const balanceValue = Number(balanceThresholdRaw);
+      if (!Number.isFinite(balanceValue) || balanceValue <= 0 || balanceValue > 1) {
+        result.errors.push("invalid_balance_threshold");
+      }
+    }
+    const balanceCountRaw = options.balance_count ?? options.balanceCount;
+    if (
+      balanceCountRaw !== undefined &&
+      balanceCountRaw !== null &&
+      balanceCountRaw !== ""
+    ) {
+      const balanceCount = Number.parseInt(String(balanceCountRaw), 10);
+      if (!Number.isFinite(balanceCount) || balanceCount < 1) {
+        result.errors.push("invalid_balance_count");
+      }
     }
   }
 
@@ -279,12 +349,6 @@ export const validateProfileLocal = async (
     }
     if (data.apply_line_policy && !data.line_policy) {
       result.errors.push("missing_field:line_policy");
-    }
-    if (data.settings && data.settings.concurrency !== undefined) {
-      const raw = Number.parseInt(String(data.settings.concurrency), 10);
-      if (!Number.isFinite(raw) || raw < 0) {
-        result.errors.push("invalid_concurrency");
-      }
     }
 
     const refs: Array<[string, ProfileKind]> = [
@@ -305,10 +369,10 @@ export const validateProfileLocal = async (
 
     const chunkRef = String(data.chunk_policy || "");
     if (chunkRef) {
-      const chunkProfile = await loadProfile(profilesDir, "chunk", chunkRef);
-      const chunkType = String(
-        chunkProfile?.data?.chunk_type || chunkProfile?.data?.type || "",
-      );
+    const chunkProfile = await loadProfile(profilesDir, "chunk", chunkRef);
+    const chunkType = normalizeChunkType(
+      chunkProfile?.data?.chunk_type || chunkProfile?.data?.type || "",
+    );
       if (data.apply_line_policy && chunkType && chunkType !== "line") {
         result.errors.push("line_policy_requires_line_chunk");
       }

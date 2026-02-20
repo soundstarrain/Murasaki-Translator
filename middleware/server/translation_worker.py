@@ -603,6 +603,14 @@ class TranslationWorker:
 
             parallel = max(1, int(effective_config.get("parallel") or 1))
 
+            mode = str(getattr(request, "mode", "") or "").strip().lower()
+            if mode in ("doc", "chunk"):
+                mode = "chunk"
+            elif mode == "line":
+                mode = "line"
+            else:
+                mode = "chunk"
+
             # 构建命令行参数（关键：使用 --no-server-spawn 连接常驻服务器）
             cmd = [
                 sys.executable,
@@ -610,7 +618,7 @@ class TranslationWorker:
                 "--file", input_path,
                 "--output", str(output_path),
                 "--preset", request.preset,
-                "--mode", request.mode,
+                "--mode", mode,
                 "--chunk-size", str(request.chunk_size),
                 "--ctx", str(effective_config["ctx"]),
                 "--gpu-layers", str(effective_config["gpu_layers"]),

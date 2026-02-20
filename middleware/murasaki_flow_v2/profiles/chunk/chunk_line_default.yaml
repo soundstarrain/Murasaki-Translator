@@ -1,0 +1,6 @@
+id: chunk_line_default
+name: Default Line Chunk
+chunk_type: line
+options:
+  strict: true
+  keep_empty: true

@@ -22,7 +22,7 @@ class ChunkPolicy:
 class LegacyChunkPolicy(ChunkPolicy):
     def chunk(self, items: List[Dict[str, Any]]) -> List[TextBlock]:
         options = self.profile.get("options") or {}
-        mode = "doc"
+        mode = "chunk"
         target_chars = int(options.get("target_chars") or 1000)
         max_chars = int(options.get("max_chars") or target_chars * 2)
         enable_balance = bool(

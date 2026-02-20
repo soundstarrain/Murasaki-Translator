@@ -22,8 +22,10 @@ class ChunkPolicyRegistry:
         if ref in self._cache:
             return self._cache[ref]
         profile = self.store.load_profile("chunk", ref)
-        policy_type = str(profile.get("chunk_type") or profile.get("type") or "legacy")
+        policy_type = str(profile.get("chunk_type") or profile.get("type") or "block").strip().lower()
         if policy_type == "legacy":
+            policy_type = "block"
+        if policy_type == "block":
             policy = LegacyChunkPolicy(profile)
         elif policy_type == "line":
             policy = LineChunkPolicy(profile)

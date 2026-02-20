@@ -20,7 +20,7 @@ export interface TranslationConfig {
   lineCheck: boolean;
   lineToleranceAbs: number;
   lineTolerancePct: number;
-  chunkMode?: "doc" | "line";
+  chunkMode?: "chunk" | "line";
   anchorCheck: boolean;
   anchorCheckRetries: number;
   saveCot: boolean;
@@ -331,6 +331,7 @@ export interface ElectronAPI {
     kind: string,
     id: string,
     yamlText: string,
+    options?: { allowOverwrite?: boolean },
   ) => Promise<{
     ok: boolean;
     id?: string;
@@ -341,18 +342,6 @@ export interface ElectronAPI {
     kind: string,
     id: string,
   ) => Promise<{ ok: boolean; error?: string }>;
-  pipelineV2Status: () => Promise<{
-    mode: "server" | "local";
-    ok: boolean;
-    error?: string;
-    detail?: string;
-  }>;
-  pipelineV2Retry: () => Promise<{
-    mode: "server" | "local";
-    ok: boolean;
-    error?: string;
-    detail?: string;
-  }>;
   pipelineV2ApiTest: (payload: {
     baseUrl: string;
     apiKey?: string;

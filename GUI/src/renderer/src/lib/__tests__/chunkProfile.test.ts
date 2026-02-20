@@ -2,16 +2,17 @@ import { describe, it, expect } from "vitest";
 import { normalizeChunkType } from "../chunkProfile";
 
 describe("chunkProfile helpers", () => {
-  it("normalizes legacy and line types", () => {
-    expect(normalizeChunkType("legacy")).toBe("legacy");
+  it("normalizes block/line types (legacy maps to block)", () => {
+    expect(normalizeChunkType("legacy")).toBe("block");
+    expect(normalizeChunkType("block")).toBe("block");
     expect(normalizeChunkType("line")).toBe("line");
     expect(normalizeChunkType(" LINE ")).toBe("line");
   });
 
-  it("falls back to legacy on invalid input", () => {
-    expect(normalizeChunkType("")).toBe("legacy");
-    expect(normalizeChunkType(null)).toBe("legacy");
-    expect(normalizeChunkType(undefined)).toBe("legacy");
-    expect(normalizeChunkType("doc")).toBe("legacy");
+  it("returns empty for invalid input", () => {
+    expect(normalizeChunkType("")).toBe("");
+    expect(normalizeChunkType(null)).toBe("");
+    expect(normalizeChunkType(undefined)).toBe("");
+    expect(normalizeChunkType("doc")).toBe("");
   });
 });

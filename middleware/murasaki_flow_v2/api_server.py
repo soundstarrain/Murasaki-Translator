@@ -24,6 +24,7 @@ PROFILE_KINDS = ["api", "prompt", "parser", "policy", "chunk", "pipeline"]
 
 class SaveRequest(BaseModel):
     yaml: str
+    allow_overwrite: bool = False
 
 
 class ValidateRequest(BaseModel):
@@ -63,6 +64,15 @@ def _is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _normalize_chunk_type(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == "legacy":
+        return "block"
+    if raw in {"block", "line"}:
+        return raw
+    return ""
 
 
 def create_app(store: ProfileStore, base_dir: Path) -> FastAPI:
@@ -136,6 +146,12 @@ def create_app(store: ProfileStore, base_dir: Path) -> FastAPI:
                 raise HTTPException(status_code=400, detail="invalid_id")
         else:
             data["id"] = profile_id
+        if kind == "chunk":
+            normalized = _normalize_chunk_type(
+                data.get("chunk_type") or data.get("type") or ""
+            )
+            if normalized:
+                data["chunk_type"] = normalized
 
         result = validate_profile(kind, data, store=store)
         if result.errors:
@@ -145,6 +161,8 @@ def create_app(store: ProfileStore, base_dir: Path) -> FastAPI:
             )
 
         target = Path(store.base_dir) / kind / f"{data['id']}.yaml"
+        if target.exists() and not payload.allow_overwrite:
+            raise HTTPException(status_code=400, detail="profile_exists")
         target.parent.mkdir(parents=True, exist_ok=True)
         dumped = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=120)
         target.write_text(dumped, encoding="utf-8")

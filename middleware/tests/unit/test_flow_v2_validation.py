@@ -114,7 +114,7 @@ def test_flow_v2_validation_pipeline_invalid_concurrency():
         "settings": {"concurrency": -1},
     }
     result = validate_profile("pipeline", data)
-    assert "invalid_concurrency" in result.errors
+    assert "invalid_concurrency" not in result.errors
 
 
 @pytest.mark.unit

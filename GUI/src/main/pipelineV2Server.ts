@@ -193,15 +193,3 @@ export const ensurePipelineV2Server = async (
 
   return state.starting;
 };
-
-export const retryPipelineV2Server = async (
-  deps: ServerDeps,
-): Promise<PipelineV2Status> => {
-  resetServerState();
-  try {
-    await ensurePipelineV2Server(deps);
-  } catch {
-    // ignore, status already updated
-  }
-  return getPipelineV2Status();
-};

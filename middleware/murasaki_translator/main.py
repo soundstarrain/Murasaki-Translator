@@ -608,7 +608,7 @@ def translate_block_with_retry(
     }
 
 
-def calculate_skip_blocks(blocks, existing_lines: int, is_doc_mode: bool = False) -> int:
+def calculate_skip_blocks(blocks, existing_lines: int, is_chunk_mode: bool = False) -> int:
     """
     根据已翻译行数计算应该跳过的块数。
     采用保守策略：只跳过完全匹配的块。
@@ -621,8 +621,8 @@ def calculate_skip_blocks(blocks, existing_lines: int, is_doc_mode: bool = False
         # 估算这个块的应有输出行数（与输入行数相同）
         block_lines = block.prompt_text.count('\n') + 1
         
-        # doc 模式下，每个块输出后会多加一个空行
-        physical_lines = block_lines + 1 if is_doc_mode else block_lines
+        # 分块模式下，每个块输出后会多加一个空行
+        physical_lines = block_lines + 1 if is_chunk_mode else block_lines
         
         # 如果当前块全部加入后超过了已有行数，说明此块不完整或未开始
         if cumulative_lines + physical_lines > existing_lines:
@@ -1071,8 +1071,8 @@ def main():
     parser.add_argument("--gpu-layers", type=int, default=-1)
     parser.add_argument("--ctx", type=int, default=8192)
     parser.add_argument("--preset", default="novel", choices=["novel", "script", "short"], help="Prompt preset: novel (轻小说), script (剧本), short (单句)")
-    parser.add_argument("--mode", default="doc", choices=["doc", "line"], help="Translation mode: doc (novel) or line (game/contrast)")
-    parser.add_argument("--chunk-size", type=int, default=1000, help="Target char count for doc mode")
+    parser.add_argument("--mode", default="chunk", help="Translation mode: chunk (default) or line (game/contrast)")
+    parser.add_argument("--chunk-size", type=int, default=1000, help="Target char count for chunk mode")
     parser.add_argument("--debug", action="store_true", help="Enable CoT stats and timing")
     parser.add_argument("--line-format", default="single", choices=["single", "double"], help="Line spacing format")
     parser.add_argument("--output", help="Custom output file path")
@@ -1159,6 +1159,15 @@ def main():
     parser.add_argument("--balance-count", type=int, default=3, help="Tail balance range count (default 3)")
     
     args = parser.parse_args()
+
+    raw_mode = str(getattr(args, "mode", "") or "").strip().lower()
+    if raw_mode in ("doc", "chunk"):
+        args.mode = "chunk"
+    elif raw_mode == "line":
+        args.mode = "line"
+    else:
+        print(f"[Warn] Unknown mode '{raw_mode}', fallback to chunk.")
+        args.mode = "chunk"
 
     # Manual validation for --file
     if not args.single_block and not args.rebuild_from_cache and not args.file:
@@ -1517,7 +1526,7 @@ def main():
             doc = DocumentFactory.get_document(input_path)
             items = doc.load()
             
-            # Source Lines Calculation (for Novel/Doc mode)
+            # Source Lines Calculation (for Novel/Chunk mode)
             # For Alignment Mode, source_lines is already exact physical count needed for reconstruction
             source_lines = len([i for i in items if i['text'].strip()])
             structure_map = {} # Not used
@@ -1746,7 +1755,7 @@ def main():
                 return
             elif is_valid and existing_lines > 0:
                 # Pass mode to skip block calculation
-                skip_blocks_from_output = calculate_skip_blocks(blocks, existing_lines, is_doc_mode=(args.mode == "doc"))
+                skip_blocks_from_output = calculate_skip_blocks(blocks, existing_lines, is_chunk_mode=(args.mode == "chunk"))
                 if skip_blocks_from_output >= len(blocks):
                     print(f"[Resume] All {len(blocks)} blocks already translated. Nothing to do.")
                     return
@@ -1816,9 +1825,9 @@ def main():
                         else:
                             print(f"[Resume] Warning: Could not find content for block {idx} in existing output.")
                     
-                    # Advance pointer (account for doc mode spacer if applicable)
+                    # Advance pointer (account for chunk mode spacer if applicable)
                     block_lines_count = blocks[idx].prompt_text.count('\n') + 1
-                    current_line_ptr += (block_lines_count + 1) if args.mode == "doc" else block_lines_count
+                    current_line_ptr += (block_lines_count + 1) if args.mode == "chunk" else block_lines_count
                 
                 # [Fix] Synchronize skipped blocks to TranslationCache to prevent data loss on final save
                 if translation_cache:
@@ -1843,7 +1852,7 @@ def main():
         keep_content_str = ""
         if skip_blocks_from_output > 0 and existing_content:
             # Reconstruct the exact text that SHOULD be in the file for the skipped blocks
-            # This accounts for mode (doc vs line) and separators
+            # This accounts for mode (chunk vs line) and separators
             rebuilt_parts = []
             for i in range(skip_blocks_from_output):
                 if all_results[i] and all_results[i].get('success'):
@@ -1852,7 +1861,7 @@ def main():
                     # Fallback to source if missing (should not happen with resume integrity)
                     rebuilt_parts.append(blocks[i].prompt_text)
             
-            block_separator = "\n\n" if (use_double_newline_separator or args.mode == "doc") else "\n"
+            block_separator = "\n\n" if (use_double_newline_separator or args.mode == "chunk") else "\n"
             keep_content_str = block_separator.join(rebuilt_parts) + block_separator
             
             # Update counters based on what we are KEEPING
@@ -2171,7 +2180,7 @@ def main():
                             
                             # Write to txt stream
                             # 动态分隔符：如果后处理规则包含 ensure_double_newline，则 block 间使用双换行
-                            block_separator = "\n\n" if (use_double_newline_separator or args.mode == "doc") else "\n"
+                            block_separator = "\n\n" if (use_double_newline_separator or args.mode == "chunk") else "\n"
                             f_out.write(res["out_text"] + block_separator)
                             
                             if args.save_cot and res["cot"]:

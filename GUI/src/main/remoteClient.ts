@@ -15,7 +15,7 @@ export interface TranslateOptions {
   model?: string;
   glossary?: string;
   preset?: string;
-  mode?: "doc" | "line";
+  mode?: "chunk" | "line";
   chunkSize?: number;
   ctx?: number;
   gpuLayers?: number;
@@ -372,7 +372,7 @@ export class RemoteClient {
       model: options.model,
       glossary: options.glossary,
       preset: options.preset || "novel",
-      mode: options.mode || "doc",
+      mode: options.mode === "line" ? "line" : "chunk",
       chunk_size: options.chunkSize || 1000,
       ctx: options.ctx || 8192,
       gpu_layers: options.gpuLayers ?? -1,

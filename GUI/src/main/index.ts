@@ -4040,7 +4040,7 @@ const buildRemoteTranslateOptionsFromConfig = (
     model: effectiveModelPath || undefined,
     glossary: config?.glossaryPath || undefined,
     preset: config?.preset || "novel",
-    mode: config?.mode || "doc",
+    mode: config?.mode === "line" ? "line" : "chunk",
     chunkSize: toInt(config?.chunkSize, 1000),
     ctx: toInt(config?.ctxSize, 8192),
     gpuLayers: config?.deviceMode === "cpu" ? 0 : parsedGpuLayers,

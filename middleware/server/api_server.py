@@ -34,7 +34,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 # 添加父目录到 path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -499,7 +499,7 @@ class TranslateRequest(BaseModel):
     model: Optional[str] = None         # 模型路径，None 使用默认
     glossary: Optional[str] = None      # 术语表路径
     preset: str = "novel"               # prompt preset
-    mode: str = "doc"                   # doc | line
+    mode: str = "chunk"                 # chunk | line
     chunk_size: int = 1000
     ctx: int = Field(
         default_factory=lambda: _parse_env_int(
@@ -573,6 +573,15 @@ class TranslateRequest(BaseModel):
         default_factory=lambda: _parse_env_optional_int("MURASAKI_DEFAULT_SEED", None)
     )
     text_protect: bool = False
+
+    @validator("mode", pre=True)
+    def normalize_mode(cls, value: Optional[str]) -> str:
+        raw = str(value or "").strip().lower()
+        if raw in ("doc", "chunk"):
+            return "chunk"
+        if raw == "line":
+            return "line"
+        return "chunk"
     protect_patterns: Optional[str] = None
     fix_ruby: bool = False
     fix_kana: bool = False

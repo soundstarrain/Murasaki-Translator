@@ -12,7 +12,7 @@ class TextBlock:
     metadata: List[Any] = field(default_factory=list) # 源数据的元信息 (如行号、节点ID、时间戳)
 
 class Chunker:
-    def __init__(self, target_chars: int = 1200, max_chars: int = 2000, mode: str = "doc", 
+    def __init__(self, target_chars: int = 1200, max_chars: int = 2000, mode: str = "chunk", 
                  enable_balance: bool = True, balance_threshold: float = 0.6, balance_range: int = 3):
         self.target_chars = target_chars
         self.max_chars = max_chars
@@ -34,7 +34,8 @@ class Chunker:
             elif isinstance(item, dict):
                 normalized_items.append((item.get('text', ''), item.get('meta')))
             
-        if self.mode == "line":
+        mode = str(self.mode or "").strip().lower()
+        if mode == "line":
             return self._process_line_by_line(normalized_items)
         else:
             return self._process_rubber_band(normalized_items)
@@ -57,7 +58,7 @@ class Chunker:
 
     def _process_rubber_band(self, items: List[tuple]) -> List[TextBlock]:
         """
-        Mode: Doc (Rubber Band Strategy)
+        Mode: Chunk (Rubber Band Strategy)
         智能合并多行，通过标点符号寻找最佳切分点。
         """
         blocks = []
@@ -95,7 +96,7 @@ class Chunker:
                  if re.search(r'\d', inner_content):
                      is_numeric_risky = True
             elif re.search(r'\d', text):
-                 # For normal doc mode, checking raw text is enough
+                 # For normal chunk mode, checking raw text is enough
                  is_numeric_risky = True
 
             if current_char_count >= (self.target_chars - 30):

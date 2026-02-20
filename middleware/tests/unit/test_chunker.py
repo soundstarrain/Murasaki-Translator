@@ -17,8 +17,8 @@ def test_chunker_line_mode_skips_empty():
 
 
 @pytest.mark.unit
-def test_chunker_doc_mode_splits_on_size():
-    chunker = Chunker(target_chars=5, max_chars=8, mode="doc", enable_balance=False)
+def test_chunker_chunk_mode_splits_on_size():
+    chunker = Chunker(target_chars=5, max_chars=8, mode="chunk", enable_balance=False)
     items = [
         "hello ",
         "world ",
@@ -31,7 +31,7 @@ def test_chunker_doc_mode_splits_on_size():
 
 @pytest.mark.unit
 def test_chunker_skips_balance_when_metadata_present():
-    chunker = Chunker(target_chars=10, max_chars=20, mode="doc", enable_balance=True)
+    chunker = Chunker(target_chars=10, max_chars=20, mode="chunk", enable_balance=True)
     items = [
         {"text": "aaaaa\n", "meta": {"id": 1}},
         {"text": "bb\n", "meta": {"id": 2}},

@@ -23,6 +23,16 @@ describe("parserPreview helpers", () => {
     expect(data).toEqual({ ok: true });
   });
 
+  it("strips think tags before JSON parsing", () => {
+    const data = parseJsonPreviewValue("<think>analysis</think>\n{\"ok\": true}");
+    expect(data).toEqual({ ok: true });
+  });
+
+  it("parses python-style literals", () => {
+    const data = parseJsonPreviewValue("{'ok': True, 'val': None}");
+    expect(data).toEqual({ ok: true, val: null });
+  });
+
   it("throws on invalid JSONL", () => {
     expect(() => parseJsonlPreviewLines("not_json")).toThrow();
   });
@@ -33,6 +43,26 @@ describe("parserPreview helpers", () => {
       pattern: "^@@(?P<id>\\d+)@@(?P<text>.*)$",
     });
     expect(lines).toEqual(["B", "A"]);
+  });
+
+  it("strips think tags for JSONL preview", () => {
+    const raw = "<think>analysis</think>\n{\"translation\":\"A\"}";
+    const lines = parseJsonlPreviewLines(raw, "translation");
+    expect(lines).toEqual(["A"]);
+  });
+
+  it("parses python-style JSONL objects", () => {
+    const raw = "jsonline{'translation':'A'}";
+    const lines = parseJsonlPreviewLines(raw, "translation");
+    expect(lines).toEqual(["A"]);
+  });
+
+  it("strips think tags for tagged line preview", () => {
+    const raw = "<think>analysis</think>\n@@1@@A";
+    const lines = parseTaggedLinePreviewLines(raw, {
+      pattern: "^@@(?P<id>\\d+)@@(?P<text>.*)$",
+    });
+    expect(lines).toEqual(["A"]);
   });
 
   it("sorts tagged lines by id when enabled", () => {

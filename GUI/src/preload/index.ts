@@ -69,12 +69,15 @@ const api = {
     ipcRenderer.invoke("pipelinev2-profiles-load", kind, id),
   pipelineV2ProfilesLoadBatch: (kind: string, ids: string[]) =>
     ipcRenderer.invoke("pipelinev2-profiles-load-batch", kind, ids),
-  pipelineV2ProfilesSave: (kind: string, id: string, yamlText: string) =>
-    ipcRenderer.invoke("pipelinev2-profiles-save", kind, id, yamlText),
+  pipelineV2ProfilesSave: (
+    kind: string,
+    id: string,
+    yamlText: string,
+    options?: { allowOverwrite?: boolean },
+  ) =>
+    ipcRenderer.invoke("pipelinev2-profiles-save", kind, id, yamlText, options),
   pipelineV2ProfilesDelete: (kind: string, id: string) =>
     ipcRenderer.invoke("pipelinev2-profiles-delete", kind, id),
-  pipelineV2Status: () => ipcRenderer.invoke("pipelinev2-status"),
-  pipelineV2Retry: () => ipcRenderer.invoke("pipelinev2-retry"),
   pipelineV2ApiTest: (payload: {
     baseUrl: string;
     apiKey?: string;

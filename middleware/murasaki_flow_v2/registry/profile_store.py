@@ -54,6 +54,15 @@ class ProfileStore:
         for kind in kinds:
             os.makedirs(self._kind_dir(kind), exist_ok=True)
 
+    @staticmethod
+    def _normalize_chunk_type(value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        if raw == "legacy":
+            return "block"
+        if raw in {"block", "line"}:
+            return raw
+        return ""
+
     def list_profiles(self, kind: str) -> List[ProfileRef]:
         result: List[ProfileRef] = []
         kind_dir = self._kind_dir(kind)
@@ -74,9 +83,10 @@ class ProfileStore:
             display_name = str(data.get("name") or profile_id)
             chunk_type = None
             if kind == "chunk":
-                raw_chunk_type = str(data.get("chunk_type") or data.get("type") or "").strip()
-                if raw_chunk_type in {"line", "legacy"}:
-                    chunk_type = raw_chunk_type
+                raw_chunk_type = data.get("chunk_type") or data.get("type") or ""
+                normalized = self._normalize_chunk_type(raw_chunk_type)
+                if normalized:
+                    chunk_type = normalized
             result.append(
                 ProfileRef(
                     kind=kind,
@@ -109,6 +119,11 @@ class ProfileStore:
             data["id"] = fallback_id
         data.setdefault("name", data.get("id"))
         data.setdefault("_path", path)
+        if os.path.basename(os.path.dirname(path)) == "chunk":
+            raw_chunk_type = data.get("chunk_type") or data.get("type") or ""
+            normalized = self._normalize_chunk_type(raw_chunk_type)
+            if normalized:
+                data["chunk_type"] = normalized
         return data
 
     def resolve_profile_path(self, kind: str, ref: str) -> Optional[str]:

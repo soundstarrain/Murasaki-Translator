@@ -1,11 +1,26 @@
 const CODE_FENCE_MARKERS = ["```", "'''", '"""'];
+const CODE_FENCE_PATTERNS = [
+  /```(?:jsonl|json|text)?\s*([\s\S]*?)```/i,
+  /'''(?:jsonl|json|text)?\s*([\s\S]*?)'''/i,
+  /"""(?:jsonl|json|text)?\s*([\s\S]*?)"""/i,
+];
+const THINK_PATTERN_CLOSED = /<think>.*?<\/think>/gis;
+const THINK_PATTERN_OPEN = /<think>(.*?)(?:<\/think>|$)/gis;
+
+export const stripThinkTags = (text: string) => {
+  if (!text) return text;
+  let cleaned = text.replace(THINK_PATTERN_CLOSED, "");
+  if (cleaned === text) {
+    cleaned = cleaned.replace(THINK_PATTERN_OPEN, "");
+  }
+  return cleaned.replace(/<think>|<\/think>/gi, "").trim();
+};
 
 const stripCodeFence = (text: string) => {
   const cleaned = text.trim();
-  for (const marker of CODE_FENCE_MARKERS) {
-    if (cleaned.startsWith(marker) && cleaned.endsWith(marker)) {
-      return cleaned.slice(marker.length, -marker.length).trim();
-    }
+  for (const pattern of CODE_FENCE_PATTERNS) {
+    const match = pattern.exec(cleaned);
+    if (match) return match[1].trim();
   }
   return cleaned;
 };
@@ -51,18 +66,159 @@ const extractFirstJsonBlock = (text: string) => {
   return "";
 };
 
+const stripStringPrefixes = (raw: string) =>
+  raw.replace(/\b([uUbBrR]{1,3})(?=['"])/g, "");
+
+const toJsonCompatible = (raw: string) => {
+  const normalizedInput = stripStringPrefixes(raw);
+  const out: string[] = [];
+  let inSingle = false;
+  let inDouble = false;
+  let escape = false;
+  let word = "";
+  const stack: Array<{
+    type: string;
+    outIndex?: number;
+    hasComma?: boolean;
+    hasContent?: boolean;
+  }> = [];
+  const markParenContent = (ch: string) => {
+    const top = stack[stack.length - 1];
+    if (!top || top.type !== "(") return;
+    if (ch.trim() === "" || ch === "," || ch === ")") return;
+    top.hasContent = true;
+  };
+  const flushWord = () => {
+    if (!word) return;
+    if (word === "None") out.push("null");
+    else if (word === "True") out.push("true");
+    else if (word === "False") out.push("false");
+    else out.push(word);
+    word = "";
+  };
+  for (let i = 0; i < normalizedInput.length; i += 1) {
+    const ch = normalizedInput[i];
+    if (!inSingle && !inDouble) {
+      markParenContent(ch);
+    }
+    if (inSingle) {
+      if (escape) {
+        out.push(ch);
+        escape = false;
+      } else if (ch === "\\") {
+        out.push(ch);
+        escape = true;
+      } else if (ch === "'") {
+        inSingle = false;
+        out.push('"');
+      } else {
+        out.push(ch === '"' ? '\\"' : ch);
+      }
+      continue;
+    }
+    if (inDouble) {
+      if (escape) {
+        out.push(ch);
+        escape = false;
+      } else if (ch === "\\") {
+        out.push(ch);
+        escape = true;
+      } else if (ch === '"') {
+        inDouble = false;
+        out.push(ch);
+      } else {
+        out.push(ch);
+      }
+      continue;
+    }
+    if (/[A-Za-z_]/.test(ch)) {
+      word += ch;
+      continue;
+    }
+    flushWord();
+    if (ch === "'") {
+      inSingle = true;
+      out.push('"');
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      out.push(ch);
+      continue;
+    }
+    if (ch === "(") {
+      stack.push({
+        type: "(",
+        outIndex: out.length,
+        hasComma: false,
+        hasContent: false,
+      });
+      out.push("(");
+      continue;
+    }
+    if (ch === ")") {
+      const entry = stack.pop();
+      if (entry?.type === "(" && entry.outIndex !== undefined) {
+        if (entry.hasComma || !entry.hasContent) {
+          out[entry.outIndex] = "[";
+          out.push("]");
+        } else {
+          out[entry.outIndex] = "";
+        }
+      } else {
+        out.push(ch);
+      }
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      stack.push({ type: ch });
+      out.push(ch);
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      if (stack.length) stack.pop();
+      out.push(ch);
+      continue;
+    }
+    if (ch === ",") {
+      const top = stack[stack.length - 1];
+      if (top?.type === "(") {
+        top.hasComma = true;
+      }
+      out.push(ch);
+      continue;
+    }
+    out.push(ch);
+  }
+  flushWord();
+  return out.join("").replace(/,(\s*[}\]])/g, "$1");
+};
+
+const parseJsonLike = (candidate: string) => {
+  if (!candidate) return null;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    // ignore
+  }
+  try {
+    const normalized = toJsonCompatible(candidate);
+    return JSON.parse(normalized);
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
 export const parseJsonPreviewValue = (raw: string) => {
-  const cleaned = stripCodeFence(raw);
+  const cleaned = stripCodeFence(stripThinkTags(raw));
   const candidates = [cleaned];
   const extracted = extractFirstJsonBlock(cleaned);
   if (extracted && extracted !== cleaned) candidates.push(extracted);
   for (const candidate of candidates) {
     if (!candidate) continue;
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // ignore
-    }
+    const parsed = parseJsonLike(candidate);
+    if (parsed !== null) return parsed;
   }
   return null;
 };
@@ -124,7 +280,7 @@ const buildRegexWithFlags = (pattern: string, options?: any) => {
 };
 
 export const parseJsonlPreviewLines = (rawInput: string, path?: string) => {
-  const cleanedText = stripCodeFence(rawInput);
+  const cleanedText = stripCodeFence(stripThinkTags(rawInput));
   const lines: string[] = [];
   cleanedText.split("\n").forEach((rawLine) => {
     const line = rawLine.trim();
@@ -161,10 +317,11 @@ export const parseTaggedLinePreviewLines = (
     ignorecase?: boolean;
   },
 ) => {
+  const cleanedInput = stripThinkTags(rawInput);
   const pattern = options?.pattern || "^@@(?P<id>\\d+)@@(?P<text>.*)$";
   const regex = buildRegexWithFlags(pattern, options);
   const entries: Array<{ id?: string; text: string }> = [];
-  rawInput.split("\n").forEach((line) => {
+  cleanedInput.split("\n").forEach((line) => {
     const match = regex.exec(line.trim());
     if (!match) return;
     const groups = (match as any).groups as Record<string, string> | undefined;

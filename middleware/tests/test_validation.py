@@ -156,3 +156,68 @@ def test_invalid_profile_id_rejected(tmp_path: Path) -> None:
     }
     result = validate_profile("api", profile, store=store)
     assert "invalid_id" in result.errors
+
+
+@pytest.mark.unit
+def test_invalid_chunk_options(tmp_path: Path) -> None:
+    store = ProfileStore(str(tmp_path))
+    profile = {
+        "id": "chunk_bad",
+        "chunk_type": "legacy",
+        "options": {
+            "target_chars": 0,
+            "max_chars": -1,
+            "balance_threshold": 1.5,
+            "balance_count": 0,
+        },
+    }
+    result = validate_profile("chunk", profile, store=store)
+    assert "invalid_target_chars" in result.errors
+    assert "invalid_max_chars" in result.errors
+    assert "invalid_balance_threshold" in result.errors
+    assert "invalid_balance_count" in result.errors
+
+
+@pytest.mark.unit
+def test_invalid_similarity_threshold(tmp_path: Path) -> None:
+    store = ProfileStore(str(tmp_path))
+    profile = {
+        "id": "policy_bad",
+        "type": "tolerant",
+        "options": {"similarity_threshold": 1.2},
+    }
+    result = validate_profile("policy", profile, store=store)
+    assert "invalid_similarity_threshold" in result.errors
+
+
+@pytest.mark.unit
+def test_invalid_max_retries(tmp_path: Path) -> None:
+    base = prepare_profiles(tmp_path)
+    write_yaml(
+        base / "prompt" / "prompt_basic.yaml",
+        """
+        id: prompt_basic
+        name: Basic Prompt
+        user_template: "{{source}}"
+        """,
+    )
+    write_yaml(
+        base / "parser" / "parser_plain.yaml",
+        """
+        id: parser_plain
+        type: plain
+        """,
+    )
+    pipeline = {
+        "id": "pipeline_test",
+        "provider": "api_test",
+        "prompt": "prompt_basic",
+        "parser": "parser_plain",
+        "chunk_policy": "chunk_line_default",
+        "line_policy": "line_tolerant",
+        "apply_line_policy": True,
+        "settings": {"max_retries": -1},
+    }
+    store = ProfileStore(str(base))
+    result = validate_profile("pipeline", pipeline, store=store)
+    assert "invalid_max_retries" not in result.errors

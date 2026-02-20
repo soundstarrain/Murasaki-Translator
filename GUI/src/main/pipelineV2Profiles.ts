@@ -34,8 +34,6 @@ import {
 
   markPipelineV2ServerOk,
 
-  retryPipelineV2Server,
-
 } from "./pipelineV2Server";
 
 import { validateProfileLocal } from "./pipelineV2Validation";
@@ -102,7 +100,6 @@ const PRUNE_PROFILE_IDS: Partial<Record<ProfileKind, Set<string>>> = {
     "chunk_line_strict",
     "chunk_line_loose",
     "chunk_line_keep",
-    "chunk_line_default",
   ]),
 
   pipeline: new Set([
@@ -123,7 +120,7 @@ type ProfileFileMeta = {
   mtimeMs: number;
   id: string;
   name: string;
-  chunkType?: "" | "line" | "legacy";
+  chunkType?: "" | "line" | "block";
 };
 
 const profileFileMetaCache = new Map<string, ProfileFileMeta>();
@@ -203,7 +200,7 @@ const PATCH_PROFILE_NAMES: Partial<
   chunk: {
     chunk_legacy_doc: {
       name: "默认分块策略",
-      aliases: ["Legacy Doc Chunk", "Default Doc Chunk"],
+      aliases: ["Legacy Chunk", "Default Chunk"],
     },
   },
 };
@@ -606,7 +603,7 @@ type LocalProfileRef = {
 
   path: string;
 
-  chunkType?: "" | "line" | "legacy";
+  chunkType?: "" | "line" | "block";
 
 };
 
@@ -626,6 +623,14 @@ const safeLoadYaml = (raw: string): Record<string, any> | null => {
 
   }
 
+};
+
+const normalizeChunkType = (value: unknown): "" | "line" | "block" => {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "line") return "line";
+  if (normalized === "block" || normalized === "legacy") return "block";
+  return "";
 };
 
 const loadProfileIndexDiskCache = async (
@@ -1203,17 +1208,20 @@ const listProfileRefsLocal = async (
     let id = fallbackId;
 
     let name = fallbackId;
-    let chunkType: "" | "line" | "legacy" = "";
+    let chunkType: "" | "line" | "block" = "";
 
     const metaStat = await stat(fullPath).catch(() => null);
     if (!metaStat) continue;
     const cachedMeta = profileFileMetaCache.get(fullPath);
     const diskMeta = kindDiskCache[file];
-    if (cachedMeta && cachedMeta.mtimeMs === metaStat.mtimeMs) {
+    const needsChunkType =
+      kind === "chunk" && !cachedMeta?.chunkType && !diskMeta?.chunkType;
+    if (cachedMeta && cachedMeta.mtimeMs === metaStat.mtimeMs && !needsChunkType) {
       id = cachedMeta.id;
       name = cachedMeta.name;
-      if (kind === "chunk" && cachedMeta.chunkType) {
-        chunkType = cachedMeta.chunkType;
+      if (kind === "chunk") {
+        const normalized = normalizeChunkType(cachedMeta.chunkType);
+        if (normalized) chunkType = normalized;
       }
       if (
         !diskMeta ||
@@ -1229,11 +1237,12 @@ const listProfileRefsLocal = async (
         };
         diskCacheChanged = true;
       }
-    } else if (diskMeta && diskMeta.mtimeMs === metaStat.mtimeMs) {
+    } else if (diskMeta && diskMeta.mtimeMs === metaStat.mtimeMs && !needsChunkType) {
       id = diskMeta.id;
       name = diskMeta.name;
-      if (kind === "chunk" && diskMeta.chunkType) {
-        chunkType = diskMeta.chunkType;
+      if (kind === "chunk") {
+        const normalized = normalizeChunkType(diskMeta.chunkType);
+        if (normalized) chunkType = normalized;
       }
       profileFileMetaCache.set(fullPath, {
         mtimeMs: metaStat.mtimeMs,
@@ -1257,12 +1266,9 @@ const listProfileRefsLocal = async (
 
         if (data?.name) name = String(data.name);
         if (kind === "chunk") {
-          const rawChunkType = String(data?.chunk_type || data?.type || "")
-            .trim()
-            .toLowerCase();
-          if (rawChunkType === "line" || rawChunkType === "legacy") {
-            chunkType = rawChunkType;
-          }
+          const rawChunkType = String(data?.chunk_type || data?.type || "");
+          const normalized = normalizeChunkType(rawChunkType);
+          if (normalized) chunkType = normalized;
         }
 
       } catch {
@@ -1396,7 +1402,11 @@ const saveProfileLocal = async (
 
   profilesDir: string,
 
+  options?: { allowOverwrite?: boolean },
+
 ) => {
+
+  const allowOverwrite = Boolean(options?.allowOverwrite);
 
   const parsed = safeLoadYaml(yamlText);
 
@@ -1410,6 +1420,10 @@ const saveProfileLocal = async (
     return { ok: false, error: "invalid_id" };
   }
   parsed.id = rawId;
+  if (kind === "chunk") {
+    const normalized = normalizeChunkType(parsed.chunk_type ?? parsed.type ?? "");
+    if (normalized) parsed.chunk_type = normalized;
+  }
 
   const validation = await validateProfileLocal(kind, parsed, profilesDir);
 
@@ -1420,6 +1434,20 @@ const saveProfileLocal = async (
   }
 
   const target = join(profilesDir, kind, `${parsed.id}.yaml`);
+
+  if (!allowOverwrite) {
+
+    const exists = await stat(target)
+      .then(() => true)
+      .catch(() => false);
+
+    if (exists) {
+
+      return { ok: false, error: "profile_exists" };
+
+    }
+
+  }
 
   await writeFile(target, dumpYaml(parsed), "utf-8");
   const metaStat = await stat(target).catch(() => null);
@@ -1797,22 +1825,6 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
   };
 
-  ipcMain.handle("pipelinev2-status", async () => getPipelineV2Status());
-
-  ipcMain.handle("pipelinev2-retry", async () =>
-
-    retryPipelineV2Server({
-
-      getPythonPath: deps.getPythonPath,
-
-      getMiddlewarePath: deps.getMiddlewarePath,
-
-      getProfilesDir,
-
-    }),
-
-  );
-
   ipcMain.handle("pipelinev2-profiles-path", async () => {
 
     const localDir = await ensureLocalDir();
@@ -2001,9 +2013,23 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
     "pipelinev2-profiles-save",
 
-    async (_event, kind: ProfileKind, id: string, yamlText: string) => {
+    async (
+
+      _event,
+
+      kind: ProfileKind,
+
+      id: string,
+
+      yamlText: string,
+
+      options?: { allowOverwrite?: boolean },
+
+    ) => {
 
       if (!PROFILE_KINDS.includes(kind)) return { ok: false };
+
+      const allowOverwrite = Boolean(options?.allowOverwrite);
 
       const baseUrl = await ensureServer();
 
@@ -2015,7 +2041,13 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
             method: "POST",
 
-            body: JSON.stringify({ yaml: yamlText }),
+            body: JSON.stringify({
+
+              yaml: yamlText,
+
+              allow_overwrite: allowOverwrite,
+
+            }),
 
           });
 
@@ -2043,7 +2075,11 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
       const localDir = await ensureLocalDir();
 
-      return await saveProfileLocal(kind, id, yamlText, localDir);
+      return await saveProfileLocal(kind, id, yamlText, localDir, {
+
+        allowOverwrite,
+
+      });
 
     },
 

@@ -1931,7 +1931,7 @@ export default function ProofreadView({
               )}
             </div>
           ) : (
-            // Block Mode: Original layout
+            // Chunk Mode: Original layout
             <div
               className="grid relative"
               style={{ gridTemplateColumns: gridTemplate }}

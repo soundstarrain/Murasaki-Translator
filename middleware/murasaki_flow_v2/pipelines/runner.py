@@ -170,7 +170,7 @@ class PipelineRunner:
         joiner = str(context_cfg.get("joiner") or "\n")
         if before <= 0 and after <= 0:
             return {"before": "", "after": ""}
-        # block_end 标识块的结束行（不含），用于块模式 context
+        # block_end 标识块的结束行（不含），用于分块模式 context
         content_end = block_end if block_end is not None else line_index + 1
         start = max(0, line_index - before)
         end = min(len(source_lines), content_end + after)
@@ -362,7 +362,7 @@ class PipelineRunner:
                 meta = block.metadata[0]
                 if isinstance(meta, int):
                     line_index = meta
-            # 块模式 context：基于块的完整行范围，而非仅首行
+            # 分块模式 context：基于块的完整行范围，而非仅首行
             blk_start, blk_end = self._block_line_range(block)
             context_before = ""
             context_after = ""
@@ -506,6 +506,8 @@ class PipelineRunner:
 
         try:
             raw_concurrency = settings.get("concurrency")
+            if raw_concurrency is None or raw_concurrency == "":
+                raw_concurrency = provider.profile.get("concurrency")
             if raw_concurrency is None or raw_concurrency == "":
                 concurrency = 1
             else:

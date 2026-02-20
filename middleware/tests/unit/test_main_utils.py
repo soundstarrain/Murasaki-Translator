@@ -91,17 +91,17 @@ def test_calculate_skip_blocks():
         TextBlock(id=2, prompt_text="b\n"),
         TextBlock(id=3, prompt_text="c\n"),
     ]
-    skipped = calculate_skip_blocks(blocks, existing_lines=2, is_doc_mode=False)
+    skipped = calculate_skip_blocks(blocks, existing_lines=2, is_chunk_mode=False)
     assert skipped == 1
 
 
 @pytest.mark.unit
-def test_calculate_skip_blocks_doc_mode():
+def test_calculate_skip_blocks_chunk_mode():
     blocks = [
         TextBlock(id=1, prompt_text="a\n"),
         TextBlock(id=2, prompt_text="b\n"),
     ]
-    skipped = calculate_skip_blocks(blocks, existing_lines=2, is_doc_mode=True)
+    skipped = calculate_skip_blocks(blocks, existing_lines=2, is_chunk_mode=True)
     assert skipped == 0
 
 

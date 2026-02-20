@@ -164,12 +164,12 @@ class OpenAICompatProvider(BaseProvider):
             "model": request.model,
             "messages": request.messages,
         }
+        if request.extra:
+            payload.update(request.extra)
         if request.temperature is not None:
             payload["temperature"] = request.temperature
         if request.max_tokens is not None:
             payload["max_tokens"] = request.max_tokens
-        if request.extra:
-            payload.update(request.extra)
 
         start = time.time()
         try:

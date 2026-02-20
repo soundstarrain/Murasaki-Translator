@@ -1611,7 +1611,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       const pickCustom = <T,>(customValue: T | undefined, globalValue: T): T =>
         customValue !== undefined ? customValue : globalValue;
 
-      const normalizedChunkMode: "doc" | "line" = "doc";
+      const normalizedChunkMode: "chunk" | "line" = "chunk";
 
       const resolveRulesFromProfile = (
         mode: "pre" | "post",

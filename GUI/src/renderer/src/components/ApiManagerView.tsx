@@ -46,11 +46,16 @@ import { Switch } from "./ui/core";
 import { cn } from "../lib/utils";
 import { createUniqueProfileId, slugifyProfileId } from "../lib/profileId";
 import { isParserProfileBlank } from "../lib/parserProfile";
+import { buildApiPresetProfileId, normalizePresetUrl } from "../lib/apiManagerUtils";
 import { normalizeChunkType } from "../lib/chunkProfile";
-import { buildPipelineSummary, type PipelineSummary } from "../lib/pipelineProfile";
+import {
+  buildPipelineSummary,
+  prunePipelineSummaryIndex,
+  type PipelineSummary,
+  resolvePipelineTranslationMode,
+} from "../lib/pipelineProfile";
 import {
   buildPromptLegacyParts,
-  hasPromptSourcePlaceholder,
   shouldPreserveLegacyPromptParts,
   type PromptLegacyParts,
 } from "../lib/promptProfile";
@@ -58,6 +63,7 @@ import {
   parseJsonlPreviewLines,
   parseJsonPreviewValue,
   parseTaggedLinePreviewLines,
+  stripThinkTags,
 } from "../lib/parserPreview";
 import { KVEditor } from "./api-manager/shared/KVEditor";
 import { FormSection } from "./api-manager/shared/FormSection";
@@ -82,7 +88,7 @@ const Input = (props: ComponentProps<typeof BaseInput>) => (
 
 const safeLoadYaml = (raw: string) => {
   try {
-    return yaml.load(raw, { schema: yaml.JSON_SCHEMA }) as any;
+    return yaml.load(raw) as any;
   } catch {
     return null;
   }
@@ -112,37 +118,6 @@ type InputAffixProps = Omit<ComponentProps<typeof BaseInput>, "prefix"> & {
   suffix?: ReactNode;
   containerClassName?: string;
 };
-
-const CheckCard = ({
-  checked,
-  onChange,
-  label,
-  description,
-  className,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  label: string;
-  description?: string;
-  className?: string;
-}) => (
-  <div
-    className={cn(
-      "flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-background/60 px-3 py-3",
-      className,
-    )}
-  >
-    <div className="flex-1">
-      <div className="text-sm font-medium">{label}</div>
-      {description && (
-        <div className="text-xs text-muted-foreground mt-0.5 max-w-[90%]">
-          {description}
-        </div>
-      )}
-    </div>
-    <Switch checked={checked} onCheckedChange={onChange} />
-  </div>
-);
 
 const InputAffix = ({
   prefix,
@@ -302,6 +277,15 @@ type ApiTestState = {
   url?: string;
 };
 
+type ApiConcurrencyState = {
+  status: "idle" | "testing" | "success" | "error";
+  message?: string;
+  latencyMs?: number;
+  maxConcurrency?: number;
+  statusCounts?: Record<string, number>;
+  url?: string;
+};
+
 type PipelineComposerState = {
   id: string;
   name: string;
@@ -309,6 +293,7 @@ type PipelineComposerState = {
   prompt: string;
   parser: string;
   translationMode: "line" | "block";
+  applyLinePolicy: boolean;
   linePolicy: string;
   chunkPolicy: string;
   temperature: string;
@@ -363,9 +348,6 @@ type PolicyFormState = {
 type ChunkFormState = {
   id: string;
   name: string;
-  chunkType: "line" | "legacy";
-  lineStrict: boolean;
-  keepEmpty: boolean;
   targetChars: string;
   maxChars: string;
   enableBalance: boolean;
@@ -445,22 +427,22 @@ const HIDDEN_PROFILE_IDS: Partial<Record<ProfileKind, Set<string>>> = {
     "chunk_line_strict",
     "chunk_line_loose",
     "chunk_line_keep",
+    "chunk_line_default",
   ]),
 };
 
 const DEFAULT_TAGGED_PATTERN = "^@@(?P<id>\\d+)@@(?P<text>.*)$";
 const DEFAULT_POLICY_ID = "line_tolerant";
 const DEFAULT_CHUNK_ID = "chunk_legacy_doc";
-const DEFAULT_LINE_CHUNK_ID = "chunk_line_default";
 const HIDE_ALL_PROFILE_IDS = false;
-const HIDE_PROFILE_ID_DISPLAY = new Set([DEFAULT_POLICY_ID, DEFAULT_CHUNK_ID, DEFAULT_LINE_CHUNK_ID]);
+const HIDE_PROFILE_ID_DISPLAY = new Set([DEFAULT_POLICY_ID, DEFAULT_CHUNK_ID]);
 const DEFAULT_PROTECTED_PROFILE_IDS = new Set([
   DEFAULT_POLICY_ID,
   DEFAULT_CHUNK_ID,
-  DEFAULT_LINE_CHUNK_ID,
   "prompt_default",
   "parser_any_default",
 ]);
+const PIPELINE_SUMMARY_BATCH_SIZE = 12;
 
 const parserRuleTypes: ParserRuleType[] = [
   "jsonl",
@@ -511,8 +493,8 @@ const DEFAULT_PROFILE_NAME_ALIASES: Record<string, string[]> = {
     "默认分行策略",
     "默认行配置",
   ],
-  chunk_legacy_doc: ["默认分块策略", "Default Block Strategy", "Default Chunk Strategy", "Default Doc Chunk"],
-  chunk_line_default: ["默认分行策略", "Default Line Strategy", "Default Line Chunk"],
+  chunk_line_default: ["Default Line Chunk"],
+  chunk_legacy_doc: ["默认分块策略", "Default Chunk Strategy", "Default Chunk"],
 };
 
 const DEFAULT_TEMPLATES: Record<ProfileKind, string> = {
@@ -532,9 +514,8 @@ name: New Pipeline
 provider: ""
 prompt: ""
 parser: ""
-line_policy: ""
+translation_mode: block
 chunk_policy: ""
-apply_line_policy: false
 settings: {}`,
   prompt: `id: new_prompt
 name: New Prompt
@@ -569,9 +550,8 @@ options:
     - similarity`,
   chunk: `id: new_chunk_policy
 name: 默认分块策略
-chunk_type: legacy
+chunk_type: block
 options:
-  mode: doc
   target_chars: 1000
   max_chars: 2000`,
 };
@@ -607,7 +587,8 @@ const DEFAULT_PIPELINE_COMPOSER: PipelineComposerState = {
   provider: "",
   prompt: "",
   parser: "",
-  translationMode: "line",
+  translationMode: "block",
+  applyLinePolicy: false,
   linePolicy: "",
   chunkPolicy: "",
   temperature: "",
@@ -662,9 +643,6 @@ const DEFAULT_POLICY_FORM: PolicyFormState = {
 const DEFAULT_CHUNK_FORM: ChunkFormState = {
   id: "",
   name: "",
-  chunkType: "legacy",
-  lineStrict: true,
-  keepEmpty: true,
   targetChars: "1000",
   maxChars: "2000",
   enableBalance: true,
@@ -821,6 +799,7 @@ const TEMPLATE_HIDDEN_KEY = "murasaki.v2.hidden_templates";
 const ACTIVE_PIPELINE_KEY = "murasaki.v2.active_pipeline_id";
 const PARSER_RECOMMEND_KEY = "murasaki.v2.parser_recommend_visible";
 const PROFILE_ORDER_KEY = "murasaki.v2.profile_order";
+const SHOW_ID_FIELDS_KEY = "murasaki.v2.show_id_fields";
 const PIPELINE_GUIDE_KEY = "murasaki.v2.pipeline_guide_visible";
 
 const API_PRESETS_DATA: ApiPreset[] = [
@@ -973,7 +952,7 @@ const TEMPLATE_LIBRARY: Record<ProfileKind, TemplateEntry[]> = {
     {
       id: "prompt_jsonl_line",
       yaml: `id: prompt_jsonl_line
-name: 行模式·JSONL
+ name: 分行模式·JSONL
 system_template: |
   你是一位精通二次元文化的资深轻小说翻译家，请将日文翻译成流畅、优美的中文。
   1、严格按照输入行数进行输出，不得拆分或合并行。
@@ -997,7 +976,7 @@ context:
     {
       id: "prompt_plain_line",
       yaml: `id: prompt_plain_line
-name: 行模式·纯文本
+ name: 分行模式·纯文本
 system_template: |
   你是一名专业翻译，请逐行翻译日文为中文。
   保持行数一致，不要添加行号或额外说明。
@@ -1017,7 +996,7 @@ context:
     {
       id: "prompt_glossary_focus",
       yaml: `id: prompt_glossary_focus
-name: 行模式·术语优先
+ name: 分行模式·术语优先
 system_template: |
   你是一名术语敏感的翻译，请严格优先使用术语表中的译法。
   输出需逐行对齐，不得合并或拆分行。
@@ -1223,7 +1202,25 @@ const formatErrorCode = (code: string, texts: any) => {
   if (code === "missing_script") return texts.validationMissingScript;
   if (code === "missing_any_parsers") return texts.validationMissingParsers;
   if (code === "invalid_concurrency") return texts.validationInvalidConcurrency;
+  if (code === "invalid_max_retries") return texts.validationInvalidMaxRetries;
   if (code === "invalid_rpm") return texts.validationInvalidRpm;
+  if (code === "invalid_timeout") return texts.validationInvalidTimeout;
+  if (code === "invalid_target_chars") return texts.validationInvalidTargetChars;
+  if (code === "invalid_max_chars") return texts.validationInvalidMaxChars;
+  if (code === "invalid_balance_threshold")
+    return texts.validationInvalidBalanceThreshold;
+  if (code === "invalid_balance_count")
+    return texts.validationInvalidBalanceCount;
+  if (code === "invalid_similarity_threshold")
+    return texts.validationInvalidSimilarityThreshold;
+  if (code.startsWith("profile_exists")) {
+    const id = code.split(":")[1] || "";
+    if (id) return texts.validationProfileExists.replace("{id}", id);
+    return texts.validationProfileExists
+      .replace("{id}", "")
+      .replace(/[:：]\s*$/, "")
+      .trim();
+  }
   if (code === "concurrency_test_auth")
     return texts.concurrencyAutoTestAuth;
   if (code === "concurrency_test_rate_limited")
@@ -1304,7 +1301,6 @@ const validateProfile = (
   data: any,
   index: Record<ProfileKind, string[]>,
   texts: any,
-  chunkTypes: Record<string, string>,
 ): ValidationResult => {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -1321,16 +1317,6 @@ const validateProfile = (
     const userTemplate = String(prompt?.user_template || "");
     if (!userTemplate.trim()) return true;
     return userTemplate.includes("{{source}}");
-  };
-  const inferChunkTypeForValidation = (ref: string) => {
-    if (!ref) return "";
-    const known = chunkTypes[ref];
-    if (known) return known;
-    const normalized = ref.toLowerCase();
-    if (normalized.includes("line")) return "line";
-    if (normalized.includes("legacy") || normalized.includes("doc"))
-      return "legacy";
-    return "";
   };
 
   if (!data || typeof data !== "object") {
@@ -1407,6 +1393,12 @@ const validateProfile = (
         errors.push(texts.validationInvalidRpm);
       }
     }
+    if (data.timeout !== undefined && data.timeout !== null && data.timeout !== "") {
+      const timeoutValue = Number(data.timeout);
+      if (!Number.isFinite(timeoutValue) || timeoutValue <= 0) {
+        errors.push(texts.validationInvalidTimeout);
+      }
+    }
   }
 
   if (kind === "parser") {
@@ -1446,13 +1438,69 @@ const validateProfile = (
     if (policyType && !["strict", "tolerant"].includes(policyType)) {
       warnings.push(invalidType(policyType));
     }
+    const options = data.options || {};
+    const similarityRaw =
+      options.similarity_threshold ?? options.similarity ?? options.similarityThreshold;
+    if (similarityRaw !== undefined && similarityRaw !== null && similarityRaw !== "") {
+      const similarityValue = Number(similarityRaw);
+      if (!Number.isFinite(similarityValue) || similarityValue <= 0 || similarityValue > 1) {
+        errors.push(texts.validationInvalidSimilarityThreshold);
+      }
+    }
   }
 
   if (kind === "chunk") {
-    const chunkType = String(data.chunk_type || data.type || "");
-    if (!chunkType) errors.push(missingField("chunk_type"));
-    if (chunkType && !["legacy", "line"].includes(chunkType)) {
-      warnings.push(invalidType(chunkType));
+    const rawChunkType = String(data.chunk_type || data.type || "");
+    const normalizedChunkType = normalizeChunkType(rawChunkType);
+    if (!rawChunkType.trim()) errors.push(missingField("chunk_type"));
+    if (rawChunkType.trim() && !normalizedChunkType) {
+      warnings.push(invalidType(rawChunkType));
+    }
+    const options = data.options || {};
+    const targetRaw = options.target_chars ?? options.targetChars;
+    if (targetRaw !== undefined && targetRaw !== null && targetRaw !== "") {
+      const targetValue = Number(targetRaw);
+      if (!Number.isFinite(targetValue) || targetValue <= 0) {
+        errors.push(texts.validationInvalidTargetChars);
+      }
+    }
+    const maxRaw = options.max_chars ?? options.maxChars;
+    if (maxRaw !== undefined && maxRaw !== null && maxRaw !== "") {
+      const maxValue = Number(maxRaw);
+      if (!Number.isFinite(maxValue) || maxValue <= 0) {
+        errors.push(texts.validationInvalidMaxChars);
+      } else if (
+        targetRaw !== undefined &&
+        targetRaw !== null &&
+        targetRaw !== "" &&
+        Number.isFinite(Number(targetRaw)) &&
+        maxValue < Number(targetRaw)
+      ) {
+        errors.push(texts.validationInvalidMaxChars);
+      }
+    }
+    const balanceThresholdRaw =
+      options.balance_threshold ?? options.balanceThreshold;
+    if (
+      balanceThresholdRaw !== undefined &&
+      balanceThresholdRaw !== null &&
+      balanceThresholdRaw !== ""
+    ) {
+      const balanceValue = Number(balanceThresholdRaw);
+      if (!Number.isFinite(balanceValue) || balanceValue <= 0 || balanceValue > 1) {
+        errors.push(texts.validationInvalidBalanceThreshold);
+      }
+    }
+    const balanceCountRaw = options.balance_count ?? options.balanceCount;
+    if (
+      balanceCountRaw !== undefined &&
+      balanceCountRaw !== null &&
+      balanceCountRaw !== ""
+    ) {
+      const balanceCount = Number.parseInt(String(balanceCountRaw), 10);
+      if (!Number.isFinite(balanceCount) || balanceCount < 1) {
+        errors.push(texts.validationInvalidBalanceCount);
+      }
     }
   }
 
@@ -1462,25 +1510,22 @@ const validateProfile = (
       if (!data[field])
         errors.push(texts.validationMissingPipeline.replace("{field}", field));
     });
-    if (data.apply_line_policy && !data.line_policy) {
-      errors.push(
-        texts.validationMissingPipeline.replace("{field}", "line_policy"),
-      );
-    }
-    if (data.settings && data.settings.concurrency !== undefined) {
-      const raw = Number.parseInt(String(data.settings.concurrency), 10);
-      if (!Number.isFinite(raw) || raw < 0) {
-        errors.push(texts.validationInvalidConcurrency);
-      }
-    }
-    const chunkMode = inferChunkTypeForValidation(
-      String(data.chunk_policy || ""),
+    const rawMode = String(
+      data.translation_mode || data.translationMode || data.mode || "",
     );
-    if (data.apply_line_policy && chunkMode === "legacy") {
-      errors.push(texts.validationLinePolicyRequiresLineChunk);
+    const normalizedMode = rawMode.trim().toLowerCase();
+    const translationMode =
+      normalizedMode === "line" || normalizedMode === "block"
+        ? normalizedMode
+        : "";
+    if (rawMode && !translationMode) {
+      errors.push(invalidType(rawMode));
     }
-    if (chunkMode === "line" && !data.line_policy) {
+    if (data.apply_line_policy && !data.line_policy) {
       errors.push(texts.validationLineChunkNoPolicy);
+    }
+    if (data.apply_line_policy && translationMode === "block") {
+      errors.push(texts.validationLinePolicyRequiresLineChunk);
     }
     const refMap: Record<string, ProfileKind> = {
       provider: "api",
@@ -1680,6 +1725,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const [profiles, setProfiles] = useState<ProfileListItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [yamlText, setYamlText] = useState("");
+  const [baselineYaml, setBaselineYaml] = useState("");
+  const [hasUserEdits, setHasUserEdits] = useState(false);
   const [profileIndex, setProfileIndex] = useState<
     Record<ProfileKind, string[]>
   >({
@@ -1700,11 +1747,18 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     policy: {},
     chunk: {},
   });
-  const [apiRuntimeIndex, setApiRuntimeIndex] = useState<
-    Record<string, { timeout?: number; concurrency?: number }>
-  >({});
+  const lastProfileDataRef = useRef<
+    Record<ProfileKind, Record<string, any> | null>
+  >({
+    api: null,
+    pipeline: null,
+    prompt: null,
+    parser: null,
+    policy: null,
+    chunk: null,
+  });
   const [chunkTypeIndex, setChunkTypeIndex] = useState<
-    Record<string, "line" | "legacy" | "">
+    Record<string, "line" | "block" | "">
   >({});
   const [pipelineSummaryIndex, setPipelineSummaryIndex] = useState<
     Record<string, PipelineSummary>
@@ -1714,14 +1768,17 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     "overview",
   );
   const [showApiSetup, setShowApiSetup] = useState(false);
-  const showIdField: Record<ProfileKind, boolean> = {
-    api: false,
-    pipeline: false,
-    prompt: false,
-    parser: false,
-    policy: false,
-    chunk: false,
-  };
+  const [showIdField, setShowIdField] = useState<Record<ProfileKind, boolean>>(
+    () =>
+      loadJson(SHOW_ID_FIELDS_KEY, {
+        api: false,
+        pipeline: false,
+        prompt: false,
+        parser: false,
+        policy: false,
+        chunk: false,
+      }),
+  );
   const [autoIdEnabled, setAutoIdEnabled] = useState<
     Record<ProfileKind, boolean>
   >({
@@ -1740,6 +1797,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const [modelListError, setModelListError] = useState("");
   const [modelListRequested, setModelListRequested] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const yamlUpdateTimer = useRef<number | null>(null);
+  const pendingYamlPayload = useRef<any | null>(null);
   const [pendingSelection, setPendingSelection] = useState<{
     id: string;
     kind: ProfileKind;
@@ -1760,6 +1819,162 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         policy: [],
         chunk: [],
       }),
+  );
+  const normalizeYamlText = useCallback(
+    (value: string) => value.replace(/\r\n/g, "\n").trim(),
+    [],
+  );
+  const markUserEdits = useCallback(() => setHasUserEdits(true), []);
+  const resetUserEdits = useCallback(() => setHasUserEdits(false), []);
+  const clearPendingYamlUpdate = useCallback(() => {
+    if (yamlUpdateTimer.current !== null) {
+      window.clearTimeout(yamlUpdateTimer.current);
+      yamlUpdateTimer.current = null;
+    }
+    pendingYamlPayload.current = null;
+  }, []);
+  const commitYamlText = useCallback(
+    (
+      nextYaml: string,
+      options?: { baseline?: boolean; markDirty?: boolean },
+    ) => {
+      clearPendingYamlUpdate();
+      setYamlText(nextYaml);
+      if (options?.baseline) {
+        setBaselineYaml(nextYaml);
+        resetUserEdits();
+        return;
+      }
+      if (options?.markDirty !== false) {
+        markUserEdits();
+      }
+    },
+    [clearPendingYamlUpdate, markUserEdits, resetUserEdits],
+  );
+  const queueYamlDump = useCallback(
+    (payload: any, options?: { markDirty?: boolean }) => {
+      if (options?.markDirty !== false) {
+        markUserEdits();
+      }
+      pendingYamlPayload.current = payload;
+      if (yamlUpdateTimer.current !== null) return;
+      yamlUpdateTimer.current = window.setTimeout(() => {
+        yamlUpdateTimer.current = null;
+        const pending = pendingYamlPayload.current;
+        pendingYamlPayload.current = null;
+        if (!pending) return;
+        setYamlText(yaml.dump(pending));
+      }, 120);
+    },
+    [markUserEdits],
+  );
+  const flushYamlUpdate = useCallback(() => {
+    const pending = pendingYamlPayload.current;
+    if (!pending) return yamlText;
+    if (yamlUpdateTimer.current !== null) {
+      window.clearTimeout(yamlUpdateTimer.current);
+      yamlUpdateTimer.current = null;
+    }
+    pendingYamlPayload.current = null;
+    const nextYaml = yaml.dump(pending);
+    setYamlText(nextYaml);
+    return nextYaml;
+  }, [yamlText]);
+  const hasUnsavedChanges = useCallback(
+    (current?: string) => {
+      if (!hasUserEdits) return false;
+      return (
+        normalizeYamlText(current ?? yamlText) !==
+        normalizeYamlText(baselineYaml)
+      );
+    },
+    [baselineYaml, hasUserEdits, normalizeYamlText, yamlText],
+  );
+  const guardUnsaved = useCallback(
+    (action: () => void) => {
+      const latestYaml = flushYamlUpdate();
+      if (!hasUnsavedChanges(latestYaml)) {
+        action();
+        return;
+      }
+      showConfirm({
+        title: t.apiManager.unsavedChangesTitle,
+        description: t.apiManager.unsavedChangesDesc,
+        variant: "warning",
+        onConfirm: () => {
+          clearPendingYamlUpdate();
+          action();
+        },
+      });
+    },
+    [
+      clearPendingYamlUpdate,
+      flushYamlUpdate,
+      hasUnsavedChanges,
+      showConfirm,
+      t.apiManager.unsavedChangesDesc,
+      t.apiManager.unsavedChangesTitle,
+    ],
+  );
+  const jsonParseErrorFlags = useRef({
+    apiHeaders: false,
+    apiParams: false,
+    pipelineHeaders: false,
+    pipelineExtraParams: false,
+  });
+  const lastValidJsonRef = useRef({
+    apiHeaders: {} as Record<string, any>,
+    apiParams: {} as Record<string, any>,
+    pipelineHeaders: {} as Record<string, any>,
+    pipelineExtraParams: {} as Record<string, any>,
+  });
+  const parseJsonObjectField = useCallback(
+    (
+      raw: string,
+      fieldKey: keyof typeof jsonParseErrorFlags.current,
+      fieldLabel: string,
+    ) => {
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        jsonParseErrorFlags.current[fieldKey] = false;
+        lastValidJsonRef.current[fieldKey] = {};
+        return {};
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        const isPlainObject =
+          parsed && typeof parsed === "object" && !Array.isArray(parsed);
+        if (isPlainObject) {
+          jsonParseErrorFlags.current[fieldKey] = false;
+          lastValidJsonRef.current[fieldKey] = parsed;
+          return parsed as Record<string, any>;
+        }
+      } catch {
+        // handled below
+      }
+      if (!jsonParseErrorFlags.current[fieldKey]) {
+        emitToast({
+          title: texts.jsonParseErrorTitle,
+          description: texts.jsonParseErrorDesc.replace("{field}", fieldLabel),
+          variant: "warning",
+        });
+        jsonParseErrorFlags.current[fieldKey] = true;
+      }
+      return { ...lastValidJsonRef.current[fieldKey] };
+    },
+    [emitToast, texts.jsonParseErrorDesc, texts.jsonParseErrorTitle],
+  );
+  const resolveCachedJsonField = useCallback(
+    (
+      raw: string,
+      prevRaw: string,
+      fieldKey: keyof typeof jsonParseErrorFlags.current,
+      fieldLabel: string,
+    ) => {
+      if (raw === prevRaw) return lastValidJsonRef.current[fieldKey];
+      return parseJsonObjectField(raw, fieldKey, fieldLabel);
+    },
+    [parseJsonObjectField],
   );
   const orderProfileIds = useCallback(
     (targetKind: ProfileKind, ids: string[]) => {
@@ -1793,6 +2008,18 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const [paramPairs, setParamPairs] = useState<KeyValuePair[]>(() =>
     parseKeyValuePairs(DEFAULT_API_FORM.params),
   );
+  const activePreset = useMemo(
+    () =>
+      activePresetId
+        ? API_PRESETS_DATA.find((preset) => preset.id === activePresetId) || null
+        : null,
+    [activePresetId],
+  );
+  const supportsModelList = useMemo(() => {
+    if (apiForm.apiType !== "openai_compat") return false;
+    if (!activePreset) return true;
+    return Boolean(activePreset.supportsModelList);
+  }, [apiForm.apiType, activePreset]);
   const [pipelineComposer, setPipelineComposer] =
     useState<PipelineComposerState>(DEFAULT_PIPELINE_COMPOSER);
   const [promptForm, setPromptForm] =
@@ -1820,6 +2047,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const [chunkForm, setChunkForm] =
     useState<ChunkFormState>(DEFAULT_CHUNK_FORM);
   const [apiTest, setApiTest] = useState<ApiTestState>({ status: "idle" });
+  const [apiConcurrency, setApiConcurrency] = useState<ApiConcurrencyState>({
+    status: "idle",
+  });
   const [lastValidation, setLastValidation] = useState<ValidationResult | null>(
     null,
   );
@@ -1869,8 +2099,24 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       let changed = false;
       const next = { ...prev };
       (Object.keys(profileIndex) as ProfileKind[]).forEach((targetKind) => {
-        const ids = profileIndex[targetKind] || [];
-        const existing = prev[targetKind] || [];
+        const rawIds = profileIndex[targetKind] || [];
+        const ids: string[] = [];
+        const idsSet = new Set<string>();
+        rawIds.forEach((id) => {
+          if (!idsSet.has(id)) {
+            idsSet.add(id);
+            ids.push(id);
+          }
+        });
+        const existingRaw = prev[targetKind] || [];
+        const existing: string[] = [];
+        const existingSet = new Set<string>();
+        existingRaw.forEach((id) => {
+          if (!existingSet.has(id)) {
+            existingSet.add(id);
+            existing.push(id);
+          }
+        });
         if (!ids.length && !existing.length) return;
         const existsSet = new Set(ids);
         const trimmed = existing.filter((id) => existsSet.has(id));
@@ -1907,6 +2153,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const pipelineSummarySeq = useRef(0);
   const loadDetailSeq = useRef(0);
   const apiTestSeq = useRef(0);
+  const apiConcurrencySeq = useRef(0);
   const modelListSeq = useRef(0);
 
   useEffect(() => {
@@ -1920,6 +2167,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   useEffect(() => {
     apiTestSeq.current += 1;
     setApiTest({ status: "idle" });
+    apiConcurrencySeq.current += 1;
+    setApiConcurrency({ status: "idle" });
   }, [apiForm.baseUrl, apiForm.apiKey, apiForm.timeout, apiForm.apiType, apiForm.model]);
 
   useEffect(() => {
@@ -1938,6 +2187,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   useEffect(() => {
     persistJson(PROFILE_ORDER_KEY, profileOrder);
   }, [profileOrder]);
+
+  useEffect(() => {
+    persistJson(SHOW_ID_FIELDS_KEY, showIdField);
+  }, [showIdField]);
 
   useEffect(() => {
     if (!visiblePipelineIds.length) return;
@@ -2055,17 +2308,109 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     return label || texts.untitledProfile;
   };
 
+  const showLineChunkLabel = useMemo(() => {
+    let count = 0;
+    for (const id of profileIndex.chunk) {
+      if (chunkTypeIndex[id] === "line") {
+        count += 1;
+        if (count > 1) return true;
+      }
+    }
+    return false;
+  }, [profileIndex.chunk, chunkTypeIndex]);
+
   const getStrategyLabel = (lineId: string, chunkId: string) => {
     const lineLabel = lineId ? getProfileLabel("policy", lineId) : "";
     const chunkLabel = chunkId ? getProfileLabel("chunk", chunkId) : "";
+    const chunkType = chunkId ? chunkTypeIndex[chunkId] : "";
+    if (chunkType === "line") {
+      if (lineLabel && (!showLineChunkLabel || !chunkLabel)) return lineLabel;
+      if (lineLabel && chunkLabel) return `${lineLabel} · ${chunkLabel}`;
+      return lineLabel || chunkLabel || texts.untitledProfile;
+    }
+    if (chunkType === "block") {
+      return chunkLabel || lineLabel || texts.untitledProfile;
+    }
     if (lineLabel && chunkLabel) return `${lineLabel} · ${chunkLabel}`;
     return lineLabel || chunkLabel || texts.untitledProfile;
   };
 
-  const getExistingIds = (targetKind: ProfileKind) =>
-    profileIndex[targetKind]?.length
-      ? profileIndex[targetKind]
-      : profiles.map((item) => item.id);
+  const getFallbackProfileId = (targetKind: ProfileKind, excludeId: string) => {
+    const candidates = visibleProfileIndex[targetKind] || [];
+    return candidates.find((id) => id !== excludeId) || "";
+  };
+
+  const updatePipelineReferences = async (
+    refKind: ProfileKind,
+    fromId: string,
+    toId?: string,
+  ) => {
+    const fieldMap: Partial<Record<ProfileKind, string>> = {
+      api: "provider",
+      prompt: "prompt",
+      parser: "parser",
+      policy: "line_policy",
+      chunk: "chunk_policy",
+    };
+    const field = fieldMap[refKind];
+    if (!field) return { updated: 0, missingFallback: false };
+    const list = await window.api?.pipelineV2ProfilesList?.("pipeline");
+    if (!Array.isArray(list) || !list.length) {
+      return { updated: 0, missingFallback: false };
+    }
+    const pipelineIds = list.map((item) => item.id).filter(Boolean);
+    const fallbackId = toId || getFallbackProfileId(refKind, fromId);
+    const missingFallback = !toId && !fallbackId;
+    let updated = 0;
+    try {
+      const loaded = await loadProfilesBatch("pipeline", pipelineIds);
+      for (const entry of loaded) {
+        const result = entry.result;
+        const data =
+          result?.data ??
+          (result?.yaml ? (safeLoadYaml(result.yaml) as any) : null);
+        if (!data || typeof data !== "object") continue;
+        if (String((data as any)[field] ?? "") !== fromId) continue;
+        const nextData: any = { ...(data as any) };
+        if (toId) {
+          nextData[field] = toId;
+        } else if (fallbackId) {
+          nextData[field] = fallbackId;
+        } else {
+          delete nextData[field];
+        }
+        if (field === "line_policy" && !nextData.line_policy) {
+          nextData.apply_line_policy = false;
+        }
+        const targetId = String(nextData.id || entry.id || "").trim();
+        if (!targetId) continue;
+        const nextYaml = yaml.dump(nextData);
+        const saveResult = await window.api?.pipelineV2ProfilesSave?.(
+          "pipeline",
+          targetId,
+          nextYaml,
+          { allowOverwrite: true },
+        );
+        if (saveResult?.ok) updated += 1;
+      }
+    } catch (error) {
+      console.error("Failed to update pipeline references:", error);
+    }
+    return { updated, missingFallback };
+  };
+
+  const getExistingIds = (targetKind: ProfileKind) => {
+    const ids = new Set<string>();
+    (profileIndex[targetKind] || []).forEach((id) => ids.add(id));
+    const meta = profileMeta[targetKind];
+    if (meta) {
+      Object.keys(meta).forEach((id) => ids.add(id));
+    }
+    profiles.forEach((item) => {
+      if (item.kind === targetKind) ids.add(item.id);
+    });
+    return Array.from(ids);
+  };
 
   const buildValidationIndex = () => {
     const next: Record<ProfileKind, string[]> = { ...profileIndex };
@@ -2077,6 +2422,20 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       }
     });
     return next;
+  };
+
+  const isExistingProfileId = (
+    targetKind: ProfileKind,
+    id: string,
+    currentId?: string | null,
+  ) => {
+    if (!id) return false;
+    if (currentId && id === currentId) return false;
+    const indexed = profileIndex[targetKind];
+    if (Array.isArray(indexed) && indexed.includes(id)) return true;
+    const meta = profileMeta[targetKind];
+    if (meta && id in meta) return true;
+    return profiles.some((item) => item.kind === targetKind && item.id === id);
   };
 
   const buildAutoProfileId = (
@@ -2097,8 +2456,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     setAutoIdEnabled((prev) => ({ ...prev, [targetKind]: false }));
   };
 
-  const normalizePresetUrl = (value: string) =>
-    value.trim().replace(/\/+$/, "");
+  const toggleIdField = (targetKind: ProfileKind) => {
+    setShowIdField((prev) => ({
+      ...prev,
+      [targetKind]: !prev[targetKind],
+    }));
+  };
 
   const detectPresetByBaseUrl = (baseUrl: string) => {
     const normalized = normalizePresetUrl(baseUrl);
@@ -2149,24 +2512,17 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       }
       return;
     }
-    const inferById = (id: string) => {
-      const normalized = id.toLowerCase();
-      if (normalized.includes("line")) return "line";
-      if (normalized.includes("legacy") || normalized.includes("doc"))
-        return "legacy";
-      return "";
-    };
-    const preloaded = new Map<string, "" | "line" | "legacy">();
+    const preloaded = new Map<string, "" | "line" | "block">();
     if (Array.isArray(preloadList)) {
       preloadList.forEach((item) => {
         const rawId = item?.id ? String(item.id) : "";
         if (!rawId) return;
         const rawType = String(item.chunk_type || item.type || "");
-        const normalized = rawType === "line" || rawType === "legacy" ? rawType : "";
+        const normalized = normalizeChunkType(rawType);
         if (normalized) preloaded.set(rawId, normalized);
       });
     }
-    const directEntries: Array<[string, "" | "line" | "legacy"]> = [];
+    const directEntries: Array<[string, "" | "line" | "block"]> = [];
     const pendingIds: string[] = [];
     for (const id of chunkIds) {
       const cached = chunkTypeIndex[id];
@@ -2179,19 +2535,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         directEntries.push([id, preloadedType]);
         continue;
       }
-      const inferred = inferById(id);
-      if (inferred) {
-        directEntries.push([id, inferred]);
-      } else {
-        pendingIds.push(id);
-      }
+      pendingIds.push(id);
     }
     const commitEntries = (
-      entries: Array<[string, "" | "line" | "legacy"]>,
+      entries: Array<[string, "" | "line" | "block"]>,
     ) => {
       if (requestId && requestId !== loadProfilesSeq.current) return;
       setChunkTypeIndex((prev) => {
-        const next: Record<string, "" | "line" | "legacy"> = {};
+        const next: Record<string, "" | "line" | "block"> = {};
         chunkIds.forEach((id) => {
           const existing = prev[id];
           if (existing) next[id] = existing;
@@ -2218,55 +2569,15 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             result?.data ??
             (result?.yaml ? (safeLoadYaml(result.yaml) as any) : null);
           const raw = String(data?.chunk_type || data?.type || "");
-          const normalized = raw === "line" || raw === "legacy" ? raw : "";
-          return [id, normalized] as [string, "" | "line" | "legacy"];
+          const normalized = normalizeChunkType(raw);
+          return [id, normalized] as [string, "" | "line" | "block"];
         } catch {
-          return [id, ""] as [string, "" | "line" | "legacy"];
+          return [id, ""] as [string, "" | "line" | "block"];
         }
       });
       commitEntries([...directEntries, ...entries]);
     } catch {
       commitEntries(directEntries);
-    }
-  };
-
-  const loadApiRuntimeIndex = async (apiIds: string[], requestId?: number) => {
-    if (!apiIds.length) {
-      return;
-    }
-    try {
-      const entries = await Promise.all(
-        apiIds.map(async (id) => {
-          try {
-            const result = await window.api?.pipelineV2ProfilesLoad?.("api", id);
-            const data =
-              result?.data ??
-              (result?.yaml ? (safeLoadYaml(result.yaml) as any) : null);
-            const timeoutRaw = data?.timeout;
-            const concurrencyRaw = data?.concurrency;
-            const entry: { timeout?: number; concurrency?: number } = {};
-            if (timeoutRaw !== undefined && timeoutRaw !== null) {
-              const parsed = Number.parseInt(String(timeoutRaw), 10);
-              if (Number.isFinite(parsed)) entry.timeout = parsed;
-            }
-            if (concurrencyRaw !== undefined && concurrencyRaw !== null) {
-              const parsed = Number.parseInt(String(concurrencyRaw), 10);
-              if (Number.isFinite(parsed)) entry.concurrency = parsed;
-            }
-            return [id, entry] as const;
-          } catch {
-            return [id, {} as { timeout?: number; concurrency?: number }] as const;
-          }
-        }),
-      );
-      if (!requestId || requestId === loadProfilesSeq.current) {
-        setApiRuntimeIndex((prev) => ({
-          ...prev,
-          ...Object.fromEntries(entries),
-        }));
-      }
-    } catch {
-      // ignore
     }
   };
 
@@ -2294,13 +2605,19 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       );
       for (const [targetKind, list] of results) {
         if (!Array.isArray(list)) continue;
-        nextIndex[targetKind] = list.map((item) => item.id);
-        nextMeta[targetKind] = Object.fromEntries(
-          list.map((item) => [
-            item.id,
-            normalizeDefaultProfileName(item.id, item.name || item.id),
-          ]),
-        );
+        const ids: string[] = [];
+        const metaEntries = new Map<string, string>();
+        list.forEach((item) => {
+          const rawId = item?.id ? String(item.id) : "";
+          if (!rawId || metaEntries.has(rawId)) return;
+          ids.push(rawId);
+          metaEntries.set(
+            rawId,
+            normalizeDefaultProfileName(rawId, item.name || rawId),
+          );
+        });
+        nextIndex[targetKind] = ids;
+        nextMeta[targetKind] = Object.fromEntries(metaEntries);
         if (targetKind === "chunk") {
           chunkList = list;
         }
@@ -2449,39 +2766,44 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     if (pendingSelection && pendingSelection.kind === kind) {
       setSelectedId(pendingSelection.id);
       setPendingSelection(null);
-    } else if (pendingCreate && pendingCreate.kind === kind) {
-      setSelectedId(null);
-      if ("preset" in pendingCreate) {
-        handlePresetSelect(pendingCreate.preset ?? null, pendingCreate.channelId);
-      } else if (pendingCreate.yaml) {
-        setYamlText(pendingCreate.yaml);
-        syncFormsFromYaml(pendingCreate.yaml, kind);
-      }
-      setPendingCreate(null);
     } else {
       setSelectedId(null);
-      setYamlText("");
+      commitYamlText("", { baseline: true });
     }
   }, [kind]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- buildNewProfileYaml/handlePresetSelect are stable within the component render
+  useEffect(() => {
+    if (!pendingCreate || pendingCreate.kind !== kind) return;
+    if (profilesLoadedKind !== kind) return;
+    setSelectedId(null);
+    setEditorTab("visual");
+    resetFormState(kind);
+    if ("preset" in pendingCreate) {
+      handlePresetSelect(pendingCreate.preset ?? null, pendingCreate.channelId);
+    } else {
+      const nextYaml = buildNewProfileYaml(kind);
+      commitYamlText(nextYaml);
+      setBaselineYaml("");
+      syncFormsFromYaml(nextYaml, kind);
+    }
+    setPendingCreate(null);
+  }, [kind, pendingCreate, profilesLoadedKind]);
+
   useEffect(() => {
     if (kind !== "pipeline") return;
+    setPipelineSummaryIndex((prev) =>
+      prunePipelineSummaryIndex(prev, visiblePipelineIds),
+    );
     if (!visiblePipelineIds.length) {
-      setPipelineSummaryIndex({});
       setIsPipelineSummaryLoading(false);
       return;
     }
-    const visibleSet = new Set(visiblePipelineIds);
-    setPipelineSummaryIndex((prev) => {
-      const next = Object.fromEntries(
-        Object.entries(prev).filter(([id]) => visibleSet.has(id)),
-      );
-      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
-    });
     const pendingIds = visiblePipelineIds.filter(
       (id) => !pipelineSummaryIndex[id],
     );
-    if (!pendingIds.length) {
+    const batchIds = pendingIds.slice(0, PIPELINE_SUMMARY_BATCH_SIZE);
+    if (!batchIds.length) {
       setIsPipelineSummaryLoading(false);
       return;
     }
@@ -2489,11 +2811,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     setIsPipelineSummaryLoading(true);
     const loadSummaries = async () => {
       try {
-        const loaded = await loadProfilesBatch("pipeline", pendingIds);
+        const loaded = await loadProfilesBatch("pipeline", batchIds);
         const loadedMap = new Map(
           loaded.map((entry) => [entry.id, entry.result]),
         );
-        const entries = pendingIds.map((id) => {
+        const entries = batchIds.map((id) => {
           try {
             const result = loadedMap.get(id);
             const data =
@@ -2521,14 +2843,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     };
     loadSummaries();
   }, [kind, visiblePipelineIds, pipelineSummaryIndex]);
-
-  useEffect(() => {
-    if (kind !== "pipeline") return;
-    const providerId = pipelineComposer.provider;
-    if (!providerId) return;
-    if (apiRuntimeIndex[providerId]) return;
-    loadApiRuntimeIndex([providerId]);
-  }, [kind, pipelineComposer.provider, apiRuntimeIndex]);
 
   useEffect(() => {
     if (pendingSelection && pendingSelection.kind === kind) {
@@ -2561,9 +2875,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       if (result?.yaml) {
         if (requestId !== loadDetailSeq.current) return;
         if (selectedId !== id || kind !== targetKind) return;
-        setYamlText(result.yaml || "");
+        commitYamlText(result.yaml || "", { baseline: true });
         const data = result.data ?? (safeLoadYaml(result.yaml) as any);
         if (!data || typeof data !== "object") return;
+        lastProfileDataRef.current[targetKind] = data;
         syncFormsFromData(targetKind, data);
         setAutoIdEnabled((prev) => ({ ...prev, [targetKind]: false }));
         if (targetKind === "api") setShowApiSetup(false);
@@ -2715,8 +3030,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
   // Actions
   const handleSyncFromYaml = () => {
-    const immediateParsed = parseYamlText(yamlText);
-    if (!yamlText.trim()) {
+    const latestYaml = flushYamlUpdate();
+    const immediateParsed = parseYamlText(latestYaml);
+    if (!latestYaml.trim()) {
       emitToast({
         title: texts.syncFromYaml,
         description: texts.emptyYaml,
@@ -2742,11 +3058,21 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     setEditorTab("visual");
   };
 
+  const returnToKindHome = (targetKind: ProfileKind) => {
+    if (targetKind === "pipeline") {
+      setPipelineView("overview");
+    }
+    setSelectedId(null);
+    commitYamlText("", { baseline: true });
+    resetFormState(targetKind);
+  };
+
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const immediateParsed = parseYamlText(yamlText);
-      if (!yamlText.trim()) {
+      const latestYaml = flushYamlUpdate();
+      const immediateParsed = parseYamlText(latestYaml);
+      if (!latestYaml.trim()) {
         emitToast({
           title: texts.saveFail,
           description: texts.emptyYaml,
@@ -2770,7 +3096,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         immediateParsed.data,
         validationIndex,
         texts,
-        chunkTypeIndex,
       );
       setLastValidation(localValidation);
       if (localValidation.errors.length) {
@@ -2806,18 +3131,29 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         if (kind === "api") setShowApiSetup(true);
         return;
       }
-      let saveYamlText = yamlText;
+      if (isExistingProfileId(kind, saveId, existingId)) {
+        emitToast({
+          title: texts.saveFail,
+          description: texts.validationProfileExists.replace("{id}", saveId),
+          variant: "error",
+        });
+        if (kind === "api") setShowApiSetup(true);
+        return;
+      }
+      let saveYamlText = latestYaml;
       if (parsedData && parsedId && parsedData.id !== parsedId) {
         const patched = { ...parsedData, id: parsedId };
         saveYamlText = yaml.dump(patched);
-        setYamlText(saveYamlText);
+        commitYamlText(saveYamlText);
         syncFormsFromData(kind, patched);
       }
 
+      const allowOverwrite = Boolean(existingId) && !isRename;
       const result = await window.api?.pipelineV2ProfilesSave?.(
         kind,
         saveId,
         saveYamlText,
+        { allowOverwrite },
       );
       if (result?.ok) {
         emitToast({
@@ -2835,16 +3171,43 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             variant: "warning",
           });
         }
-        await loadProfiles();
-        if (kind === "pipeline") {
-          setPipelineView("overview");
+        if (isRename && existingId && existingId !== saveId && kind !== "pipeline") {
+          const refUpdate = await updatePipelineReferences(
+            kind,
+            existingId,
+            saveId,
+          );
+          if (refUpdate.updated) {
+            emitToast({
+              title: texts.referenceUpdateTitle,
+              description: texts.referenceUpdateDesc.replace(
+                "{count}",
+                String(refUpdate.updated),
+              ),
+              variant: "success",
+            });
+          }
+          if (refUpdate.missingFallback) {
+            emitToast({
+              title: texts.referenceUpdateMissingTitle,
+              description: texts.referenceUpdateMissingDesc,
+              variant: "warning",
+            });
+          }
         }
-        setSelectedId(null);
-        setYamlText("");
+        const normalizedData =
+          parsedData && parsedId && parsedData.id !== parsedId
+            ? { ...parsedData, id: parsedId }
+            : parsedData;
+        if (normalizedData && typeof normalizedData === "object") {
+          lastProfileDataRef.current[kind] = normalizedData as Record<string, any>;
+        }
+        await loadProfiles();
         if (kind === "api" && pendingPipelineLink) {
           await updateActivePipelineProvider(saveId);
           setPendingPipelineLink(false);
         }
+        returnToKindHome(kind);
         if (isRename && existingId && existingId !== saveId) {
           const deleteResult = await window.api?.pipelineV2ProfilesDelete?.(
             kind,
@@ -2930,8 +3293,29 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           if (result?.ok) {
             emitToast({ title: texts.deleteOk, variant: "success" });
             await loadProfiles();
+            const refUpdate = await updatePipelineReferences(
+              deleteKind,
+              deleteId,
+            );
+            if (refUpdate.updated) {
+              emitToast({
+                title: texts.referenceUpdateTitle,
+                description: texts.referenceUpdateDesc.replace(
+                  "{count}",
+                  String(refUpdate.updated),
+                ),
+                variant: "success",
+              });
+            }
+            if (refUpdate.missingFallback) {
+              emitToast({
+                title: texts.referenceUpdateMissingTitle,
+                description: texts.referenceUpdateMissingDesc,
+                variant: "warning",
+              });
+            }
             setSelectedId(null);
-            setYamlText("");
+            commitYamlText("", { baseline: true });
             if (deleteKind === "pipeline") {
               setPipelineView("overview");
               if (deleteId === activePipelineId) {
@@ -2982,34 +3366,38 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   };
 
   const handleCreateByKind = (targetKind: ProfileKind) => {
-    if (targetKind === "pipeline") {
-      setPipelineView("editor");
-    }
-    setAutoIdEnabled((prev) => ({ ...prev, [targetKind]: true }));
-    setSelectedId(null);
-    setEditorTab("visual");
-    resetFormState(targetKind);
-    if (targetKind === "api") setShowApiSetup(false);
-    if (targetKind === "api") {
+    guardUnsaved(() => {
+      if (targetKind === "pipeline") {
+        setPipelineView("editor");
+      }
+      setAutoIdEnabled((prev) => ({ ...prev, [targetKind]: true }));
+      setSelectedId(null);
+      setEditorTab("visual");
+      resetFormState(targetKind);
+      if (targetKind === "api") setShowApiSetup(false);
+      setBaselineYaml("");
+      if (targetKind === "api") {
+        if (kind !== targetKind) {
+          setPendingCreate({ kind: targetKind, preset: null });
+          setKind(targetKind);
+          setSearchTerm("");
+          return;
+        }
+        handlePresetSelect(null);
+        return;
+      }
+      // For non-API kinds, pre-fill template immediately
       if (kind !== targetKind) {
-        setPendingCreate({ kind: targetKind, preset: null });
+        setPendingCreate({ kind: targetKind });
         setKind(targetKind);
         setSearchTerm("");
         return;
       }
-      handlePresetSelect(null);
-      return;
-    }
-    // For non-API kinds, pre-fill template immediately
-    const nextYaml = buildNewProfileYaml(targetKind);
-    if (kind !== targetKind) {
-      setPendingCreate({ kind: targetKind, yaml: nextYaml });
-      setKind(targetKind);
-      setSearchTerm("");
-      return;
-    }
-    setYamlText(nextYaml);
-    syncFormsFromYaml(nextYaml, targetKind);
+      const nextYaml = buildNewProfileYaml(targetKind);
+      commitYamlText(nextYaml);
+      setBaselineYaml("");
+      syncFormsFromYaml(nextYaml, targetKind);
+    });
   };
 
   const handleCreate = () => handleCreateByKind(kind);
@@ -3018,19 +3406,42 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     id: string,
     targetKind: ProfileKind = kind,
   ) => {
-    if (targetKind !== kind) {
-      setPendingSelection({ id, kind: targetKind });
-      setYamlText("");
+    guardUnsaved(() => {
+      if (targetKind !== kind) {
+        setPendingSelection({ id, kind: targetKind });
+        commitYamlText("", { baseline: true });
+        setEditorTab("visual");
+        setKind(targetKind);
+        setSearchTerm("");
+        return;
+      }
+      if (targetKind === "pipeline") {
+        setPipelineView("editor");
+      }
+      setSelectedId(id);
       setEditorTab("visual");
-      setKind(targetKind);
-      setSearchTerm("");
-      return;
-    }
-    if (targetKind === "pipeline") {
-      setPipelineView("editor");
-    }
-    setSelectedId(id);
-    setEditorTab("visual");
+    });
+  };
+
+  const jumpToKindHome = (targetKind: ProfileKind) => {
+    guardUnsaved(() => {
+      if (targetKind !== kind) {
+        setPendingSelection(null);
+        setSelectedId(null);
+        commitYamlText("", { baseline: true });
+        setEditorTab("visual");
+        setKind(targetKind);
+        setSearchTerm("");
+      } else {
+        returnToKindHome(targetKind);
+      }
+      if (targetKind === "pipeline") {
+        setPipelineView("overview");
+      }
+      if (targetKind === "api") {
+        setShowApiSetup(false);
+      }
+    });
   };
 
   const handleTestApi = async () => {
@@ -3095,9 +3506,86 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     }
   };
 
+  const handleTestConcurrency = async () => {
+    if (kind !== "api") return;
+    if (apiForm.apiType === "pool") {
+      emitToast({
+        title: texts.concurrencyAutoTest,
+        description: texts.concurrencyAutoTestPoolHint,
+        variant: "warning",
+      });
+      return;
+    }
+    const baseUrl = apiForm.baseUrl.trim();
+    if (!baseUrl) {
+      emitToast({
+        title: texts.concurrencyAutoTest,
+        description: texts.formMissing,
+        variant: "warning",
+      });
+      return;
+    }
+    const apiKey =
+      apiForm.apiKey
+        .split(/\r?\n/)
+        .map((item) => item.trim())
+        .find(Boolean) || "";
+    const timeoutValue = Number(apiForm.timeout);
+    const timeoutMs =
+      Number.isFinite(timeoutValue) && timeoutValue > 0
+        ? timeoutValue * 1000
+        : 8000;
+    const maxConcurrencyValue = Number(apiForm.concurrency);
+    const maxConcurrency =
+      Number.isFinite(maxConcurrencyValue) && maxConcurrencyValue > 0
+        ? Math.floor(maxConcurrencyValue)
+        : undefined;
+    const requestId = ++apiConcurrencySeq.current;
+    setApiConcurrency({ status: "testing" });
+    try {
+      const result = await window.api?.pipelineV2ApiConcurrencyTest?.({
+        baseUrl,
+        apiKey,
+        timeoutMs,
+        maxConcurrency,
+      });
+      if (requestId !== apiConcurrencySeq.current) return;
+      if (result?.ok) {
+        setApiConcurrency({
+          status: "success",
+          maxConcurrency: result.maxConcurrency,
+          latencyMs: result.latencyMs,
+          statusCounts: result.statusCounts,
+          url: result.url,
+          message: result.message,
+        });
+      } else {
+        setApiConcurrency({
+          status: "error",
+          message: formatServerError(
+            result?.message,
+            texts.concurrencyAutoTestFail,
+            texts,
+          ),
+          latencyMs: result?.latencyMs,
+          statusCounts: result?.statusCounts,
+          url: result?.url,
+        });
+      }
+    } catch (e) {
+      if (requestId !== apiConcurrencySeq.current) return;
+      setApiConcurrency({ status: "error", message: String(e) });
+    }
+  };
+
   const handleFetchModelList = async () => {
     if (kind !== "api") return;
     if (apiForm.apiType === "pool") return;
+    if (!supportsModelList) {
+      setModelListRequested(true);
+      setModelListError(texts.modelListUnsupported);
+      return;
+    }
     const baseUrl = apiForm.baseUrl.trim();
     if (!baseUrl) {
       emitToast({
@@ -3207,6 +3695,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   };
 
   const resetFormState = (targetKind: ProfileKind) => {
+    lastProfileDataRef.current[targetKind] = null;
     if (targetKind === "api") {
       setApiForm(DEFAULT_API_FORM);
       setShowApiSetup(false);
@@ -3266,10 +3755,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     preset: ApiPreset | null,
     channelId?: string,
   ) => {
+    lastProfileDataRef.current.api = null;
     if (preset) {
       const option = resolvePresetOption(preset, channelId);
-      const baseId = `${preset.id}_client`;
-      const id = createUniqueProfileId(baseId, getExistingIds("api"));
+      const id = buildApiPresetProfileId(preset.id, getExistingIds("api"));
       const presetLabel = getPresetLabel(preset);
       const newForm: ApiFormState = {
         ...DEFAULT_API_FORM,
@@ -3329,19 +3818,27 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         result?.data ?? (result?.yaml ? (safeLoadYaml(result.yaml) as any) : null);
       const nextData: any = { ...(data || {}), id: pipelineId };
       nextData.provider = providerId;
-      if (!nextData.prompt) nextData.prompt = profileIndex.prompt[0] || "";
-      if (!nextData.parser) nextData.parser = profileIndex.parser[0] || "";
-      if (!nextData.chunk_policy)
-        nextData.chunk_policy = profileIndex.chunk[0] || "";
+      const fallbackPrompt = profileIndex.prompt[0] || "";
+      const fallbackParser = profileIndex.parser[0] || "";
+      const fallbackChunk = profileIndex.chunk[0] || "";
+      if (!nextData.prompt && fallbackPrompt) nextData.prompt = fallbackPrompt;
+      if (!nextData.parser && fallbackParser) nextData.parser = fallbackParser;
+      if (!nextData.chunk_policy && fallbackChunk)
+        nextData.chunk_policy = fallbackChunk;
       const chunkMode = inferChunkType(String(nextData.chunk_policy || ""));
+      const hasLinePolicy = Boolean(nextData.line_policy);
+      const hasApplyFlag = nextData.apply_line_policy !== undefined;
       if (chunkMode === "line") {
-        if (!nextData.line_policy)
-          nextData.line_policy = profileIndex.policy[0] || "";
-        nextData.apply_line_policy = Boolean(nextData.line_policy);
-      } else if (chunkMode === "legacy") {
-        nextData.apply_line_policy = false;
-      } else if (nextData.line_policy) {
-        nextData.apply_line_policy = true;
+        if (!hasApplyFlag) {
+          nextData.apply_line_policy = hasLinePolicy;
+        }
+        if (nextData.apply_line_policy && !hasLinePolicy) {
+          const fallbackPolicy = profileIndex.policy[0] || "";
+          if (fallbackPolicy) nextData.line_policy = fallbackPolicy;
+        }
+      } else {
+        if (nextData.line_policy !== undefined) delete nextData.line_policy;
+        if (nextData.apply_line_policy !== undefined) delete nextData.apply_line_policy;
       }
 
       const nextYaml = yaml.dump(nextData);
@@ -3349,10 +3846,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         "pipeline",
         pipelineId,
         nextYaml,
+        { allowOverwrite: true },
       );
       setActivePipelineId(pipelineId);
       if (kind === "pipeline" && selectedId === pipelineId) {
-        setYamlText(nextYaml);
+        commitYamlText(nextYaml, { baseline: true });
         syncFormsFromData("pipeline", nextData);
       }
     } catch (e) {
@@ -3393,7 +3891,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     if (option.baseUrl) nextForm.baseUrl = option.baseUrl;
     if (option.model) nextForm.model = option.model;
     if (!nextForm.name.trim()) nextForm.name = presetLabel;
-    if (!nextForm.id.trim()) nextForm.id = `${preset.id}_client`;
+    if (!nextForm.id.trim())
+      nextForm.id = buildApiPresetProfileId(preset.id, getExistingIds("api"));
     updateYamlFromApiForm(nextForm);
     setActivePresetId(preset.id);
     setActivePresetChannel(option.channelId || "");
@@ -3418,6 +3917,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       return { [raw]: true };
     }
     return {};
+  };
+
+  const normalizeSourceLang = (value: string) => {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "";
+    const base = trimmed.toLowerCase().split(/[-_]/)[0];
+    if (base === "ja" || base === "jp") return base;
+    return trimmed;
   };
 
 
@@ -3616,28 +4123,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const inferChunkType = (ref?: string) => {
     if (!ref) return "";
     const known = chunkTypeIndex[ref];
-    if (known) return known;
-    const normalized = ref.toLowerCase();
-    if (normalized.includes("line")) return "line";
-    if (normalized.includes("legacy") || normalized.includes("doc"))
-      return "legacy";
-    return "";
-  };
-
-  const resolvePipelineTranslationMode = (
-    chunkPolicy: string,
-    linePolicy: string,
-    fallback: "line" | "block",
-  ) => {
-    const chunkType = inferChunkType(chunkPolicy);
-    if (chunkType === "legacy") return "block";
-    if (chunkType === "line") return "line";
-    if (linePolicy) return "line";
-    return fallback;
+    return known || "";
   };
 
   const syncFormsFromData = (targetKind: ProfileKind, data: any) => {
     if (!data || typeof data !== "object") return;
+    lastProfileDataRef.current[targetKind] = data;
     if (targetKind === "api") {
       const rawParams =
         data.params && typeof data.params === "object" ? data.params : {};
@@ -3669,6 +4160,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       const paramsText = Object.keys(remainingParams).length
         ? JSON.stringify(remainingParams, null, 2)
         : "";
+      const apiHeaders =
+        data.headers && typeof data.headers === "object" && !Array.isArray(data.headers)
+          ? data.headers
+          : {};
+      lastValidJsonRef.current.apiHeaders = apiHeaders as Record<string, any>;
+      lastValidJsonRef.current.apiParams = remainingParams as Record<string, any>;
       const rawEndpoints = Array.isArray(data.endpoints) ? data.endpoints : [];
       const normalizedEndpoints = rawEndpoints
         .filter((item: any) => item && typeof item === "object")
@@ -3709,7 +4206,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         members: membersText,
         poolEndpoints,
         strategy: data.strategy === "random" ? "random" : "round_robin",
-        headers: JSON.stringify(data.headers || {}, null, 2),
+        headers: JSON.stringify(apiHeaders, null, 2),
         params: paramsText,
         timeout:
           data.timeout !== undefined && data.timeout !== null
@@ -3739,13 +4236,45 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       });
     }
     if (targetKind === "pipeline") {
-      const chunkMode = inferChunkType(String(data.chunk_policy || ""));
-      const translationMode =
-        data.apply_line_policy || data.line_policy
-          ? "line"
-          : chunkMode === "line"
-            ? "line"
-            : "block";
+      const chunkPolicy = String(data.chunk_policy || "");
+      const chunkType = inferChunkType(chunkPolicy);
+      const rawLinePolicy = String(data.line_policy || "");
+      const rawApplyLinePolicy = Boolean(data.apply_line_policy);
+      const linePolicy = chunkType === "line" ? rawLinePolicy : "";
+      const applyLinePolicy =
+        chunkType === "line" && rawApplyLinePolicy && Boolean(linePolicy);
+      const translationMode = resolvePipelineTranslationMode(
+        data.translation_mode || data.translationMode || data.mode,
+        chunkPolicy,
+        linePolicy,
+        applyLinePolicy,
+        applyLinePolicy ? "line" : "block",
+        chunkTypeIndex,
+      );
+      const pipelineHeaders =
+        data.settings?.headers &&
+          typeof data.settings.headers === "object" &&
+          !Array.isArray(data.settings.headers)
+          ? data.settings.headers
+          : {};
+      const extraParamEntries = data.settings?.params
+        ? Object.entries(data.settings.params).filter(
+          ([key]) =>
+            ![
+              "top_p",
+              "presence_penalty",
+              "frequency_penalty",
+              "seed",
+              "stop",
+            ].includes(key),
+        )
+        : [];
+      const extraParamObject = extraParamEntries.length
+        ? Object.fromEntries(extraParamEntries)
+        : {};
+      lastValidJsonRef.current.pipelineHeaders = pipelineHeaders as Record<string, any>;
+      lastValidJsonRef.current.pipelineExtraParams =
+        extraParamObject as Record<string, any>;
       setPipelineComposer({
         id: data.id || "",
         name: data.name || "",
@@ -3753,8 +4282,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         prompt: data.prompt || "",
         parser: data.parser || "",
         translationMode,
-        linePolicy: data.line_policy || "",
-        chunkPolicy: data.chunk_policy || "",
+        applyLinePolicy,
+        linePolicy,
+        chunkPolicy,
         temperature:
           data.settings?.temperature !== undefined &&
             data.settings?.temperature !== null
@@ -3773,7 +4303,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         maxTokens: String(data.settings?.max_tokens ?? ""),
         modelOverride: String(data.settings?.model ?? ""),
         timeout: String(data.settings?.timeout ?? ""),
-        headers: JSON.stringify(data.settings?.headers || {}, null, 2),
+        headers: JSON.stringify(pipelineHeaders, null, 2),
         topP: String(data.settings?.params?.top_p ?? ""),
         presencePenalty: String(data.settings?.params?.presence_penalty ?? ""),
         frequencyPenalty: String(
@@ -3784,21 +4314,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           data.settings?.params?.stop !== undefined
             ? JSON.stringify(data.settings.params.stop)
             : "",
-        extraParams: (() => {
-          if (!data.settings?.params) return "";
-          const entries = Object.entries(data.settings.params).filter(
-            ([key]) =>
-              ![
-                "top_p",
-                "presence_penalty",
-                "frequency_penalty",
-                "seed",
-                "stop",
-              ].includes(key),
-          );
-          if (!entries.length) return "";
-          return JSON.stringify(Object.fromEntries(entries), null, 2);
-        })(),
+        extraParams: extraParamEntries.length
+          ? JSON.stringify(extraParamObject, null, 2)
+          : "",
       });
     }
     if (targetKind === "prompt") {
@@ -3867,21 +4385,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         similarityThreshold: String(
           options.similarity_threshold ?? options.similarity ?? "0.8",
         ),
-        sourceLang: String(options.source_lang || ""),
+        sourceLang: normalizeSourceLang(String(options.source_lang || "")),
       });
     }
     if (targetKind === "chunk") {
       const options = data.options || {};
-      const chunkType = normalizeChunkType(data.chunk_type || data.type);
       setChunkForm({
         id: data.id || "",
         name: data.name || "",
-        chunkType,
-        lineStrict: Boolean(options.strict),
-        keepEmpty:
-          options.keep_empty !== undefined
-            ? Boolean(options.keep_empty)
-            : Boolean(options.strict),
         targetChars: String(options.target_chars ?? "1000"),
         maxChars: String(options.max_chars ?? "2000"),
         enableBalance:
@@ -3898,12 +4409,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     yamlSource: string,
     targetKind: ProfileKind = kind,
   ) => {
-    try {
-      const data = safeLoadYaml(yamlSource) as any;
-      if (!data || typeof data !== "object") return;
-      syncFormsFromData(targetKind, data);
-    } catch { }
-  };
+      try {
+        const data = safeLoadYaml(yamlSource) as any;
+        if (!data || typeof data !== "object") return;
+        lastProfileDataRef.current[targetKind] = data;
+        syncFormsFromData(targetKind, data);
+      } catch { }
+    };
 
   const localizeTemplateName = (templateYaml: string, displayName?: string) => {
     if (!displayName) return templateYaml;
@@ -3947,14 +4459,17 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     templateYaml: string,
     templateId?: string,
   ) => {
-    setSelectedId(null);
-    const displayName = templateId
-      ? getTemplateMeta(templateId)?.title
-      : undefined;
-    const localizedYaml = localizeTemplateName(templateYaml, displayName);
-    const nextYaml = ensureUniqueTemplateId(localizedYaml, kind);
-    setYamlText(nextYaml);
-    syncFormsFromYaml(nextYaml);
+    guardUnsaved(() => {
+      setSelectedId(null);
+      const displayName = templateId
+        ? getTemplateMeta(templateId)?.title
+        : undefined;
+      const localizedYaml = localizeTemplateName(templateYaml, displayName);
+      const nextYaml = ensureUniqueTemplateId(localizedYaml, kind);
+      commitYamlText(nextYaml);
+      setBaselineYaml("");
+      syncFormsFromYaml(nextYaml);
+    });
   };
 
   const runParserPreview = () => {
@@ -3982,6 +4497,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       ): ParserPreviewResult => {
         const parserType = String(profile?.type || "plain");
         const options = profile?.options || {};
+        const cleanedInput = stripThinkTags(rawInput);
 
         if (parserType === "any") {
           const candidates = options.parsers || options.candidates;
@@ -3995,7 +4511,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               continue;
             }
             try {
-              return parseWithProfile(candidate, rawInput);
+              return parseWithProfile(candidate, cleanedInput);
             } catch (err: any) {
               lastError = err;
             }
@@ -4004,13 +4520,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         }
 
         if (parserType === "plain") {
-          const cleaned = rawInput.replace(/\n+$/, "");
+          const cleaned = cleanedInput.replace(/\n+$/, "");
           return { text: cleaned, lines: splitLinesKeepEmpty(cleaned) };
         }
 
         if (parserType === "line_strict") {
           const multiLine = String(options.multi_line || "join");
-          const lines = splitLinesKeepEmpty(rawInput.replace(/\n+$/, ""));
+          const lines = splitLinesKeepEmpty(cleanedInput.replace(/\n+$/, ""));
           if (lines.length <= 1) {
             return { text: lines[0] || "", lines: lines.length ? lines : [""] };
           }
@@ -4028,14 +4544,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         }
 
         if (parserType === "json_array") {
-          const data = parseJsonPreviewValue(rawInput);
+          const data = parseJsonPreviewValue(cleanedInput);
           if (!Array.isArray(data)) throw new Error("json_array_expected");
           const lines = data.map((item) => String(item));
           return { text: lines.join("\n"), lines };
         }
 
         if (parserType === "json_object") {
-          const data = parseJsonPreviewValue(rawInput);
+          const data = parseJsonPreviewValue(cleanedInput);
           if (!data || typeof data !== "object" || Array.isArray(data)) {
             throw new Error("json_object_expected");
           }
@@ -4049,14 +4565,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         if (parserType === "jsonl") {
           const path = options.path || options.key;
           const lines = parseJsonlPreviewLines(
-            rawInput,
+            cleanedInput,
             path ? String(path) : undefined,
           );
           return { text: lines.join("\n"), lines };
         }
 
         if (parserType === "tagged_line") {
-          const lines = parseTaggedLinePreviewLines(rawInput, {
+          const lines = parseTaggedLinePreviewLines(cleanedInput, {
             pattern: options.pattern || "^@@(?P<id>\\d+)@@(?P<text>.*)$",
             sortById: Boolean(options.sort_by_id),
             sortByLineNumber: Boolean(options.sort_by_line_number),
@@ -4072,7 +4588,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           const pattern = String(options.pattern || "").trim();
           if (!pattern) throw new Error("missing_pattern");
           const regex = parseWithRegexFlags(pattern, options);
-          const match = regex.exec(rawInput);
+          const match = regex.exec(cleanedInput);
           if (!match) throw new Error("pattern_not_matched");
           const group = options.group ?? 0;
           const extracted =
@@ -4156,18 +4672,21 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         if (newForm.strategy === "random") payload.strategy = newForm.strategy;
       }
 
-      try {
-        payload.headers = JSON.parse(newForm.headers || "{}");
-      } catch { }
+      const headers = resolveCachedJsonField(
+        newForm.headers,
+        apiForm.headers,
+        "apiHeaders",
+        texts.formFields.headersLabel,
+      );
+      if (Object.keys(headers).length) payload.headers = headers;
       const params: Record<string, any> = {};
-      try {
-        const parsedParams = JSON.parse(newForm.params || "{}");
-        const isPlainObject =
-          parsedParams &&
-          typeof parsedParams === "object" &&
-          !Array.isArray(parsedParams);
-        if (isPlainObject) Object.assign(params, parsedParams);
-      } catch { }
+      const parsedParams = resolveCachedJsonField(
+        newForm.params,
+        apiForm.params,
+        "apiParams",
+        texts.formFields.paramsLabel,
+      );
+      if (Object.keys(parsedParams).length) Object.assign(params, parsedParams);
       const extractedKeys = new Set([
         "temperature",
         "top_p",
@@ -4225,26 +4744,89 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         }
       }
 
-      setYamlText(yaml.dump(payload));
+      if (kind === "api") {
+        const reservedKeys = new Set([
+          "id",
+          "name",
+          "type",
+          "provider",
+          "group",
+          "base_url",
+          "model",
+          "api_key",
+          "endpoints",
+          "members",
+          "strategy",
+          "headers",
+          "params",
+          "timeout",
+          "concurrency",
+          "rpm",
+          "requests_per_minute",
+          "rate_limit_per_minute",
+        ]);
+        const lastData = lastProfileDataRef.current.api;
+        if (lastData && typeof lastData === "object") {
+          Object.entries(lastData).forEach(([key, value]) => {
+            if (reservedKeys.has(key) || key in payload) return;
+            payload[key] = value;
+          });
+        }
+      }
+
+      queueYamlDump(payload);
     } catch { }
   };
 
+  const fillPipelineRefs = (composer: PipelineComposerState) => ({
+    ...composer,
+  });
+
   const updateYamlFromPipelineComposer = (
     newComposer: PipelineComposerState,
+    options?: { markDirty?: boolean },
   ) => {
-    setPipelineComposer(newComposer);
-    const isLineMode = newComposer.translationMode === "line";
+    const resolvedComposer = fillPipelineRefs(newComposer);
+    setPipelineComposer(resolvedComposer);
+    const chunkType = inferChunkType(resolvedComposer.chunkPolicy);
+    const isLineChunk = chunkType === "line";
+    const applyLinePolicy =
+      isLineChunk && resolvedComposer.applyLinePolicy && Boolean(resolvedComposer.linePolicy);
     const payload: any = {
-      id: newComposer.id,
-      name: newComposer.name,
-      provider: newComposer.provider,
-      prompt: newComposer.prompt,
-      parser: newComposer.parser,
-      chunk_policy: newComposer.chunkPolicy,
-      apply_line_policy: isLineMode,
+      id: resolvedComposer.id,
+      name: resolvedComposer.name,
+      provider: resolvedComposer.provider,
+      prompt: resolvedComposer.prompt,
+      parser: resolvedComposer.parser,
+      translation_mode: resolvedComposer.translationMode,
+      chunk_policy: resolvedComposer.chunkPolicy,
     };
-    if (isLineMode) {
-      payload.line_policy = newComposer.linePolicy;
+    if (kind === "pipeline") {
+      const reservedKeys = new Set([
+        "id",
+        "name",
+        "provider",
+        "prompt",
+        "parser",
+        "translation_mode",
+        "chunk_policy",
+        "apply_line_policy",
+        "line_policy",
+        "settings",
+      ]);
+      const lastData = lastProfileDataRef.current.pipeline;
+      if (lastData && typeof lastData === "object") {
+        Object.entries(lastData).forEach(([key, value]) => {
+          if (reservedKeys.has(key) || key in payload) return;
+          payload[key] = value;
+        });
+      }
+    }
+    if (isLineChunk) {
+      payload.apply_line_policy = applyLinePolicy;
+      if (resolvedComposer.linePolicy) {
+        payload.line_policy = resolvedComposer.linePolicy;
+      }
     }
 
     const settings: any = {};
@@ -4258,38 +4840,32 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       const num = Number.parseInt(value, 10);
       if (Number.isFinite(num)) settings[key] = num;
     };
-    applySettingFloat(newComposer.temperature, "temperature");
-    applySettingInt(newComposer.maxTokens, "max_tokens");
-    applySettingInt(newComposer.maxRetries, "max_retries");
-    const apiRuntime = apiRuntimeIndex[newComposer.provider] || {};
-    if (newComposer.concurrency !== "") {
-      const rawConcurrency = Number.parseInt(newComposer.concurrency, 10);
+    applySettingFloat(resolvedComposer.temperature, "temperature");
+    applySettingInt(resolvedComposer.maxTokens, "max_tokens");
+    applySettingInt(resolvedComposer.maxRetries, "max_retries");
+    if (resolvedComposer.concurrency !== "") {
+      const rawConcurrency = Number.parseInt(resolvedComposer.concurrency, 10);
       if (Number.isFinite(rawConcurrency)) {
         settings.concurrency = rawConcurrency;
       } else {
-        settings.concurrency = newComposer.concurrency;
+        settings.concurrency = resolvedComposer.concurrency;
       }
-    } else if (apiRuntime.concurrency !== undefined) {
-      settings.concurrency = apiRuntime.concurrency;
     }
-    if (newComposer.modelOverride.trim())
-      settings.model = newComposer.modelOverride.trim();
-    if (newComposer.timeout !== "") {
-      const timeoutValue = Number.parseInt(newComposer.timeout, 10);
+    if (resolvedComposer.modelOverride.trim())
+      settings.model = resolvedComposer.modelOverride.trim();
+    if (resolvedComposer.timeout !== "") {
+      const timeoutValue = Number.parseInt(resolvedComposer.timeout, 10);
       if (Number.isFinite(timeoutValue)) {
         settings.timeout = timeoutValue;
       }
-    } else if (apiRuntime.timeout !== undefined) {
-      settings.timeout = apiRuntime.timeout;
     }
-    if (newComposer.headers) {
-      try {
-        const headers = JSON.parse(newComposer.headers);
-        if (headers && typeof headers === "object" && !Array.isArray(headers)) {
-          settings.headers = headers;
-        }
-      } catch { }
-    }
+    const headers = resolveCachedJsonField(
+      resolvedComposer.headers,
+      pipelineComposer.headers,
+      "pipelineHeaders",
+      texts.composer.fields.headersLabel,
+    );
+    if (Object.keys(headers).length) settings.headers = headers;
     const params: Record<string, any> = {};
     const applyParamFloat = (value: string, key: string) => {
       if (value === "") return;
@@ -4301,12 +4877,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       const num = Number.parseInt(value, 10);
       if (Number.isFinite(num)) params[key] = num;
     };
-    applyParamFloat(newComposer.topP, "top_p");
-    applyParamFloat(newComposer.presencePenalty, "presence_penalty");
-    applyParamFloat(newComposer.frequencyPenalty, "frequency_penalty");
-    applyParamInt(newComposer.seed, "seed");
-    if (newComposer.stop) {
-      const rawStop = newComposer.stop.trim();
+    applyParamFloat(resolvedComposer.topP, "top_p");
+    applyParamFloat(resolvedComposer.presencePenalty, "presence_penalty");
+    applyParamFloat(resolvedComposer.frequencyPenalty, "frequency_penalty");
+    applyParamInt(resolvedComposer.seed, "seed");
+    if (resolvedComposer.stop) {
+      const rawStop = resolvedComposer.stop.trim();
       if (rawStop) {
         try {
           params.stop = JSON.parse(rawStop);
@@ -4315,36 +4891,61 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         }
       }
     }
-    if (newComposer.extraParams) {
-      try {
-        const extra = JSON.parse(newComposer.extraParams);
-        if (extra && typeof extra === "object" && !Array.isArray(extra)) {
-          Object.assign(params, extra);
-        }
-      } catch { }
-    }
+    const extra = resolveCachedJsonField(
+      resolvedComposer.extraParams,
+      pipelineComposer.extraParams,
+      "pipelineExtraParams",
+      texts.composer.fields.extraParamsLabel,
+    );
+    if (Object.keys(extra).length) Object.assign(params, extra);
     if (Object.keys(params).length) settings.params = params;
     payload.settings = settings;
+    if (kind === "pipeline") {
+      const reservedSettingKeys = new Set([
+        "temperature",
+        "max_tokens",
+        "max_retries",
+        "concurrency",
+        "model",
+        "timeout",
+        "headers",
+        "params",
+      ]);
+      const lastSettings = lastProfileDataRef.current.pipeline?.settings;
+      if (lastSettings && typeof lastSettings === "object") {
+        Object.entries(lastSettings).forEach(([key, value]) => {
+          if (reservedSettingKeys.has(key) || key in settings) return;
+          settings[key] = value;
+        });
+      }
+    }
 
-    setYamlText(yaml.dump(payload));
+    queueYamlDump(payload, { markDirty: options?.markDirty });
   };
 
   useEffect(() => {
     if (kind !== "pipeline") return;
     const nextMode = resolvePipelineTranslationMode(
+      pipelineComposer.translationMode,
       pipelineComposer.chunkPolicy,
       pipelineComposer.linePolicy,
-      pipelineComposer.translationMode,
+      pipelineComposer.applyLinePolicy,
+      pipelineComposer.applyLinePolicy ? "line" : "block",
+      chunkTypeIndex,
     );
     if (nextMode === pipelineComposer.translationMode) return;
-    updateYamlFromPipelineComposer({
-      ...pipelineComposer,
-      translationMode: nextMode,
-    });
+    updateYamlFromPipelineComposer(
+      {
+        ...pipelineComposer,
+        translationMode: nextMode,
+      },
+      { markDirty: false },
+    );
   }, [
     kind,
     pipelineComposer.chunkPolicy,
     pipelineComposer.linePolicy,
+    pipelineComposer.applyLinePolicy,
     pipelineComposer.translationMode,
     chunkTypeIndex,
   ]);
@@ -4394,54 +4995,55 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       payload.context.source_lines = resolvedSourceLines;
     }
 
-    setYamlText(yaml.dump(payload));
+    queueYamlDump(payload);
   };
 
   const updateYamlFromPolicyForm = (newForm: PolicyFormState) => {
-    setPolicyForm(newForm);
+    const normalizedSourceLang = normalizeSourceLang(newForm.sourceLang);
+    const nextForm = { ...newForm, sourceLang: normalizedSourceLang };
+    setPolicyForm(nextForm);
     try {
       const payload: any = {
-        id: newForm.id,
-        name: newForm.name,
-        type: newForm.policyType,
+        id: nextForm.id,
+        name: nextForm.name,
+        type: nextForm.policyType,
       };
       const options: any = {};
-      options.on_mismatch = newForm.onMismatch;
+      options.on_mismatch = nextForm.onMismatch;
       const checks: string[] = [];
-      if (newForm.emptyLine) checks.push("empty_line");
-      if (newForm.similarity) checks.push("similarity");
-      if (newForm.kanaTrace) checks.push("kana_trace");
-      options.trim = newForm.trim;
+      if (nextForm.emptyLine) checks.push("empty_line");
+      if (nextForm.similarity) checks.push("similarity");
+      if (nextForm.kanaTrace) checks.push("kana_trace");
+      options.trim = nextForm.trim;
       if (checks.length) {
         options.checks = checks;
       }
-      if (newForm.similarity) {
-        const threshold = Number(newForm.similarityThreshold);
+      if (nextForm.similarity) {
+        const threshold = Number(nextForm.similarityThreshold);
         if (Number.isFinite(threshold))
           options.similarity_threshold = threshold;
       }
-      if (newForm.kanaTrace && newForm.sourceLang.trim()) {
-        options.source_lang = newForm.sourceLang.trim();
+      if (nextForm.kanaTrace && nextForm.sourceLang.trim()) {
+        options.source_lang = nextForm.sourceLang.trim();
       }
       if (Object.keys(options).length) payload.options = options;
-      setYamlText(yaml.dump(payload));
+      queueYamlDump(payload);
     } catch { }
   };
 
   const updateYamlFromChunkForm = (newForm: ChunkFormState) => {
     setChunkForm(newForm);
     try {
-      const chunkType = normalizeChunkType(newForm.chunkType);
+      const previousChunkTypeRaw =
+        lastProfileDataRef.current.chunk?.chunk_type ??
+        lastProfileDataRef.current.chunk?.type;
+      const resolvedChunkType = normalizeChunkType(previousChunkTypeRaw) || "block";
       const payload: any = {
         id: newForm.id,
         name: newForm.name,
-        chunk_type: chunkType,
+        chunk_type: resolvedChunkType,
       };
       const options: any = {};
-      if (chunkType === "line") {
-        options.strict = newForm.lineStrict;
-        options.keep_empty = newForm.keepEmpty;
-      }
       const target = parseInt(newForm.targetChars, 10);
       if (Number.isFinite(target)) options.target_chars = target;
       const maxChars = parseInt(newForm.maxChars, 10);
@@ -4453,7 +5055,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       const balanceCount = parseInt(newForm.balanceCount, 10);
       if (Number.isFinite(balanceCount)) options.balance_count = balanceCount;
       if (Object.keys(options).length) payload.options = options;
-      setYamlText(yaml.dump(payload));
+      queueYamlDump(payload);
     } catch { }
   };
 
@@ -4464,7 +5066,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         name: newForm.name,
       };
       setParserForm({ ...newForm, rules: [] });
-      setYamlText(yaml.dump(payload));
+      queueYamlDump(payload);
       return;
     }
     const baseRules = newForm.rules.length
@@ -4488,7 +5090,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       if (options) payload.options = options;
     }
     setParserForm({ ...newForm, rules: normalizedRules });
-    setYamlText(yaml.dump(payload));
+    queueYamlDump(payload);
   };
 
 
@@ -4505,10 +5107,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             <button
               onClick={() => {
                 if (kind !== targetKind) {
-                  setSelectedId(null);
-                  setYamlText("");
-                  setKind(targetKind);
-                  setSearchTerm("");
+                  guardUnsaved(() => {
+                    setSelectedId(null);
+                    commitYamlText("", { baseline: true });
+                    setKind(targetKind);
+                    setSearchTerm("");
+                  });
                 }
               }}
               className={cn(
@@ -4527,10 +5131,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           <button
             onClick={() => {
               if (kind !== "policy" && kind !== "chunk") {
-                setSelectedId(null);
-                setYamlText("");
-                setKind(strategyKind);
-                setSearchTerm("");
+                guardUnsaved(() => {
+                  setSelectedId(null);
+                  commitYamlText("", { baseline: true });
+                  setKind(strategyKind);
+                  setSearchTerm("");
+                });
               }
             }}
             className={cn(
@@ -4545,15 +5151,17 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         </Tooltip>
 
         <Tooltip content={texts.kinds.parser}>
-          <button
-            onClick={() => {
-              if (kind !== "parser") {
-                setSelectedId(null);
-                setYamlText("");
-                setKind("parser");
-                setSearchTerm("");
-              }
-            }}
+            <button
+              onClick={() => {
+                if (kind !== "parser") {
+                  guardUnsaved(() => {
+                    setSelectedId(null);
+                    commitYamlText("", { baseline: true });
+                    setKind("parser");
+                    setSearchTerm("");
+                  });
+                }
+              }}
             className={cn(
               "h-10 w-10 rounded-xl flex items-center justify-center transition-all duration-200",
               kind === "parser"
@@ -4599,10 +5207,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 type="button"
                 onClick={() => {
                   if (kind === targetKind) return;
-                  setSelectedId(null);
-                  setYamlText("");
-                  setSearchTerm("");
-                  setKind(targetKind);
+                  guardUnsaved(() => {
+                    setSelectedId(null);
+                    commitYamlText("", { baseline: true });
+                    setSearchTerm("");
+                    setKind(targetKind);
+                  });
                 }}
                   className={cn(
                     "flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
@@ -4716,6 +5326,19 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     );
   };
 
+  const renderIdToggle = (targetKind: ProfileKind) => (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-7 px-2 text-xs gap-1"
+      onClick={() => toggleIdField(targetKind)}
+    >
+      <Hash className="h-3.5 w-3.5" />
+      {showIdField[targetKind] ? texts.idToggleHide : texts.idToggleShow}
+    </Button>
+  );
+
   const renderApiForm = () => {
     const memberCount = apiForm.members
       .split("\n")
@@ -4805,12 +5428,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       smartPasteFail: texts.kvEditor.smartPasteFail,
     };
 
-    const activePreset = activePresetId
-      ? API_PRESETS_DATA.find((preset) => preset.id === activePresetId) || null
-      : null;
     const activeChannels = activePreset ? getPresetChannels(activePreset) : [];
     const showPresetChannels = activePreset ? activeChannels.length > 1 : false;
     const showApiId = showIdField.api;
+    const canFetchModelList = supportsModelList;
 
     return (
       <div className="space-y-5">
@@ -4866,13 +5487,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         )}
 
         <div className="rounded-xl border bg-muted/20 p-4 space-y-4">
-          <div className="flex items-start gap-3">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-sm font-medium">{texts.formTitle}</div>
               <div className="text-xs text-muted-foreground">
                 {texts.formDesc}
               </div>
             </div>
+            {renderIdToggle("api")}
           </div>
           <div className="grid grid-cols-2 gap-4">
             {showApiId && (
@@ -5133,6 +5755,76 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 </Button>
               </div>
             </div>
+            <div className="rounded-xl border border-border/60 bg-gradient-to-br from-muted/10 via-background/80 to-muted/5 p-4 shadow-sm">
+              <div className="flex flex-wrap items-start gap-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">
+                    {texts.concurrencyAutoTest}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {apiConcurrency.status === "success" && (
+                      <span className="text-emerald-600">
+                        {texts.concurrencyAutoTestOk.replace(
+                          "{count}",
+                          String(apiConcurrency.maxConcurrency ?? "-"),
+                        )}
+                        {apiConcurrency.latencyMs !== undefined && (
+                          <span className="ml-2 text-muted-foreground">
+                            {apiConcurrency.latencyMs}ms
+                          </span>
+                        )}
+                      </span>
+                    )}
+                    {apiConcurrency.status === "error" && (
+                      <span className="text-destructive">
+                        {apiConcurrency.message || texts.concurrencyAutoTestFail}
+                      </span>
+                    )}
+                    {apiConcurrency.status === "idle" && (
+                      <span>{texts.concurrencyAutoTestHint}</span>
+                    )}
+                    {apiConcurrency.status === "testing" && (
+                      <span>{texts.concurrencyAutoTestRunning}</span>
+                    )}
+                  </div>
+                </div>
+                <Button
+                  variant={
+                    apiConcurrency.status === "success" ? "outline" : "secondary"
+                  }
+                  size="sm"
+                  className={cn(
+                    "gap-2 min-w-[120px] justify-center ml-auto",
+                    apiConcurrency.status === "success" &&
+                    "border-green-500/50 text-green-600 dark:text-green-400 bg-green-500/10",
+                    apiConcurrency.status === "error" &&
+                    "border-red-500/50 text-red-600 dark:text-red-400 bg-red-500/10",
+                  )}
+                  onClick={handleTestConcurrency}
+                  disabled={
+                    apiConcurrency.status === "testing"
+                  }
+                >
+                  {apiConcurrency.status === "testing" ? (
+                    <Activity className="h-4 w-4 animate-spin" />
+                  ) : apiConcurrency.status === "success" ? (
+                    <CheckCircle2 className="h-4 w-4" />
+                  ) : (
+                    <Gauge className="h-4 w-4" />
+                  )}
+                  {apiConcurrency.status === "testing"
+                    ? texts.concurrencyAutoTestRunning
+                    : texts.concurrencyAutoTest}
+                </Button>
+              </div>
+              {apiConcurrency.statusCounts && (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {Object.entries(apiConcurrency.statusCounts)
+                    .map(([code, count]) => `${code}×${count}`)
+                    .join(" ")}
+                </div>
+              )}
+            </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <Label>{texts.formFields.modelLabel}</Label>
@@ -5140,7 +5832,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                   size="sm"
                   variant="outline"
                   onClick={handleFetchModelList}
-                  disabled={modelListLoading}
+                  disabled={modelListLoading || !canFetchModelList}
                 >
                   {modelListLoading
                     ? texts.modelListLoading
@@ -5180,6 +5872,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 </div>
               )}
               <div className="space-y-1 text-xs text-muted-foreground">
+                {!canFetchModelList && (
+                  <p>{texts.modelListUnsupported}</p>
+                )}
                 {!modelListRequested && modelList.length === 0 && (
                   <p>{texts.modelHintCombined}</p>
                 )}
@@ -5655,19 +6350,33 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     const showPromptId = showIdField.prompt;
     const isJsonlPrompt =
       String(promptForm.sourceFormat || "").trim().toLowerCase() === "jsonl";
-    const sourceFormatOptions = [
+    const resolvedSourceFormat = String(promptForm.sourceFormat || "").trim();
+    const baseSourceFormatOptions = [
       { value: "", label: texts.promptOptions.sourceFormat.auto },
       { value: "jsonl", label: texts.promptOptions.sourceFormat.jsonl },
       { value: "plain", label: texts.promptOptions.sourceFormat.plain },
-      { value: "json_object", label: texts.promptOptions.sourceFormat.jsonObject },
-      { value: "json_array", label: texts.promptOptions.sourceFormat.jsonArray },
-      { value: "tagged_line", label: texts.promptOptions.sourceFormat.taggedLine },
     ];
+    const hasCustomSourceFormat =
+      resolvedSourceFormat &&
+      !baseSourceFormatOptions.some((option) => option.value === resolvedSourceFormat);
+    const sourceFormatOptions = hasCustomSourceFormat
+      ? [
+        {
+          value: resolvedSourceFormat,
+          label: texts.promptOptions.sourceFormat.custom.replace(
+            "{value}",
+            resolvedSourceFormat,
+          ),
+        },
+        ...baseSourceFormatOptions,
+      ]
+      : baseSourceFormatOptions;
     return (
       <div className="space-y-5">
         <FormSection
           title={texts.promptSections.templateTitle}
           desc={texts.promptSections.templateDesc}
+          actions={renderIdToggle("prompt")}
         >
           <div className="grid grid-cols-2 gap-4">
             {showPromptId && (
@@ -6067,6 +6776,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         <FormSection
           title={texts.parserFormTitle}
           desc={texts.parserFormDesc}
+          actions={renderIdToggle("parser")}
         >
           <div className="grid grid-cols-2 gap-4">
             {showParserId && (
@@ -6472,6 +7182,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         <FormSection
           title={texts.policySections.modeTitle}
           desc={texts.policySections.modeDesc}
+          actions={renderIdToggle("policy")}
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {showPolicyId && (
@@ -6706,6 +7417,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         <FormSection
           title={texts.chunkSections.modeTitle}
           desc={texts.chunkSections.modeDesc}
+          actions={renderIdToggle("chunk")}
         >
           {/* Section 1: Basic Info */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -6732,26 +7444,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 }}
               />
             </div>
-            <div className="space-y-2">
-              <Label>{texts.chunkFields.legacyModeLabel}</Label>
-              <SelectField
-                value={chunkForm.chunkType}
-                onChange={(e) =>
-                  updateChunk({
-                    chunkType:
-                      e.target.value === "line" ? "line" : "legacy",
-                  })
-                }
-              >
-                <option value="legacy">{texts.chunkOptions.legacy}</option>
-                <option value="line">{texts.chunkOptions.line}</option>
-              </SelectField>
-              <p className="text-xs text-muted-foreground">
-                {chunkForm.chunkType === "line"
-                  ? texts.chunkHints.line
-                  : texts.chunkHints.legacy}
-              </p>
-            </div>
           </div>
 
           {/* Section 2: Splitting Rules */}
@@ -6764,38 +7456,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 {texts.chunkSections.rulesDesc}
               </p>
             </div>
-            {chunkForm.chunkType === "line" && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="space-y-2">
-                  <Label>{texts.chunkFields.lineStrictLabel}</Label>
-                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-card px-3 py-2">
-                    <span className="text-xs text-muted-foreground">
-                      {texts.chunkHints.lineStrict}
-                    </span>
-                    <Switch
-                      checked={chunkForm.lineStrict}
-                      onCheckedChange={(next) =>
-                        updateChunk({ lineStrict: next })
-                      }
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>{texts.chunkFields.keepEmptyLabel}</Label>
-                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-card px-3 py-2">
-                    <span className="text-xs text-muted-foreground">
-                      {texts.chunkHints.keepEmpty}
-                    </span>
-                    <Switch
-                      checked={chunkForm.keepEmpty}
-                      onCheckedChange={(next) =>
-                        updateChunk({ keepEmpty: next })
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <div className="space-y-2">
                 <Label>{texts.chunkFields.targetCharsLabel}</Label>
@@ -6882,15 +7542,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
 
   const renderPipelineForm = () => {
-    const showPipelineId = showIdField.pipeline;
-    const pipelineChunkType = inferChunkType(pipelineComposer.chunkPolicy);
-    const modeMismatchHint =
-      pipelineComposer.translationMode === "line" && pipelineChunkType === "legacy"
-        ? texts.composer.hints.modeMismatchLine
-        : pipelineComposer.translationMode === "block" && pipelineChunkType === "line"
-          ? texts.composer.hints.modeMismatchBlock
-          : "";
-
     const applyPipelineChange = (patch: Partial<PipelineComposerState>) => {
       const nextChunkPolicy =
         patch.chunkPolicy !== undefined
@@ -6900,20 +7551,21 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         patch.linePolicy !== undefined
           ? patch.linePolicy
           : pipelineComposer.linePolicy;
+      const nextApplyLinePolicy =
+        patch.applyLinePolicy !== undefined
+          ? patch.applyLinePolicy
+          : pipelineComposer.applyLinePolicy;
       updateYamlFromPipelineComposer({
         ...pipelineComposer,
         ...patch,
         translationMode: resolvePipelineTranslationMode(
+          patch.translationMode,
           nextChunkPolicy,
           nextLinePolicy,
+          nextApplyLinePolicy,
           pipelineComposer.translationMode,
+          chunkTypeIndex,
         ),
-      });
-    };
-    const updatePipelineSettings = (patch: Partial<PipelineComposerState>) => {
-      updateYamlFromPipelineComposer({
-        ...pipelineComposer,
-        ...patch,
       });
     };
 
@@ -6933,25 +7585,31 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       }
     };
 
+    const strategyPolicyIds = orderProfileIds("policy", profileIndex.policy);
+    const strategyChunkIds = orderProfileIds("chunk", profileIndex.chunk);
+
+    const resolveLinePolicyFallback = () =>
+      pipelineComposer.linePolicy || strategyPolicyIds[0] || "";
+
     const buildStrategyOptions = () => {
       const options: Array<{ value: string; label: string; disabled?: boolean }> = [];
-      const lineIds = visibleProfileIndex.policy;
-      const chunkIds = visibleProfileIndex.chunk;
-      // 每个 chunk profile 生成一个选项
-      // line chunk 自动关联第一个可用 policy；legacy chunk 不关联 policy
-      chunkIds.forEach((chunkId) => {
+      const lineCandidates = strategyPolicyIds.length ? strategyPolicyIds : [""];
+      const lineFallback = resolveLinePolicyFallback();
+      strategyChunkIds.forEach((chunkId) => {
         const chunkType = inferChunkType(chunkId);
         if (chunkType === "line") {
-          const autoPolicy = lineIds[0] || "";
-          options.push({
-            value: encodeStrategyCombo(autoPolicy, chunkId),
-            label: getProfileLabel("chunk", chunkId),
-            disabled: !autoPolicy,
+          lineCandidates.forEach((linePolicy) => {
+            const resolvedLinePolicy = linePolicy || lineFallback;
+            options.push({
+              value: encodeStrategyCombo(resolvedLinePolicy, chunkId),
+              label: getStrategyLabel(resolvedLinePolicy, chunkId),
+              disabled: !resolvedLinePolicy,
+            });
           });
         } else {
           options.push({
             value: encodeStrategyCombo("", chunkId),
-            label: getProfileLabel("chunk", chunkId),
+            label: getStrategyLabel("", chunkId),
           });
         }
       });
@@ -6961,12 +7619,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     const strategyOptions = buildStrategyOptions();
     const strategyChunkType = inferChunkType(pipelineComposer.chunkPolicy);
     const normalizedLinePolicy =
-      strategyChunkType === "legacy" ? "" : pipelineComposer.linePolicy;
+      strategyChunkType === "line" ? pipelineComposer.linePolicy : "";
     const strategyValue = pipelineComposer.chunkPolicy
-      ? encodeStrategyCombo(
-        normalizedLinePolicy,
-        pipelineComposer.chunkPolicy,
-      )
+      ? encodeStrategyCombo(normalizedLinePolicy, pipelineComposer.chunkPolicy)
       : "";
     const hasStrategyValue =
       !strategyValue || strategyOptions.some((item) => item.value === strategyValue);
@@ -6988,146 +7643,51 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         applyPipelineChange({
           linePolicy: "",
           chunkPolicy: "",
+          applyLinePolicy: false,
         });
         return;
       }
       const { linePolicy, chunkPolicy } = decodeStrategyCombo(value);
       const chunkType = inferChunkType(chunkPolicy);
-      let nextLinePolicy = linePolicy;
-      if (chunkType === "line" && !nextLinePolicy) {
-        nextLinePolicy = visibleProfileIndex.policy[0] || "";
-      }
-      if (chunkType === "legacy") {
-        nextLinePolicy = "";
-      }
-      applyPipelineChange({
-        linePolicy: nextLinePolicy,
-        chunkPolicy,
-      });
-    };
-
-    const showLinePolicySelect =
-      strategyChunkType === "line" && visibleProfileIndex.policy.length > 1;
-
-    const resolveStrategyTarget = () => {
-      const chunkType = inferChunkType(pipelineComposer.chunkPolicy);
-      const isLineMode =
-        chunkType === "line" || pipelineComposer.translationMode === "line";
-      if (isLineMode) {
-        return {
-          kind: "policy" as const,
-          id: pipelineComposer.linePolicy,
-        };
-      }
-      return {
-        kind: "chunk" as const,
-        id: pipelineComposer.chunkPolicy,
-      };
-    };
-
-    const jumpToKind = (targetKind: ProfileKind, targetId?: string) => {
-      if (targetId) {
-        handleSelectProfile(targetId, targetKind);
+      if (chunkType === "line") {
+        const nextLinePolicy =
+          linePolicy || pipelineComposer.linePolicy || strategyPolicyIds[0] || "";
+        applyPipelineChange({
+          linePolicy: nextLinePolicy,
+          chunkPolicy,
+          applyLinePolicy: Boolean(nextLinePolicy),
+        });
         return;
       }
-      if (kind !== targetKind) {
-        setSelectedId(null);
-        setYamlText("");
-        setKind(targetKind);
-        setSearchTerm("");
-      }
+      applyPipelineChange({
+        linePolicy: "",
+        chunkPolicy,
+        applyLinePolicy: false,
+      });
     };
 
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-2 gap-4">
-          {showPipelineId && (
-            <div className="space-y-2">
-              <Label>{texts.composer.fields.idLabel}</Label>
-              <Input
-                value={pipelineComposer.id}
-                onChange={(e) => {
-                  markIdAsCustom("pipeline");
-                  updateYamlFromPipelineComposer({
-                    ...pipelineComposer,
-                    id: e.target.value,
-                  });
-                }}
-              />
-            </div>
-          )}
-          <div
-            className={cn("space-y-2", showPipelineId ? "" : "col-span-2")}
-          >
-            <Label>{texts.composer.fields.nameLabel}</Label>
-            <Input
-              value={pipelineComposer.name}
-              onChange={(e) => {
-                const nextName = e.target.value;
-                const nextId = shouldAutoUpdateId("pipeline", nextName)
-                  ? buildAutoProfileId(
-                    "pipeline",
-                    nextName,
-                    pipelineComposer.id,
-                  )
-                  : pipelineComposer.id;
-                updateYamlFromPipelineComposer({
-                  ...pipelineComposer,
-                  name: nextName,
-                  id: nextId,
-                });
-              }}
-            />
-          </div>
-        </div>
-
-        <FormSection
-          title={texts.composer.fields.translationModeLabel}
-          desc={texts.composer.modeDesc}
-        >
+        <FormSection title={texts.composer.title} desc={texts.composer.desc}>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>{texts.composer.fields.translationModeLabel}</Label>
-              <SelectField
-                value={pipelineComposer.translationMode}
-                onChange={(e) =>
-                  applyPipelineChange({
-                    translationMode:
-                      e.target.value === "block" ? "block" : "line",
-                  })
-                }
-              >
-                <option value="line">{texts.composer.modeOptions.line}</option>
-                <option value="block">{texts.composer.modeOptions.block}</option>
-              </SelectField>
-              <p className="text-xs text-muted-foreground">
-                {pipelineComposer.translationMode === "line"
-                  ? texts.composer.modeHints.line
-                  : texts.composer.modeHints.block}
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label>{texts.scheme.fields.strategy}</Label>
-              <div className="rounded-lg border border-border/60 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                {modeMismatchHint || texts.scheme.hints.linePolicyOptional}
-              </div>
-            </div>
-          </div>
-        </FormSection>
-
-        <FormSection title={texts.scheme.title} desc={texts.scheme.desc}>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label>{texts.scheme.fields.provider}</Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => jumpToKind("api", pipelineComposer.provider)}
+                <Label>{texts.composer.fields.providerLabel}</Label>
+                <button
+                  type="button"
+                  className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                  aria-label={texts.quickEdit}
+                  onClick={() => {
+                    const providerId = pipelineComposer.provider;
+                    if (providerId) {
+                      handleSelectProfile(providerId, "api");
+                      return;
+                    }
+                    jumpToKindHome("api");
+                  }}
                 >
-                  {texts.scheme.actions.editApi}
-                </Button>
+                  {texts.quickEdit}
+                </button>
               </div>
               <SelectField
                 value={pipelineComposer.provider}
@@ -7135,7 +7695,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                   applyPipelineChange({ provider: e.target.value })
                 }
               >
-                <option value="">{texts.scheme.placeholders.provider}</option>
+                <option value="">{texts.composer.placeholders.provider}</option>
                 {visibleProfileIndex.api.map((id) => (
                   <option key={id} value={id}>
                     {formatOptionLabel("api", id)}
@@ -7145,21 +7705,30 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label>{texts.scheme.fields.prompt}</Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => jumpToKind("prompt", pipelineComposer.prompt)}
+                <Label>{texts.composer.fields.promptLabel}</Label>
+                <button
+                  type="button"
+                  className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                  aria-label={texts.quickEdit}
+                  onClick={() => {
+                    const promptId = pipelineComposer.prompt;
+                    if (promptId) {
+                      handleSelectProfile(promptId, "prompt");
+                      return;
+                    }
+                    jumpToKindHome("prompt");
+                  }}
                 >
-                  {texts.scheme.actions.editPrompt}
-                </Button>
+                  {texts.quickEdit}
+                </button>
               </div>
               <SelectField
                 value={pipelineComposer.prompt}
-                onChange={(e) => applyPipelineChange({ prompt: e.target.value })}
+                onChange={(e) =>
+                  applyPipelineChange({ prompt: e.target.value })
+                }
               >
-                <option value="">{texts.scheme.placeholders.prompt}</option>
+                <option value="">{texts.composer.placeholders.prompt}</option>
                 {visibleProfileIndex.prompt.map((id) => (
                   <option key={id} value={id}>
                     {formatOptionLabel("prompt", id)}
@@ -7170,17 +7739,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label>{texts.scheme.fields.strategy}</Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => {
-                    const target = resolveStrategyTarget();
-                    jumpToKind(target.kind, target.id);
-                  }}
+                <button
+                  type="button"
+                  className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                  aria-label={texts.quickEdit}
+                  onClick={() => jumpToKindHome("policy")}
                 >
-                  {texts.scheme.actions.editStrategy}
-                </Button>
+                  {texts.quickEdit}
+                </button>
               </div>
               <SelectField
                 value={strategyValue}
@@ -7188,7 +7754,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               >
                 <option value="">{texts.scheme.placeholders.strategy}</option>
                 {strategyOptionsFinal.map((option) => (
-                  <option key={option.value} value={option.value} disabled={option.disabled}>
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    disabled={option.disabled}
+                  >
                     {option.label}
                   </option>
                 ))}
@@ -7196,253 +7766,37 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label>{texts.scheme.fields.parser}</Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => jumpToKind("parser", pipelineComposer.parser)}
+                <Label>{texts.composer.fields.parserLabel}</Label>
+                <button
+                  type="button"
+                  className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                  aria-label={texts.quickEdit}
+                  onClick={() => {
+                    const parserId = pipelineComposer.parser;
+                    if (parserId) {
+                      handleSelectProfile(parserId, "parser");
+                      return;
+                    }
+                    jumpToKindHome("parser");
+                  }}
                 >
-                  {texts.scheme.actions.editParser}
-                </Button>
+                  {texts.quickEdit}
+                </button>
               </div>
               <SelectField
                 value={pipelineComposer.parser}
-                onChange={(e) => applyPipelineChange({ parser: e.target.value })}
+                onChange={(e) =>
+                  applyPipelineChange({ parser: e.target.value })
+                }
               >
-                <option value="">{texts.scheme.placeholders.parser}</option>
+                <option value="">{texts.composer.placeholders.parser}</option>
                 {visibleProfileIndex.parser.map((id) => (
                   <option key={id} value={id}>
                     {formatOptionLabel("parser", id)}
                   </option>
                 ))}
               </SelectField>
-
             </div>
-            {showLinePolicySelect && (
-              <div className="space-y-2 col-span-2">
-                <div className="flex items-center justify-between">
-                  <Label>{texts.scheme.fields.linePolicy}</Label>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-2 text-xs"
-                    onClick={() =>
-                      jumpToKind("policy", pipelineComposer.linePolicy)
-                    }
-                  >
-                    {texts.scheme.actions.editLinePolicy}
-                  </Button>
-                </div>
-                <SelectField
-                  value={pipelineComposer.linePolicy}
-                  onChange={(e) =>
-                    applyPipelineChange({ linePolicy: e.target.value })
-                  }
-                >
-                  <option value="">{texts.scheme.placeholders.linePolicy}</option>
-                  {visibleProfileIndex.policy.map((id) => (
-                    <option key={id} value={id}>
-                      {formatOptionLabel("policy", id)}
-                    </option>
-                  ))}
-                </SelectField>
-              </div>
-            )}
-          </div>
-        </FormSection>
-
-        <FormSection
-          title={texts.composer.sections.samplingTitle}
-          desc={texts.composer.sections.samplingDesc}
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>{texts.composer.fields.temperatureLabel}</Label>
-              <InputAffix
-                type="number"
-                step="0.1"
-                value={pipelineComposer.temperature}
-                onChange={(e) =>
-                  updatePipelineSettings({ temperature: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.temperature}
-                prefix={<Thermometer className="h-3.5 w-3.5" />}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>{texts.composer.fields.topPLabel}</Label>
-              <InputAffix
-                type="number"
-                step="0.1"
-                value={pipelineComposer.topP}
-                onChange={(e) =>
-                  updatePipelineSettings({ topP: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.topP}
-                prefix={<Percent className="h-3.5 w-3.5" />}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>{texts.composer.fields.presencePenaltyLabel}</Label>
-              <InputAffix
-                type="number"
-                step="0.1"
-                value={pipelineComposer.presencePenalty}
-                onChange={(e) =>
-                  updatePipelineSettings({ presencePenalty: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.presencePenalty}
-                prefix={<Activity className="h-3.5 w-3.5" />}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>{texts.composer.fields.frequencyPenaltyLabel}</Label>
-              <InputAffix
-                type="number"
-                step="0.1"
-                value={pipelineComposer.frequencyPenalty}
-                onChange={(e) =>
-                  updatePipelineSettings({ frequencyPenalty: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.frequencyPenalty}
-                prefix={<Zap className="h-3.5 w-3.5" />}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>{texts.composer.fields.seedLabel}</Label>
-              <InputAffix
-                type="number"
-                step="1"
-                value={pipelineComposer.seed}
-                onChange={(e) =>
-                  updatePipelineSettings({ seed: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.seed}
-                prefix={<Hash className="h-3.5 w-3.5" />}
-              />
-            </div>
-            <div className="space-y-2 md:col-span-2">
-              <Label>{texts.composer.fields.stopLabel}</Label>
-              <Input
-                value={pipelineComposer.stop}
-                onChange={(e) =>
-                  updatePipelineSettings({ stop: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.stop}
-              />
-            </div>
-          </div>
-        </FormSection>
-
-        <FormSection
-          title={texts.composer.sections.requestTitle}
-          desc={texts.composer.sections.requestDesc}
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>{texts.composer.fields.maxRetriesLabel}</Label>
-              <InputAffix
-                type="number"
-                step="1"
-                value={pipelineComposer.maxRetries}
-                onChange={(e) =>
-                  updatePipelineSettings({ maxRetries: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.maxRetries}
-                prefix={<Repeat className="h-3.5 w-3.5" />}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>{texts.composer.fields.concurrencyLabel}</Label>
-              <InputAffix
-                type="number"
-                step="1"
-                value={pipelineComposer.concurrency}
-                onChange={(e) =>
-                  updatePipelineSettings({ concurrency: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.concurrency}
-                prefix={<Cpu className="h-3.5 w-3.5" />}
-              />
-              <p className="text-xs text-muted-foreground">
-                {texts.composer.hints.concurrency}
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label>{texts.composer.fields.maxTokensLabel}</Label>
-              <InputAffix
-                type="number"
-                step="1"
-                value={pipelineComposer.maxTokens}
-                onChange={(e) =>
-                  updatePipelineSettings({ maxTokens: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.maxTokens}
-                prefix={<Hash className="h-3.5 w-3.5" />}
-                suffix="tok"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>{texts.composer.fields.timeoutLabel}</Label>
-              <InputAffix
-                type="number"
-                step="1"
-                value={pipelineComposer.timeout}
-                onChange={(e) =>
-                  updatePipelineSettings({ timeout: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.timeout}
-                prefix={<Clock className="h-3.5 w-3.5" />}
-                suffix="s"
-              />
-              <p className="text-xs text-muted-foreground">
-                {texts.composer.hints.timeout}
-              </p>
-            </div>
-            <div className="space-y-2 md:col-span-2">
-              <Label>{texts.composer.fields.modelOverrideLabel}</Label>
-              <Input
-                value={pipelineComposer.modelOverride}
-                onChange={(e) =>
-                  updatePipelineSettings({ modelOverride: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.modelOverride}
-              />
-              <p className="text-xs text-muted-foreground">
-                {texts.composer.hints.modelOverride}
-              </p>
-            </div>
-            <div className="space-y-2 md:col-span-2">
-              <Label>{texts.composer.fields.headersLabel}</Label>
-              <textarea
-                spellCheck={false}
-                className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
-                value={pipelineComposer.headers}
-                onChange={(e) =>
-                  updatePipelineSettings({ headers: e.target.value })
-                }
-                placeholder={texts.composer.placeholders.headers}
-              />
-            </div>
-          </div>
-        </FormSection>
-
-        <FormSection
-          title={texts.composer.sections.advancedTitle}
-          desc={texts.composer.sections.advancedDesc}
-        >
-          <div className="space-y-2">
-            <Label>{texts.composer.fields.extraParamsLabel}</Label>
-            <textarea
-              spellCheck={false}
-              className="flex min-h-[140px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
-              value={pipelineComposer.extraParams}
-              onChange={(e) =>
-                updatePipelineSettings({ extraParams: e.target.value })
-              }
-              placeholder={texts.composer.placeholders.extraParams}
-            />
           </div>
         </FormSection>
       </div>
@@ -7591,17 +7945,22 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     const pipelineCardItems = filteredProfiles;
 
     const handleSelectPipelineCard = (pipelineId: string) => {
-      setSelectedId(pipelineId);
-      setEditorTab("visual");
-      setPipelineView("overview");
+      guardUnsaved(() => {
+        setActivePipelineId(pipelineId);
+        setSelectedId(pipelineId);
+        setEditorTab("visual");
+        setPipelineView("overview");
+      });
     };
 
     const jumpToKind = (targetKind: ProfileKind) => {
       if (kind === targetKind) return;
-      setSelectedId(null);
-      setYamlText("");
-      setSearchTerm("");
-      setKind(targetKind);
+      guardUnsaved(() => {
+        setSelectedId(null);
+        commitYamlText("", { baseline: true });
+        setSearchTerm("");
+        setKind(targetKind);
+      });
     };
 
     const hasPipelines = pipelineCardItems.length > 0;
@@ -7712,21 +8071,20 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4 pb-10">
               {/* Existing Pipelines */}
               {pipelineCardItems.map((item) => {
-                const isSelected = selectedId === item.id;
-                const isActive = activePipelineId === item.id;
+                const isSelected = activePipelineId === item.id;
                 const showSummarySkeleton =
                   isPipelineSummaryLoading &&
                   !pipelineSummaryIndex[item.id] &&
                   item.id !== selectedId;
                 const summary = resolvePipelineCardSummary(item.id, item.name);
                 const providerLabel = summary.provider
-                  ? getProfileLabel("api", summary.provider)
+                  ? getProfileLabel("api", summary.provider) || summary.provider
                   : "";
                 const promptLabel = summary.prompt
-                  ? getProfileLabel("prompt", summary.prompt)
+                  ? getProfileLabel("prompt", summary.prompt) || summary.prompt
                   : "";
                 const parserLabel = summary.parser
-                  ? getProfileLabel("parser", summary.parser)
+                  ? getProfileLabel("parser", summary.parser) || summary.parser
                   : "";
                 const strategyLabel = summary.chunkPolicy
                   ? getStrategyLabel(summary.linePolicy, summary.chunkPolicy)
@@ -7741,14 +8099,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                     label: texts.scheme.fields.provider,
                     value: providerLabel,
                     icon: Server,
-                    skeletonWidth: "w-12",
+                    skeletonWidth: "w-24",
                   },
                   {
                     key: "prompt",
                     label: texts.scheme.fields.prompt,
                     value: promptLabel,
                     icon: MessageSquare,
-                    skeletonWidth: "w-16",
+                    skeletonWidth: "w-24",
                   },
                   {
                     key: "strategy",
@@ -7762,9 +8120,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                     label: texts.scheme.fields.parser,
                     value: parserLabel,
                     icon: FileJson,
-                    skeletonWidth: "w-14",
+                    skeletonWidth: "w-20",
                   },
                 ];
+                const detailGridCols =
+                  fields.length > 1 ? "grid-cols-2" : "grid-cols-1";
 
                 return (
                   <div
@@ -7813,17 +8173,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                         >
                           {pipelineTitle}
                         </h3>
-                        {isActive && (
-                          <div className="flex items-center gap-1 mt-1.5 text-xs font-medium text-emerald-500">
-                            <Activity className="w-3 h-3" />
-                            <span>{texts.pipelineCardActive}</span>
-                          </div>
-                        )}
                       </div>
                     </div>
 
                     {/* Details Grid */}
-                    <div className="mt-auto grid grid-cols-2 gap-3">
+                    <div className={cn("mt-auto grid gap-3", detailGridCols)}>
                       {fields.map((field) => (
                         <div
                           key={field.key}
@@ -8020,7 +8374,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       return (
         <Card
           key={preset.id}
-          className="cursor-pointer hover:border-border/80 hover:shadow-md hover:-translate-y-0.5 transition-all group h-full min-h-[80px] flex flex-row items-center p-4 bg-muted/20 gap-4 dark:bg-muted/10"
+          className="cursor-pointer hover:border-border/80 hover:shadow-md hover:-translate-y-0.5 transition-all group h-full min-h-[80px] flex flex-row items-center p-4 bg-card border-border/60 gap-4"
           onClick={() => handlePresetSelect(preset)}
         >
           <div
@@ -8158,7 +8512,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
                 {/* Custom Entry */}
                 <Card
-                  className="cursor-pointer hover:border-border/80 hover:shadow-md hover:-translate-y-0.5 transition-all border-dashed flex flex-row items-center p-4 min-h-[80px] h-full bg-muted/30 hover:bg-muted/40 gap-4"
+                  className="cursor-pointer hover:border-border/80 hover:shadow-md hover:-translate-y-0.5 transition-all border-dashed flex flex-row items-center p-4 min-h-[80px] h-full bg-card border-border/60 hover:bg-muted/30 gap-4"
                   onClick={() => handlePresetSelect(null)}
                 >
                   <div className="w-10 h-10 rounded-lg bg-muted/50 border border-border/60 flex items-center justify-center shrink-0 transition-colors text-muted-foreground">
@@ -8430,7 +8784,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                       isSelected
                         ? "bg-muted/40 border-border/70 shadow-[0_0_0_1px_rgba(0,0,0,0.04)] dark:bg-primary/15 dark:border-primary/40"
                         : "bg-card border-border/60 hover:border-border/80 hover:shadow-lg hover:-translate-y-1",
-                      isCascade && !isSelected && "border-border/70 bg-muted/30 dark:border-primary/30 dark:bg-primary/10"
+                      isCascade && !isSelected && "border-border/70"
                     )}
                   >
                     {/* Selected Badge */}
@@ -8600,10 +8954,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 size="sm"
                 className="h-8 px-2 text-xs"
                 onClick={() => {
-                  setPipelineView("overview");
-                  setSelectedId(null);
-                  setYamlText("");
-                  resetFormState("pipeline");
+                  guardUnsaved(() => {
+                    setPipelineView("overview");
+                    setSelectedId(null);
+                    commitYamlText("", { baseline: true });
+                    resetFormState("pipeline");
+                  });
                 }}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
@@ -8616,9 +8972,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 size="sm"
                 className="h-8 px-2 text-xs"
                 onClick={() => {
-                  setSelectedId(null);
-                  setYamlText("");
-                  resetFormState("prompt");
+                  guardUnsaved(() => {
+                    setSelectedId(null);
+                    commitYamlText("", { baseline: true });
+                    resetFormState("prompt");
+                  });
                 }}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
@@ -8631,9 +8989,12 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 size="sm"
                 className="h-8 px-2 text-xs"
                 onClick={() => {
-                  setSelectedId(null);
-                  setYamlText("");
-                  resetFormState("api");
+                  guardUnsaved(() => {
+                    setSelectedId(null);
+                    commitYamlText("", { baseline: true });
+                    resetFormState("api");
+                    setShowApiSetup(false);
+                  });
                 }}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
@@ -8646,9 +9007,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 size="sm"
                 className="h-8 px-2 text-xs"
                 onClick={() => {
-                  setSelectedId(null);
-                  setYamlText("");
-                  resetFormState("parser");
+                  guardUnsaved(() => {
+                    setSelectedId(null);
+                    commitYamlText("", { baseline: true });
+                    resetFormState("parser");
+                  });
                 }}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
@@ -8661,9 +9024,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                 size="sm"
                 className="h-8 px-2 text-xs"
                 onClick={() => {
-                  setSelectedId(null);
-                  setYamlText("");
-                  resetFormState(kind);
+                  guardUnsaved(() => {
+                    setSelectedId(null);
+                    commitYamlText("", { baseline: true });
+                    resetFormState(kind);
+                  });
                 }}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
@@ -8694,7 +9059,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               </button>
               <button
                 type="button"
-                onClick={() => setEditorTab("yaml")}
+                onClick={() => {
+                  flushYamlUpdate();
+                  setEditorTab("yaml");
+                }}
                 className={cn(
                   "px-3 py-1.5 text-xs font-medium rounded-md transition-all",
                   editorTab === "yaml"
@@ -8895,7 +9263,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                   spellCheck={false}
                   className="w-full h-[360px] bg-transparent p-4 resize-y focus:outline-none"
                   value={yamlText}
-                  onChange={(e) => setYamlText(e.target.value)}
+                  onChange={(e) => {
+                    clearPendingYamlUpdate();
+                    setYamlText(e.target.value);
+                    markUserEdits();
+                  }}
                 />
                 <div className="absolute top-2 right-2 text-[10px] text-muted-foreground border rounded px-1.5 bg-background/50">
                   {texts.editorYamlBadge}

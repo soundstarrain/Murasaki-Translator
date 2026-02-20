@@ -13,22 +13,6 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "kindHelper", "policy"],
   ["apiManager", "kindHelper", "chunk"],
   ["apiManager", "strategyKindTitle"],
-  ["apiManager", "status", "title"],
-  ["apiManager", "status", "serverLabel"],
-  ["apiManager", "status", "localLabel"],
-  ["apiManager", "status", "serverDesc"],
-  ["apiManager", "status", "localDesc"],
-  ["apiManager", "status", "actionRetry"],
-  ["apiManager", "status", "actionRetrying"],
-  ["apiManager", "status", "actionDetails"],
-  ["apiManager", "status", "actionHide"],
-  ["apiManager", "status", "actionOpenDir"],
-  ["apiManager", "status", "detailTitle"],
-  ["apiManager", "status", "detailError"],
-  ["apiManager", "status", "detailMessage"],
-  ["apiManager", "status", "detailHint"],
-  ["apiManager", "status", "detailUnknown"],
-  ["apiManager", "status", "detailEmpty"],
   ["apiManager", "statsApi"],
   ["apiManager", "statsApiHint"],
   ["apiManager", "statsPipeline"],
@@ -81,16 +65,11 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "scheme", "title"],
   ["apiManager", "scheme", "desc"],
   ["apiManager", "scheme", "fields", "provider"],
-  ["apiManager", "scheme", "fields", "chunkPolicy"],
+  ["apiManager", "scheme", "fields", "prompt"],
   ["apiManager", "scheme", "fields", "strategy"],
-  ["apiManager", "scheme", "placeholders", "provider"],
-  ["apiManager", "scheme", "placeholders", "chunkPolicy"],
+  ["apiManager", "scheme", "fields", "parser"],
   ["apiManager", "scheme", "placeholders", "strategy"],
-  ["apiManager", "scheme", "actions", "editApi"],
-  ["apiManager", "scheme", "actions", "editLinePolicy"],
-  ["apiManager", "scheme", "actions", "editChunkPolicy"],
   ["apiManager", "scheme", "actions", "editStrategy"],
-  ["apiManager", "scheme", "hints", "linePolicyOptional"],
   ["apiManager", "kindPrimaryHint"],
   ["apiManager", "kindOptionalShow"],
   ["apiManager", "kindOptionalHide"],
@@ -128,6 +107,14 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "deleteConfirm"],
   ["apiManager", "deleteFail"],
   ["apiManager", "defaultPresetDeleteFail"],
+  ["apiManager", "unsavedChangesTitle"],
+  ["apiManager", "unsavedChangesDesc"],
+  ["apiManager", "jsonParseErrorTitle"],
+  ["apiManager", "jsonParseErrorDesc"],
+  ["apiManager", "referenceUpdateTitle"],
+  ["apiManager", "referenceUpdateDesc"],
+  ["apiManager", "referenceUpdateMissingTitle"],
+  ["apiManager", "referenceUpdateMissingDesc"],
   ["apiManager", "pipelineCardEdit"],
   ["apiManager", "pipelineCardActive"],
   ["apiManager", "sectionVisualTitle"],
@@ -205,6 +192,7 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "formHints", "params"],
   ["apiManager", "formHints", "concurrency"],
   ["apiManager", "formHints", "rpm"],
+  ["apiManager", "modelListUnsupported"],
   ["apiManager", "modelHintCombined"],
   ["apiManager", "poolEndpointsTitle"],
   ["apiManager", "poolEndpointsDesc"],
@@ -254,6 +242,7 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "promptOptions", "sourceFormat", "auto"],
   ["apiManager", "promptOptions", "sourceFormat", "jsonl"],
   ["apiManager", "promptOptions", "sourceFormat", "plain"],
+  ["apiManager", "promptOptions", "sourceFormat", "custom"],
   ["apiManager", "promptOptions", "sourceFormat", "jsonObject"],
   ["apiManager", "promptOptions", "sourceFormat", "jsonArray"],
   ["apiManager", "promptOptions", "sourceFormat", "taggedLine"],
@@ -503,9 +492,11 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "composer", "placeholders", "stop"],
   ["apiManager", "composer", "placeholders", "extraParams"],
   ["apiManager", "composer", "hints", "linePolicy"],
+  ["apiManager", "composer", "hints", "applyLinePolicy"],
   ["apiManager", "composer", "hints", "chunkPolicyLine"],
   ["apiManager", "composer", "hints", "chunkPolicyBlock"],
   ["apiManager", "composer", "hints", "concurrency"],
+  ["apiManager", "composer", "hints", "timeout"],
   ["apiManager", "composer", "sections", "samplingTitle"],
   ["apiManager", "composer", "sections", "samplingDesc"],
   ["apiManager", "composer", "sections", "advancedTitle"],
@@ -548,7 +539,15 @@ const requiredPaths: Array<string[]> = [
   ["apiManager", "validationParserJsonMismatch"],
   ["apiManager", "validationParserJsonlMismatch"],
   ["apiManager", "validationInvalidConcurrency"],
+  ["apiManager", "validationInvalidMaxRetries"],
   ["apiManager", "validationInvalidRpm"],
+  ["apiManager", "validationInvalidTimeout"],
+  ["apiManager", "validationInvalidTargetChars"],
+  ["apiManager", "validationInvalidMaxChars"],
+  ["apiManager", "validationInvalidBalanceThreshold"],
+  ["apiManager", "validationInvalidBalanceCount"],
+  ["apiManager", "validationInvalidSimilarityThreshold"],
+  ["apiManager", "validationProfileExists"],
   ["apiManager", "composer", "hints", "modeMismatchLine"],
   ["apiManager", "composer", "hints", "modeMismatchBlock"],
   ["apiManager", "groups", "openai", "title"],
@@ -683,6 +682,93 @@ describe("apiManager view storage keys", () => {
   });
 });
 
+describe("apiManager view unsaved confirm copy", () => {
+  it("uses apiManager unsaved change strings in the confirm modal", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain("t.apiManager.unsavedChangesTitle");
+    expect(content).toContain("t.apiManager.unsavedChangesDesc");
+  });
+});
+
+describe("apiManager view unsaved guard", () => {
+  it("requires explicit user edits before showing unsaved prompt", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain("hasUserEdits");
+    expect(content).toContain("if (!hasUserEdits) return false");
+  });
+});
+
+describe("apiManager view save navigation", () => {
+  it("returns to kind home after save", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain("const returnToKindHome");
+    expect(content).toContain("returnToKindHome(kind)");
+  });
+});
+
+describe("apiManager view profile index", () => {
+  it("dedupes profile ids when loading index", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain("const metaEntries = new Map");
+    expect(content).toContain("metaEntries.has");
+    expect(content).toContain("nextIndex[targetKind] = ids");
+  });
+});
+
+describe("apiManager view segmentation strategy", () => {
+  it("builds strategy options from full policy/chunk index", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain('orderProfileIds("policy", profileIndex.policy)');
+    expect(content).toContain('orderProfileIds("chunk", profileIndex.chunk)');
+    expect(content).toContain("lineCandidates");
+  });
+});
+
 describe("apiManager view defaults", () => {
   it("avoids prefilled pipeline runtime defaults", async () => {
     const fs = await import("node:fs");
@@ -702,6 +788,107 @@ describe("apiManager view defaults", () => {
     const block = match?.[0] || "";
     expect(block).toContain('temperature: ""');
     expect(block).toContain('concurrency: ""');
+  });
+});
+
+describe("apiManager view card styles", () => {
+  it("matches prompt card background for api preset vendors", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain(
+      "min-h-[80px] flex flex-row items-center p-4 bg-card border-border/60",
+    );
+  });
+
+  it("matches prompt card background for custom api entry", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain(
+      "border-dashed flex flex-row items-center p-4 min-h-[80px] h-full bg-card border-border/60 hover:bg-muted/30",
+    );
+  });
+
+  it("keeps cascade parser background neutral", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain('isCascade && !isSelected && "border-border/70"');
+  });
+});
+
+describe("apiManager view chunk type handling", () => {
+  it("preserves existing chunk_type when updating chunk form", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain("const previousChunkTypeRaw");
+    expect(content).toContain("const resolvedChunkType");
+    expect(content).toContain("chunk_type: resolvedChunkType");
+  });
+
+  it("allows line chunk type in validation", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toContain("const normalizedChunkType = normalizeChunkType(rawChunkType);");
+  });
+});
+
+describe("apiManager view translation mode resolver", () => {
+  it("uses correct parameter order when deriving translation mode", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const filePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "components",
+      "ApiManagerView.tsx",
+    );
+    const content = fs.readFileSync(filePath, "utf-8");
+    const match = content.match(
+      new RegExp(
+        'resolvePipelineTranslationMode\\(\\s*pipelineComposer\\.translationMode,\\s*pipelineComposer\\.chunkPolicy,\\s*pipelineComposer\\.linePolicy,\\s*pipelineComposer\\.applyLinePolicy,\\s*pipelineComposer\\.applyLinePolicy \\? "line" : "block"',
+      ),
+    );
+    expect(match).toBeTruthy();
   });
 });
 
