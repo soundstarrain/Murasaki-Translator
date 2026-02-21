@@ -7,7 +7,7 @@ import {
   Notification,
   nativeTheme,
 } from "electron";
-import type { Event as ElectronEvent } from "electron";
+import type { IpcMainEvent as ElectronEvent } from "electron";
 import {
   join,
   basename,
@@ -519,7 +519,7 @@ const handleAppShutdown = async (): Promise<void> => {
   app.exit(0);
 };
 
-app.on("before-quit", (event: ElectronEvent) => {
+app.on("before-quit", (event) => {
   event.preventDefault();
   void handleAppShutdown();
 });
@@ -527,7 +527,8 @@ app.on("before-quit", (event: ElectronEvent) => {
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
-app.on("window-all-closed", (event: ElectronEvent) => {
+// @ts-expect-error - Electron passes event at runtime despite type definition
+app.on("window-all-closed", (event) => {
   if (process.platform !== "darwin") {
     event.preventDefault();
     void handleAppShutdown();

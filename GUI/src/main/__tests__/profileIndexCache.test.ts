@@ -27,7 +27,7 @@ describe("profile index cache helpers", () => {
       id: "b",
       name: "B",
     });
-    expect(base.kinds.api?.["b.yaml"]).toBeUndefined();
+    expect((base.kinds.api as any)?.["b.yaml"]).toBeUndefined();
 
     const removed = buildNextProfileIndexCache(added, "api", "a.yaml", null);
     expect(removed.kinds.api?.["a.yaml"]).toBeUndefined();

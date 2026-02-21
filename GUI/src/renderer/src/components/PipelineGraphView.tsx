@@ -41,6 +41,7 @@ type PipelineNodeData = {
   label: string;
   value: string;
   muted?: boolean;
+  [key: string]: unknown;
 };
 
 const nodeWidth = 190;
@@ -88,7 +89,7 @@ const getLayoutedElements = (
   return { nodes: layoutedNodes, edges };
 };
 
-const PipelineNode = ({ data }: NodeProps<PipelineNodeData>) => {
+const PipelineNode = ({ data }: NodeProps<Node<PipelineNodeData>>) => {
   return (
     <div
       className={cn(
@@ -106,7 +107,7 @@ const PipelineNode = ({ data }: NodeProps<PipelineNodeData>) => {
   );
 };
 
-const nodeTypes = { pipeline: PipelineNode };
+const nodeTypes = { pipeline: PipelineNode } as const;
 
 export function PipelineGraphView({
   nodes: items,
@@ -195,10 +196,10 @@ export function PipelineGraphView({
         <ReactFlow
           nodes={nodes}
           edges={edges}
-          onNodesChange={onNodesChange}
+          onNodesChange={onNodesChange as any}
           onEdgesChange={onEdgesChange}
           onInit={setReactFlowInstance}
-          nodeTypes={nodeTypes}
+          nodeTypes={nodeTypes as any}
           nodesConnectable={false}
           fitView
           minZoom={0.3}

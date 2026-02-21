@@ -1151,6 +1151,19 @@ export const Dashboard = forwardRef<any, DashboardProps>(
               console.error("Output Path Parse Error:", e);
             }
             return;
+          } else if (log.startsWith("JSON_CACHE_PATH:")) {
+            // V2 发射的精准缓存路径（覆盖 resolveCachePath 的推导值）
+            try {
+              const data = JSON.parse(
+                log.substring("JSON_CACHE_PATH:".length),
+              );
+              if (data.path) {
+                progressDataRef.current.cachePath = data.path;
+              }
+            } catch (e) {
+              console.error("JSON_CACHE_PATH Parse Error:", e);
+            }
+            return;
           } else if (log.startsWith("JSON_WARNING:")) {
             // Quality check warnings from backend
             try {
@@ -1256,6 +1269,25 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         unsubscribeLog?.();
         unsubscribeExit?.();
       };
+    }, []);
+
+    // pipelinev2-log: 接收 V2 stderr/debug 日志并显示
+    useEffect(() => {
+      const unsubscribeV2Log = window.api?.onPipelineV2Log?.(
+        (data: { runId?: string; message?: string; level?: string }) => {
+          const msg = (data.message || "").trim();
+          if (!msg) return;
+          const prefix = data.level === "error" ? "[V2 stderr] " : "[V2] ";
+          setLogs((prev) => [...prev.slice(-200), `${prefix}${msg}`]);
+          logsBufferRef.current.push(`${prefix}${msg}`);
+          if (logsBufferRef.current.length > MAX_HISTORY_LOG_LINES) {
+            logsBufferRef.current = logsBufferRef.current.slice(
+              -MAX_HISTORY_LOG_LINES,
+            );
+          }
+        },
+      );
+      return () => unsubscribeV2Log?.();
     }, []);
 
     // 快捷键监听 (带有依赖数组，防止闭包陷阱)
@@ -2217,6 +2249,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         glossaryPath: resolvedGlossaryPath || undefined,
         resume: Boolean(resolvedResume),
         cacheDir: cacheDir || undefined,
+        sourceLang: localStorage.getItem("config_source_lang") || "ja",
+        textProtect: true,
+        saveCache: true,
       });
     };
 

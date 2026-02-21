@@ -73,6 +73,11 @@ def emit_output_path(path: str) -> None:
     emit("JSON_OUTPUT_PATH", {"path": path})
 
 
+def emit_cache_path(path: str) -> None:
+    """Emit JSON_CACHE_PATH so Dashboard can record cache location for proofreading."""
+    emit("JSON_CACHE_PATH", {"path": path})
+
+
 def emit_final(
     *,
     total_time: float,

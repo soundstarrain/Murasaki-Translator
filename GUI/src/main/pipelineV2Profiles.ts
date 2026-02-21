@@ -456,8 +456,6 @@ const listApiModels = async (
   const url = buildChatCompletionsUrl(baseUrl);
 
   if (!url) return { ok: false, message: "base_url_missing" };
-  const resolvedModel = String(model || "").trim();
-  if (!resolvedModel) return { ok: false, message: "missing_model" };
 
   const headers: Record<string, string> = {
 
@@ -1609,7 +1607,8 @@ const testApiConcurrency = async (
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
   const max = Math.min(Math.max(1, Math.floor(maxConcurrency)), 64);
-  const body = JSON.stringify(buildConcurrencyTestPayload(resolvedModel));
+  const resolvedModel = String(model || "").trim();
+  const body = JSON.stringify(buildConcurrencyTestPayload(resolvedModel || "test"));
 
   const runBatch = async (count: number) => {
 

@@ -3,6 +3,7 @@ import {
   buildPipelineSummary,
   prunePipelineSummaryIndex,
   resolvePipelineTranslationMode,
+  type PipelineChunkTypeIndex,
 } from "../pipelineProfile";
 
 describe("pipelineProfile helpers", () => {
@@ -93,7 +94,7 @@ describe("pipelineProfile helpers", () => {
   });
 
   it("resolves translation mode from explicit value", () => {
-    const chunkTypeIndex = { chunk_line: "line", chunk_block: "block" };
+    const chunkTypeIndex: PipelineChunkTypeIndex = { chunk_line: "line", chunk_block: "block" };
     expect(
       resolvePipelineTranslationMode(
         "block",
@@ -107,7 +108,7 @@ describe("pipelineProfile helpers", () => {
   });
 
   it("infers translation mode from chunk policy when mode is empty", () => {
-    const chunkTypeIndex = { chunk_line: "line", chunk_block: "block" };
+    const chunkTypeIndex: PipelineChunkTypeIndex = { chunk_line: "line", chunk_block: "block" };
     expect(
       resolvePipelineTranslationMode(
         "",
@@ -131,7 +132,7 @@ describe("pipelineProfile helpers", () => {
   });
 
   it("falls back to line when line policy applies and chunk type is unknown", () => {
-    const chunkTypeIndex = {};
+    const chunkTypeIndex: PipelineChunkTypeIndex = {};
     expect(
       resolvePipelineTranslationMode(
         "",
@@ -145,7 +146,7 @@ describe("pipelineProfile helpers", () => {
   });
 
   it("uses fallback when no hints are available", () => {
-    const chunkTypeIndex = {};
+    const chunkTypeIndex: PipelineChunkTypeIndex = {};
     expect(
       resolvePipelineTranslationMode(
         "",

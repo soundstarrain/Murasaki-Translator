@@ -178,8 +178,7 @@ def build_protect_patterns(
         return []
     protect_enabled, protect_lines = _collect_protect_rule_lines(pre_rules)
     legacy_lines = _collect_legacy_protect_lines(post_rules)
-    if not protect_enabled and not legacy_lines:
-        return []
+    # 即使没有显式配置保护规则，enable=True 时也使用默认 patterns
     additions, removals = _parse_protect_pattern_lines(protect_lines + legacy_lines)
     base_patterns = TextProtector.DEFAULT_PATTERNS
     return _merge_protect_patterns(base_patterns, additions, removals)

@@ -30,7 +30,7 @@ from murasaki_flow_v2.utils.adaptive_concurrency import AdaptiveConcurrency
 from murasaki_flow_v2.utils.line_format import extract_line_for_policy, parse_jsonl_entries
 from murasaki_flow_v2.utils import processing as v2_processing
 from murasaki_flow_v2.utils.log_protocol import (
-    ProgressTracker, emit_output_path, emit_retry, emit_error, emit_warning,
+    ProgressTracker, emit_output_path, emit_cache_path, emit_retry, emit_error, emit_warning,
 )
 
 MAX_CONCURRENCY = 64
@@ -899,6 +899,8 @@ class PipelineRunner:
                 glossary_path=glossary_path,
                 concurrency=concurrency,
             )
+            if hasattr(translation_cache, 'cache_path') and translation_cache.cache_path:
+                emit_cache_path(translation_cache.cache_path)
 
         tracker.emit_final_stats()
         try:

@@ -255,13 +255,13 @@ export function SettingsView({ lang }: { lang: Language }) {
       | "Middleware"
       | "Permissions"
     > = [
-      "Python",
-      "CUDA",
-      "Vulkan",
-      "LlamaBackend",
-      "Middleware",
-      "Permissions",
-    ];
+        "Python",
+        "CUDA",
+        "Vulkan",
+        "LlamaBackend",
+        "Middleware",
+        "Permissions",
+      ];
 
     const promises = components.map((comp) => checkEnvironmentComponent(comp));
     await Promise.all(promises);
@@ -592,7 +592,7 @@ export function SettingsView({ lang }: { lang: Language }) {
     onConfirm: () => void | Promise<void>;
     closeOnConfirm?: boolean;
     confirmLoading?: boolean;
-  }>({ open: false, title: "", description: "", onConfirm: () => {} });
+  }>({ open: false, title: "", description: "", onConfirm: () => { } });
 
   // Modal States for new log/env viewers
   const [showServerLogModal, setShowServerLogModal] = useState(false);
@@ -630,9 +630,7 @@ export function SettingsView({ lang }: { lang: Language }) {
           const label =
             rule.pattern === "ensure_double_newline"
               ? t.ruleEditor.presetRuleLabels.doubleNewlineNovel
-              : rule.pattern === "smart_quotes"
-                ? t.ruleEditor.presetRuleLabels.smartQuotes
-                : rule.label;
+              : t.ruleEditor.presetRuleLabels.smartQuotes;
           return { ...rule, label };
         });
         localStorage.setItem(
@@ -753,20 +751,20 @@ export function SettingsView({ lang }: { lang: Language }) {
         recordCount: historyCount,
         lastRecords: Array.isArray(historyData)
           ? historyData
-              .slice(-5)
-              .map(
-                (r: {
-                  fileName?: string;
-                  status?: string;
-                  startTime?: string;
-                  triggers?: unknown[];
-                }) => ({
-                  fileName: r.fileName,
-                  status: r.status,
-                  startTime: r.startTime,
-                  triggerCount: r.triggers?.length || 0,
-                }),
-              )
+            .slice(-5)
+            .map(
+              (r: {
+                fileName?: string;
+                status?: string;
+                startTime?: string;
+                triggers?: unknown[];
+              }) => ({
+                fileName: r.fileName,
+                status: r.status,
+                startTime: r.startTime,
+                triggerCount: r.triggers?.length || 0,
+              }),
+            )
           : [],
       },
 
@@ -834,53 +832,53 @@ export function SettingsView({ lang }: { lang: Language }) {
   const renderEnvFixerContent = () => {
     const components: Array<{
       name:
-        | "Python"
-        | "CUDA"
-        | "Vulkan"
-        | "LlamaBackend"
-        | "Middleware"
-        | "Permissions";
+      | "Python"
+      | "CUDA"
+      | "Vulkan"
+      | "LlamaBackend"
+      | "Middleware"
+      | "Permissions";
       label: string;
       icon: any;
       description: string;
     }> = [
-      {
-        name: "Python",
-        label: envFixerText.components.python.label,
-        icon: Terminal,
-        description: envFixerText.components.python.desc,
-      },
-      {
-        name: "CUDA",
-        label: envFixerText.components.cuda.label,
-        icon: Zap,
-        description: envFixerText.components.cuda.desc,
-      },
-      {
-        name: "Vulkan",
-        label: envFixerText.components.vulkan.label,
-        icon: Box,
-        description: envFixerText.components.vulkan.desc,
-      },
-      {
-        name: "LlamaBackend",
-        label: envFixerText.components.llama.label,
-        icon: Server,
-        description: envFixerText.components.llama.desc,
-      },
-      {
-        name: "Middleware",
-        label: envFixerText.components.middleware.label,
-        icon: Layers,
-        description: envFixerText.components.middleware.desc,
-      },
-      {
-        name: "Permissions",
-        label: envFixerText.components.permissions.label,
-        icon: ShieldCheck,
-        description: envFixerText.components.permissions.desc,
-      },
-    ];
+        {
+          name: "Python",
+          label: envFixerText.components.python.label,
+          icon: Terminal,
+          description: envFixerText.components.python.desc,
+        },
+        {
+          name: "CUDA",
+          label: envFixerText.components.cuda.label,
+          icon: Zap,
+          description: envFixerText.components.cuda.desc,
+        },
+        {
+          name: "Vulkan",
+          label: envFixerText.components.vulkan.label,
+          icon: Box,
+          description: envFixerText.components.vulkan.desc,
+        },
+        {
+          name: "LlamaBackend",
+          label: envFixerText.components.llama.label,
+          icon: Server,
+          description: envFixerText.components.llama.desc,
+        },
+        {
+          name: "Middleware",
+          label: envFixerText.components.middleware.label,
+          icon: Layers,
+          description: envFixerText.components.middleware.desc,
+        },
+        {
+          name: "Permissions",
+          label: envFixerText.components.permissions.label,
+          icon: ShieldCheck,
+          description: envFixerText.components.permissions.desc,
+        },
+      ];
 
     const statusColors = {
       ok: "text-green-500 bg-green-500/10",
@@ -919,9 +917,8 @@ export function SettingsView({ lang }: { lang: Language }) {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <div
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                          result ? statusColors[result.status] : "bg-muted"
-                        }`}
+                        className={`w-8 h-8 rounded-lg flex items-center justify-center ${result ? statusColors[result.status] : "bg-muted"
+                          }`}
                       >
                         <CompIcon className="w-4 h-4" />
                       </div>
@@ -1212,9 +1209,9 @@ export function SettingsView({ lang }: { lang: Language }) {
                         <p className="text-sm font-semibold flex items-center gap-1.5">
                           {diagnostics.vulkan.version
                             ? diagText.versionLabel.replace(
-                                "{version}",
-                                String(diagnostics.vulkan.version),
-                              )
+                              "{version}",
+                              String(diagnostics.vulkan.version),
+                            )
                             : diagText.vulkanAvailable}
                           <CheckCircle2 className="w-3 h-3 text-green-500" />
                         </p>
