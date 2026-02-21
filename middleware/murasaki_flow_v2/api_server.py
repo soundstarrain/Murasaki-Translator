@@ -33,6 +33,11 @@ class ValidateRequest(BaseModel):
     data: Optional[Dict[str, Any]] = None
 
 
+class SandboxRequest(BaseModel):
+    text: str
+    pipeline: Dict[str, Any]
+
+
 def _ensure_dirs(store: ProfileStore) -> None:
     store.ensure_dirs(PROFILE_KINDS)
 
@@ -196,6 +201,50 @@ def create_app(store: ProfileStore, base_dir: Path) -> FastAPI:
             raise HTTPException(status_code=400, detail="invalid_id")
         result = validate_profile(kind, data, store=store)
         return {"ok": result.ok, "errors": result.errors, "warnings": result.warnings}
+
+    @app.post("/sandbox")
+    def sandbox(payload: SandboxRequest) -> Dict[str, Any]:
+        try:
+            from murasaki_flow_v2.api.sandbox_tester import SandboxTester
+            tester = SandboxTester(store)
+            res = tester.run_test(payload.text, payload.pipeline)
+            import json
+            def _safe_default(obj):
+                return str(obj)
+
+            def clean_traces(traces: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+                if not traces:
+                    return traces
+                
+                # The most bulletproof way to scrub anything that isn't JSON serializable
+                # is to dump it to a string with a default handler that casts to string,
+                # and then load it right back as pure primitives.
+                try:
+                    cleaned_str = json.dumps(traces, default=_safe_default)
+                    return json.loads(cleaned_str)
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    return []
+
+            return {
+                "ok": res.ok,
+                "source_text": res.source_text,
+                "pre_processed": res.pre_processed,
+                "raw_request": res.raw_request,
+                "raw_response": res.raw_response,
+                "parsed_result": res.parsed_result,
+                "post_processed": res.post_processed,
+                "pre_traces": clean_traces(res.pre_traces),
+                "post_traces": clean_traces(res.post_traces),
+                "pre_rules_count": res.pre_rules_count,
+                "post_rules_count": res.post_rules_count,
+                "error": res.error,
+            }
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
     return app
 

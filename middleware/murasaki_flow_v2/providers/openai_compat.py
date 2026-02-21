@@ -58,13 +58,29 @@ def _normalize_base_url(base_url: str) -> str:
         return base_url
     if base_url.endswith("/v1/chat/completions"):
         return base_url.rsplit("/chat/completions", 1)[0]
+    
     path = (urlparse(base_url).path or "").lower()
-    if _VERSION_SEGMENT.search(path) or "/openapi" in path:
-        return base_url
-    return f"{base_url}/v1"
-
+    
+    # 如果用户只填了一个主域名 (例如 https://api.openai.com) 或者刚好是以 /v1 结尾
+    # 或者是 /openai 这种常见的网关前缀，我们在下面的 _build_url 会统一处理补全
+    # 这里主要决定要不要强行把 /v1 插在它屁股后面。
+    if not path or path == "/" or path.endswith("/v1") or _VERSION_SEGMENT.search(path) or "/openapi" in path:
+        return base_url if path and path != "/" else f"{base_url}/v1"
+        
+    # 对于其他任何奇奇怪怪的路径（用户可能填了一个具体的内网反代地址 /my_proxy/api 等）
+    # 都只返回原样，把拼接 /chat/completions 的权力完全交给 _build_url
+    return base_url
 
 def _build_url(base_url: str) -> str:
+    base_url = base_url.strip().rstrip("/")
+    if not base_url:
+        return ""
+        
+    # 如果用户明确提供了一个完整的后缀补全，哪怕它没 /v1，也绝对原样使用它
+    if base_url.endswith("/chat/completions"):
+        return base_url
+        
+    # 如果用户没有写完整后缀，我们先格式化，然后再硬加上 /chat/completions
     normalized = _normalize_base_url(base_url)
     return f"{normalized}/chat/completions"
 
@@ -97,6 +113,7 @@ class OpenAICompatProvider(BaseProvider):
         except (TypeError, ValueError):
             rpm_value = 0
         self._rpm_limiter = _RpmLimiter(rpm_value) if rpm_value > 0 else None
+        self._session = requests.Session()
 
     def _pick_api_key(self) -> str:
         if not self._api_keys:
@@ -112,8 +129,23 @@ class OpenAICompatProvider(BaseProvider):
         model = str(settings.get("model") or self.profile.get("model") or "").strip()
         if not model:
             raise ProviderError("OpenAI-compatible provider requires model")
-        temperature = settings.get("temperature")
-        max_tokens = settings.get("max_tokens")
+            
+        raw_temp = settings.get("temperature")
+        temperature = None
+        if raw_temp is not None and str(raw_temp).strip() != "":
+            try:
+                temperature = float(raw_temp)
+            except (ValueError, TypeError):
+                pass
+                
+        raw_max = settings.get("max_tokens")
+        max_tokens = None
+        if raw_max is not None and str(raw_max).strip() != "":
+            try:
+                max_tokens = int(raw_max)
+            except (ValueError, TypeError):
+                pass
+
         extra: Dict[str, Any] = {}
         profile_params = self.profile.get("params") or {}
         settings_params = settings.get("params") or settings.get("extra") or {}
@@ -122,7 +154,7 @@ class OpenAICompatProvider(BaseProvider):
         if isinstance(settings_params, dict):
             extra.update(settings_params)
         if "stop" not in extra:
-            extra["stop"] = DEFAULT_STOP_TOKENS
+            extra["stop"] = DEFAULT_STOP_TOKENS[:4] # Max 4 items for OpenAI/Volcengine compatibility
 
         headers: Dict[str, str] = {}
         profile_headers = self.profile.get("headers") or {}
@@ -173,7 +205,7 @@ class OpenAICompatProvider(BaseProvider):
 
         start = time.time()
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 url,
                 headers=headers,
                 data=json.dumps(payload),

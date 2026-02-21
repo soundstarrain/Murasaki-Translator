@@ -41,6 +41,8 @@ import {
   Loader2,
   ArrowRight,
   Check,
+  RotateCcw,
+  Play,
 } from "lucide-react";
 import { Switch } from "./ui/core";
 import { cn } from "../lib/utils";
@@ -257,6 +259,7 @@ type ApiFormState = {
   params: string;
   timeout: string;
   concurrency: string;
+  maxRetries: string;
   rpm: string;
   temperature: string;
   topP: string;
@@ -504,6 +507,7 @@ api_key: ""
 model: ""
 timeout: 600
 concurrency: 0
+max_retries: 3
 rpm: 3600
 headers: {}
 params: {}`,
@@ -567,6 +571,7 @@ const DEFAULT_API_FORM: ApiFormState = {
   params: "",
   timeout: "",
   concurrency: "0",
+  maxRetries: "3",
   rpm: "3600",
   temperature: "",
   topP: "0.95",
@@ -2082,6 +2087,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     setPipelineGuideTouched(true);
   };
 
+  const [sandboxText, setSandboxText] = useState("いかに近代化が進もうとも、いかに社会規範が浸透しようとも、人間は時として合理性よりも感情を優先する愚かな存在であるということを。\n\n憎悪に囚われた人間は、打算も、合理性も、損得さえ抜きに、どこまでも抗い続けます");
+  const [sandboxResult, setSandboxResult] = useState<any>(null);
+  const [sandboxLoading, setSandboxLoading] = useState(false);
+  const [sandboxTab, setSandboxTab] = useState<"pre" | "request" | "response" | "parsed" | "post">("parsed");
+
+
+
   useEffect(() => {
     if (
       kind === "pipeline" &&
@@ -3564,7 +3576,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     const timeoutMs =
       Number.isFinite(timeoutValue) && timeoutValue > 0
         ? timeoutValue * 1000
-        : 8000;
+        : 60000;
     const requestId = ++apiTestSeq.current;
     setApiTest({ status: "testing" });
     try {
@@ -3626,7 +3638,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     const timeoutMs =
       Number.isFinite(timeoutValue) && timeoutValue > 0
         ? timeoutValue * 1000
-        : 8000;
+        : 60000;
     const maxConcurrencyValue = Number(apiForm.concurrency);
     const maxConcurrency =
       Number.isFinite(maxConcurrencyValue) && maxConcurrencyValue > 0
@@ -3699,7 +3711,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     const timeoutMs =
       Number.isFinite(timeoutValue) && timeoutValue > 0
         ? timeoutValue * 1000
-        : 8000;
+        : 60000;
     setModelListLoading(true);
     setModelListError("");
     try {
@@ -4302,6 +4314,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           data.concurrency !== undefined && data.concurrency !== null
             ? String(data.concurrency)
             : "",
+        maxRetries:
+          data.max_retries !== undefined && data.max_retries !== null
+            ? String(data.max_retries)
+            : "3",
         rpm:
           data.rpm !== undefined && data.rpm !== null
             ? String(data.rpm)
@@ -4814,6 +4830,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           payload.concurrency = newForm.concurrency;
         }
       }
+      if (newForm.maxRetries !== "") {
+        const rawMaxRetries = Number.parseInt(newForm.maxRetries, 10);
+        if (Number.isFinite(rawMaxRetries)) {
+          payload.max_retries = rawMaxRetries;
+        } else {
+          payload.max_retries = newForm.maxRetries;
+        }
+      }
       if (newForm.rpm !== "") {
         const rawRpm = Number.parseInt(newForm.rpm, 10);
         if (Number.isFinite(rawRpm)) {
@@ -4838,6 +4862,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           "params",
           "timeout",
           "concurrency",
+          "max_retries",
           "rpm",
           "requests_per_minute",
           "rate_limit_per_minute",
@@ -5647,44 +5672,88 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label>{texts.formFields.concurrencyLabel}</Label>
-            <InputAffix
-              type="number"
-              value={apiForm.concurrency}
-              onChange={(e) =>
-                updateYamlFromApiForm({
-                  ...apiForm,
-                  concurrency: e.target.value,
-                })
-              }
-              placeholder={texts.formPlaceholders.concurrency}
-              prefix={<Cpu className="h-3.5 w-3.5" />}
-              suffix="x"
-            />
-            <p className="text-xs text-muted-foreground">
-              {texts.formHints.concurrency}
-            </p>
-          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>{texts.formFields.concurrencyLabel}</Label>
+              <InputAffix
+                type="number"
+                value={apiForm.concurrency}
+                onChange={(e) =>
+                  updateYamlFromApiForm({
+                    ...apiForm,
+                    concurrency: e.target.value,
+                  })
+                }
+                placeholder={texts.formPlaceholders.concurrency}
+                prefix={<Cpu className="h-3.5 w-3.5" />}
+                suffix="x"
+              />
+              <p className="text-xs text-muted-foreground">
+                {texts.formHints.concurrency}
+              </p>
+            </div>
 
-          <div className="space-y-2">
-            <Label>{texts.formFields.rpmLabel}</Label>
-            <InputAffix
-              type="number"
-              value={apiForm.rpm}
-              onChange={(e) =>
-                updateYamlFromApiForm({
-                  ...apiForm,
-                  rpm: e.target.value,
-                })
-              }
-              placeholder={texts.formPlaceholders.rpm}
-              prefix={<Gauge className="h-3.5 w-3.5" />}
-              suffix="rpm"
-            />
-            <p className="text-xs text-muted-foreground">
-              {texts.formHints.rpm}
-            </p>
+            <div className="space-y-2">
+              <Label>{texts.formFields.rpmLabel}</Label>
+              <InputAffix
+                type="number"
+                value={apiForm.rpm}
+                onChange={(e) =>
+                  updateYamlFromApiForm({
+                    ...apiForm,
+                    rpm: e.target.value,
+                  })
+                }
+                placeholder={texts.formPlaceholders.rpm}
+                prefix={<Gauge className="h-3.5 w-3.5" />}
+                suffix="rpm"
+              />
+              <p className="text-xs text-muted-foreground">
+                {texts.formHints.rpm}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>异常重试次数</Label>
+              <InputAffix
+                type="number"
+                value={apiForm.maxRetries}
+                min="0"
+                max="20"
+                onChange={(e) =>
+                  updateYamlFromApiForm({
+                    ...apiForm,
+                    maxRetries: e.target.value,
+                  })
+                }
+                placeholder="默认 3 次"
+                prefix={<RotateCcw className="h-3.5 w-3.5" />}
+                suffix="次"
+              />
+              <p className="text-xs text-muted-foreground whitespace-pre-line">
+                API 异常或产生幻觉时的轮询上限
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>{texts.formFields.timeoutLabel}</Label>
+              <InputAffix
+                type="number"
+                value={apiForm.timeout}
+                onChange={(e) =>
+                  updateYamlFromApiForm({
+                    ...apiForm,
+                    timeout: e.target.value,
+                  })
+                }
+                placeholder={texts.formPlaceholders.timeout}
+                prefix={<Clock className="h-3.5 w-3.5" />}
+                suffix="s"
+              />
+              <p className="text-xs text-muted-foreground whitespace-pre-line">
+                网络请求的超时截断时间
+              </p>
+            </div>
           </div>
 
         </div>
@@ -6182,39 +6251,21 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
               </div>
 
               {apiAdvancedTab === "extras" && (
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{texts.formFields.timeoutLabel}</Label>
-                    <InputAffix
-                      type="number"
-                      value={apiForm.timeout}
-                      onChange={(e) =>
-                        updateYamlFromApiForm({
-                          ...apiForm,
-                          timeout: e.target.value,
-                        })
-                      }
-                      placeholder={texts.formPlaceholders.timeout}
-                      prefix={<Clock className="h-3.5 w-3.5" />}
-                      suffix="s"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{texts.formFields.groupLabel}</Label>
-                    <Input
-                      value={apiForm.group}
-                      onChange={(e) =>
-                        updateYamlFromApiForm({
-                          ...apiForm,
-                          group: e.target.value,
-                        })
-                      }
-                      placeholder={texts.formPlaceholders.group}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {texts.formHints.group}
-                    </p>
-                  </div>
+                <div className="space-y-2">
+                  <Label>{texts.formFields.groupLabel}</Label>
+                  <Input
+                    value={apiForm.group}
+                    onChange={(e) =>
+                      updateYamlFromApiForm({
+                        ...apiForm,
+                        group: e.target.value,
+                      })
+                    }
+                    placeholder={texts.formPlaceholders.group}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {texts.formHints.group}
+                  </p>
                 </div>
               )}
 
@@ -7565,6 +7616,288 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     );
   };
 
+  const handleRunSandbox = async () => {
+    if (!sandboxText.trim()) return;
+    setSandboxLoading(true);
+    setSandboxResult(null);
+    try {
+      const pipelineConfig = {
+        ...pipelineComposer,
+        provider: pipelineComposer.provider,
+        prompt: pipelineComposer.prompt,
+        parser: pipelineComposer.parser,
+      };
+      const res = await window.api?.pipelineV2SandboxTest?.({
+        text: sandboxText,
+        pipeline: pipelineConfig,
+      });
+
+      if (res?.ok && res.data) {
+        if (res.data.ok) {
+          setSandboxResult({ type: "success", data: res.data });
+        } else {
+          setSandboxResult({ type: "error", error: res.data.error || "Sandbox payload returned error", data: res.data });
+        }
+      } else {
+        setSandboxResult({ type: "error", error: res?.error || "Unknown Error", data: res?.data });
+      }
+    } catch (err: any) {
+      setSandboxResult({ type: "error", error: err?.message || String(err) });
+    } finally {
+      setSandboxLoading(false);
+    }
+  };
+
+  const renderSandboxDebugger = () => {
+    return (
+      <FormSection
+        title={lang === "en" ? "Sandbox Testing" : "沙盒测试"}
+        desc={
+          lang === "en"
+            ? "Test your pipeline end-to-end to ensure the provider, prompt, and parser work harmoniously together."
+            : "进行端到端的方案测试，确保模型、提示词及解析器可良好协同工作。"
+        }
+      >
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>{lang === "en" ? "Test Input Text" : "测试输入文本"}</Label>
+            <textarea
+              spellCheck={false}
+              className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
+              value={sandboxText}
+              onChange={(e) => setSandboxText(e.target.value)}
+              placeholder={
+                lang === "en"
+                  ? "Enter Japanese text to test..."
+                  : "输入日文准备测试..."
+              }
+            />
+          </div>
+
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              onClick={handleRunSandbox}
+              disabled={sandboxLoading || !sandboxText.trim()}
+              className="gap-2"
+            >
+              {sandboxLoading ? (
+                <Activity className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
+              {sandboxLoading
+                ? lang === "en"
+                  ? "Running..."
+                  : "执行中..."
+                : lang === "en"
+                  ? "Run Sandbox Test"
+                  : "运行沙盒测试"}
+            </Button>
+          </div>
+
+          {sandboxResult && (
+            <div className={cn(
+              "mt-4 rounded-xl border flex flex-col shadow-sm overflow-hidden animate-in fade-in slide-in-from-top-2",
+              sandboxResult.type === "error" ? "border-red-500/30" : "border-emerald-500/30"
+            )}>
+              {/* Header Banner */}
+              <div className={cn(
+                "flex items-center px-4 py-2.5 text-sm font-semibold border-b",
+                sandboxResult.type === "error" ? "bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400" : "bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400"
+              )}>
+                <div className="flex items-center gap-2">
+                  {sandboxResult.type === "error" ? (
+                    <AlertTriangle className="h-4 w-4" />
+                  ) : (
+                    <CheckCircle2 className="h-4 w-4" />
+                  )}
+                  <span>
+                    {sandboxResult.type === "error"
+                      ? (lang === "en" ? "Execution Failed" : "沙盒测试失败")
+                      : (lang === "en" ? "Execution Successful" : "沙盒测试成功")}
+                  </span>
+                </div>
+              </div>
+
+              {/* Inline Error Details */}
+              {sandboxResult.type === "error" && sandboxResult.error && (
+                <div className="p-4 bg-red-500/5 border-b border-red-500/10">
+                  <div className="text-xs font-mono text-red-600/90 dark:text-red-400/90 whitespace-pre-wrap break-all leading-relaxed">
+                    {sandboxResult.error}
+                  </div>
+                </div>
+              )}
+
+              {/* IDE Code Viewer */}
+              <div className="flex flex-col bg-background">
+                <div className="flex items-end border-b border-border/60 bg-muted/20 pt-1.5 px-2 gap-1 overflow-x-auto custom-scrollbar">
+                  {[
+                    { id: "pre", label: lang === "en" ? "Pre-process" : "预处理" },
+                    { id: "request", label: lang === "en" ? "Raw Request" : "请求体" },
+                    { id: "response", label: lang === "en" ? "Raw Response" : "模型原响应" },
+                    { id: "parsed", label: lang === "en" ? "Parsed Result" : "解析提取结果" },
+                    { id: "post", label: lang === "en" ? "Post-process" : "后处理" }
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setSandboxTab(tab.id as any)}
+                      className={cn(
+                        "px-4 py-2 text-[13px] font-medium rounded-t-lg transition-colors border -mb-px outline-none whitespace-nowrap",
+                        sandboxTab === tab.id
+                          ? "bg-background border-border/60 border-b-background text-foreground shadow-[0_-2px_0_inset_hsl(var(--primary))]"
+                          : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="w-full h-[350px] overflow-y-auto bg-zinc-50 dark:bg-zinc-950/50 p-0 text-[13px] font-mono whitespace-pre-wrap break-all text-foreground/90 leading-relaxed custom-scrollbar selection:bg-primary/20 flex flex-col">
+                  {sandboxTab === "pre" && (
+                    <div className="flex flex-col p-4 w-full h-full gap-4">
+                      <div className="text-muted-foreground text-xs uppercase tracking-wider font-semibold">Final Result</div>
+                      <div className="bg-background border border-border/50 rounded-md p-3">
+                        {sandboxResult.data?.pre_processed || (sandboxResult.type === "error" ? "N/A (Failed before this step)" : "N/A")}
+                      </div>
+
+                      {sandboxResult.data?.pre_traces && sandboxResult.data.pre_traces.length > 0 ? (
+                        <div className="flex flex-col mt-2 gap-3">
+                          <div className="text-muted-foreground text-xs uppercase tracking-wider font-semibold flex items-center justify-between">
+                            <span>Processing Traces ({sandboxResult.data.pre_traces.length} steps applied / {sandboxResult.data.pre_rules_count || 0} total rules)</span>
+                          </div>
+
+                          <div className="flex flex-col gap-3 relative before:absolute before:inset-y-0 before:left-3.5 before:w-px before:bg-border/60">
+                            {sandboxResult.data.pre_traces.map((trace: any, idx: number) => (
+                              <div key={idx} className="relative flex gap-4 pr-2">
+                                <div className="z-10 bg-background flex items-center justify-center w-7 h-7 rounded-full border border-border/60 shadow-sm text-xs text-muted-foreground shrink-0 mt-1">
+                                  {idx + 1}
+                                </div>
+                                <div className="flex-1 bg-background border border-border/50 rounded-lg overflow-hidden shadow-sm flex flex-col transiton-all group">
+                                  <div className="bg-muted/30 px-3 py-2 border-b border-border/50 flex items-center justify-between">
+                                    <div className="flex items-center gap-2 font-semibold text-foreground/80">
+                                      <span className={cn(
+                                        "px-1.5 py-0.5 rounded text-[10px] uppercase font-bold text-white",
+                                        trace.type === 'replace' ? "bg-blue-500" :
+                                          trace.type === 'regex' ? "bg-violet-500" :
+                                            trace.type === 'python' ? "bg-amber-500" : "bg-emerald-500"
+                                      )}>
+                                        {trace.type}
+                                      </span>
+                                      <span className="truncate max-w-[200px]" title={trace.pattern}>{trace.pattern || 'N/A'}</span>
+                                    </div>
+                                  </div>
+                                  <div className="p-3 bg-red-500/5 border-b border-border/30 line-through text-red-700/80 dark:text-red-400/80">
+                                    {trace.before}
+                                  </div>
+                                  <div className="p-3 bg-emerald-500/5 text-emerald-700/80 dark:text-emerald-400/80">
+                                    {trace.after}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col mt-2 gap-3">
+                          <div className="text-muted-foreground text-xs uppercase tracking-wider font-semibold flex items-center justify-between">
+                            <span>Processing Traces (0 steps applied / {sandboxResult.data?.pre_rules_count || 0} total rules)</span>
+                          </div>
+                          {(sandboxResult.data?.pre_rules_count || 0) > 0 ? (
+                            <div className="text-center p-6 bg-background border border-border/50 border-dashed rounded-lg">
+                              <p className="text-sm text-muted-foreground">{lang === "en" ? "Rules were loaded but text was unaffected." : "已加载规则，但无任何规则被触发修改文本。"}</p>
+                            </div>
+                          ) : (
+                            <div className="text-center p-6 bg-background border border-border/50 border-dashed rounded-lg">
+                              <p className="text-sm text-muted-foreground">{lang === "en" ? "No pre-processing rules configured." : "暂未配置任何预处理规则。"}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {sandboxTab === "request" && (
+                    <div className="p-4">{sandboxResult.data?.raw_request || (sandboxResult.type === "error" ? "N/A (Failed before this step)" : "N/A")}</div>
+                  )}
+                  {sandboxTab === "response" && (
+                    <div className="p-4">{sandboxResult.data?.raw_response || (sandboxResult.type === "error" ? "N/A (Failed before this step)" : "N/A")}</div>
+                  )}
+                  {sandboxTab === "parsed" && (
+                    <div className="p-4">{sandboxResult.data?.parsed_result || (sandboxResult.type === "error" ? "N/A (Failed before this step)" : "N/A")}</div>
+                  )}
+
+                  {sandboxTab === "post" && (
+                    <div className="flex flex-col p-4 w-full h-full gap-4">
+                      <div className="text-muted-foreground text-xs uppercase tracking-wider font-semibold">Final Result</div>
+                      <div className="bg-background border border-border/50 rounded-md p-3">
+                        {sandboxResult.data?.post_processed || (sandboxResult.type === "error" ? "N/A (Failed before this step)" : "N/A")}
+                      </div>
+
+                      {sandboxResult.data?.post_traces && sandboxResult.data.post_traces.length > 0 ? (
+                        <div className="flex flex-col mt-2 gap-3">
+                          <div className="text-muted-foreground text-xs uppercase tracking-wider font-semibold flex items-center justify-between">
+                            <span>Processing Traces ({sandboxResult.data.post_traces.length} steps applied / {sandboxResult.data.post_rules_count || 0} total rules)</span>
+                          </div>
+
+                          <div className="flex flex-col gap-3 relative before:absolute before:inset-y-0 before:left-3.5 before:w-px before:bg-border/60">
+                            {sandboxResult.data.post_traces.map((trace: any, idx: number) => (
+                              <div key={idx} className="relative flex gap-4 pr-2">
+                                <div className="z-10 bg-background flex items-center justify-center w-7 h-7 rounded-full border border-border/60 shadow-sm text-xs text-muted-foreground shrink-0 mt-1">
+                                  {idx + 1}
+                                </div>
+                                <div className="flex-1 bg-background border border-border/50 rounded-lg overflow-hidden shadow-sm flex flex-col transiton-all group">
+                                  <div className="bg-muted/30 px-3 py-2 border-b border-border/50 flex items-center justify-between">
+                                    <div className="flex items-center gap-2 font-semibold text-foreground/80">
+                                      <span className={cn(
+                                        "px-1.5 py-0.5 rounded text-[10px] uppercase font-bold text-white",
+                                        trace.type === 'replace' ? "bg-blue-500" :
+                                          trace.type === 'regex' ? "bg-violet-500" :
+                                            trace.type === 'python' ? "bg-amber-500" : "bg-emerald-500"
+                                      )}>
+                                        {trace.type}
+                                      </span>
+                                      <span className="truncate max-w-[200px]" title={trace.pattern}>{trace.pattern || 'N/A'}</span>
+                                    </div>
+                                  </div>
+                                  <div className="p-3 bg-red-500/5 border-b border-border/30 line-through text-red-700/80 dark:text-red-400/80">
+                                    {trace.before}
+                                  </div>
+                                  <div className="p-3 bg-emerald-500/5 text-emerald-700/80 dark:text-emerald-400/80">
+                                    {trace.after}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col mt-2 gap-3">
+                          <div className="text-muted-foreground text-xs uppercase tracking-wider font-semibold flex items-center justify-between">
+                            <span>Processing Traces (0 steps applied / {sandboxResult.data?.post_rules_count || 0} total rules)</span>
+                          </div>
+                          {(sandboxResult.data?.post_rules_count || 0) > 0 ? (
+                            <div className="text-center p-6 bg-background border border-border/50 border-dashed rounded-lg">
+                              <p className="text-sm text-muted-foreground">{lang === "en" ? "Rules were loaded but text was unaffected." : "已加载规则，但无任何规则被触发修改文本。"}</p>
+                            </div>
+                          ) : (
+                            <div className="text-center p-6 bg-background border border-border/50 border-dashed rounded-lg">
+                              <p className="text-sm text-muted-foreground">{lang === "en" ? "No post-processing rules configured." : "暂未配置任何后处理规则。"}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </FormSection>
+    );
+  };
 
   const renderPipelineForm = () => {
     const applyPipelineChange = (patch: Partial<PipelineComposerState>) => {
@@ -7840,6 +8173,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
             </div>
           </div>
         </FormSection>
+        {renderSandboxDebugger()}
       </div>
     );
   };

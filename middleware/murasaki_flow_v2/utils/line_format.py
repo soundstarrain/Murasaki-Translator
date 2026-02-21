@@ -172,8 +172,11 @@ def extract_line_for_policy(
         alt_key = str(line_index)
         if alt_key in entries:
             return entries[alt_key]
-    if ordered and line_index < len(ordered):
-        return ordered[line_index]
+    if ordered:
+        if len(ordered) == 1:
+            return ordered[0]
+        if line_index < len(ordered):
+            return ordered[line_index]
 
     tagged = parse_tagged_entries(text, pattern=tagged_pattern)
     if tagged:

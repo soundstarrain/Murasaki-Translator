@@ -381,7 +381,7 @@ class RuleProcessor:
         self._set_python_script_error(script, None)
         return str(result)
 
-    def process(self, text: str, src_text: Optional[str] = None, protector: Any = None, strict_line_count: bool = False) -> str:
+    def process(self, text: str, src_text: Optional[str] = None, protector: Any = None, strict_line_count: bool = False, traces: Optional[List[Dict[str, Any]]] = None) -> str:
         """
         Apply all active rules to input text.
         
@@ -390,6 +390,7 @@ class RuleProcessor:
             src_text: Optional original source text for context-aware fixers
             protector: Optional TextProtector instance for 'restore_protection' rule
             strict_line_count: If True, skip rules that would change the total number of lines (for EPUB/SRT)
+            traces: Optional list to append execution trace details for debugging.
             
         Returns:
             Processed text with all active rules applied
@@ -459,17 +460,15 @@ class RuleProcessor:
                             current_text = new_text
                 
                 if current_text != before_text:
-                    is_experimental = r_type == 'format' and pattern in ['restore_protection', 'kana_fixer', 'punctuation_fixer']
-                    if r_type == 'python':
-                        logger.debug(
-                            f"Core Rule [python] transformed text (chars: {len(before_text)} -> {len(current_text)})"
-                        )
-                    elif r_type in ['replace', 'regex'] or not is_experimental:
-                        label = f"Core Rule [{r_type if r_type != 'format' else 'built-in'}:{pattern}]"
-                        logger.debug(f"{label} transformed text (chars: {len(before_text)} -> {len(current_text)})")
-                    else:
-                        logger.debug(f"[Experimental] Format Rule [{pattern}] transformed text (chars: {len(before_text)} -> {len(current_text)})")
-                
+                    if traces is not None:
+                        traces.append({
+                            "rule": rule,
+                            "type": r_type,
+                            "pattern": pattern,
+                            "before": before_text,
+                            "after": current_text
+                        })
+
             except Exception as e:
                 logger.error(f"Error processing rule {r_type}:{pattern}: {e}")
                 continue
@@ -483,6 +482,8 @@ class RuleProcessor:
         Args:
             format_name: Name of the format to apply
             text: Input text
+            src_text: Optional original source text
+            options: Optional dictionary of rule-specific options
             src_text: Optional original source text
             options: Optional dictionary of rule-specific options
             protector: Optional TextProtector for restoration

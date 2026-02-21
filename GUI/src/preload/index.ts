@@ -152,6 +152,11 @@ const api = {
       });
     }),
 
+  pipelineV2SandboxTest: (payload: {
+    text: string;
+    pipeline: Record<string, any>;
+  }) => ipcRenderer.invoke("pipelinev2-sandbox-test", payload),
+
   // Glossary Management
   readGlossaryFile: (filename: string) =>
     ipcRenderer.invoke("read-glossary-file", filename),

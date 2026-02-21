@@ -225,24 +225,32 @@ type ProfileDeps = {
 
 };
 
+import { URL } from "url";
+
 const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, "");
 
+const isRootOrV1Path = (clean: string) => {
+  try {
+    const urlObj = new URL(clean);
+    const path = urlObj.pathname.toLowerCase();
+    return !path || path === "/" || path.endsWith("/v1") || /\/v\d+$/.test(path) || path.includes("/openapi");
+  } catch {
+    return true; // Fallback to appending /v1 if invalid URL
+  }
+};
+
 const buildModelsUrl = (baseUrl: string) => {
-
   const clean = normalizeBaseUrl(baseUrl);
-
   if (!clean) return "";
-
   if (clean.endsWith("/models")) return clean;
-
   if (clean.endsWith("/openai")) return `${clean}/models`;
 
-  if (clean.endsWith("/openapi")) return `${clean}/models`;
-
-  if (/\/v\d+$/i.test(clean)) return `${clean}/models`;
-
-  return `${clean}/v1/models`;
-
+  if (isRootOrV1Path(clean)) {
+    if (clean.endsWith("/openapi")) return `${clean}/models`;
+    if (/\/v\d+$/i.test(clean)) return `${clean}/models`;
+    return `${clean}/v1/models`;
+  }
+  return `${clean}/models`;
 };
 
 const buildChatCompletionsUrl = (baseUrl: string) => {
@@ -250,9 +258,13 @@ const buildChatCompletionsUrl = (baseUrl: string) => {
   if (!clean) return "";
   if (clean.endsWith("/chat/completions")) return clean;
   if (clean.endsWith("/openai")) return `${clean}/chat/completions`;
-  if (clean.endsWith("/openapi")) return `${clean}/chat/completions`;
-  if (/\/v\d+$/i.test(clean)) return `${clean}/chat/completions`;
-  return `${clean}/v1/chat/completions`;
+
+  if (isRootOrV1Path(clean)) {
+    if (clean.endsWith("/openapi")) return `${clean}/chat/completions`;
+    if (/\/v\d+$/i.test(clean)) return `${clean}/chat/completions`;
+    return `${clean}/v1/chat/completions`;
+  }
+  return `${clean}/chat/completions`;
 };
 
 const CONCURRENCY_TEST_MESSAGE = "你好";
@@ -308,7 +320,7 @@ const testApiConnection = async (
 
   apiKey?: string,
 
-  timeoutMs = 8000,
+  timeoutMs = 60000,
   model?: string,
 
 ) => {
@@ -425,11 +437,11 @@ const listApiModels = async (
 
   apiKey?: string,
 
-  timeoutMs = 8000,
+  timeoutMs = 60000,
 
 ) => {
 
-  const url = buildChatCompletionsUrl(baseUrl);
+  const url = buildModelsUrl(baseUrl);
 
   if (!url) return { ok: false, message: "base_url_missing" };
 
@@ -1536,15 +1548,15 @@ const testApiConcurrency = async (
 
   apiKey?: string,
 
-  timeoutMs = 8000,
+  timeoutMs = 60000,
 
-  maxConcurrency = 16,
+  maxConcurrency = 128,
 
   model?: string,
 
 ) => {
 
-  const url = buildModelsUrl(baseUrl);
+  const url = buildChatCompletionsUrl(baseUrl);
 
   if (!url) return { ok: false, message: "base_url_missing" };
 
@@ -1556,7 +1568,7 @@ const testApiConcurrency = async (
 
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-  const max = Math.min(Math.max(1, Math.floor(maxConcurrency)), 64);
+  const max = Math.min(Math.max(1, Math.floor(maxConcurrency)), 128);
   const resolvedModel = String(model || "").trim();
   const body = JSON.stringify(buildConcurrencyTestPayload(resolvedModel || "test"));
 
@@ -2216,6 +2228,39 @@ export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
 
       ),
 
+  );
+
+  ipcMain.handle(
+    "pipelinev2-sandbox-test",
+    async (
+      _event,
+      payload: {
+        text: string;
+        pipeline: Record<string, any>;
+      },
+    ) => {
+      const baseUrl = await ensureServer();
+      if (!baseUrl) {
+        return { ok: false, error: "Server not ready" };
+      }
+      try {
+        const res = await requestJson(
+          baseUrl,
+          "/sandbox",
+          {
+            method: "POST",
+            body: JSON.stringify(payload),
+          },
+          60000,
+        );
+        if (res.ok) {
+          return { ok: true, data: res.data };
+        }
+        return { ok: false, error: res.error };
+      } catch (error: any) {
+        return { ok: false, error: error?.message || "sandbox_request_failed" };
+      }
+    },
   );
 
 };

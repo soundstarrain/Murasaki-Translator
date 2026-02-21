@@ -41,51 +41,51 @@ def main() -> int:
         print(f"[Error] Input file not found: {args.file}")
         return 1
 
-    store = ProfileStore(args.profiles_dir)
-    pipeline_profile = store.load_profile("pipeline", args.pipeline)
-    processing_cfg: dict[str, object] = {}
-    processing_requested = False
-    if args.rules_pre:
-        processing_cfg["rules_pre"] = args.rules_pre
-        processing_requested = True
-    if args.rules_post:
-        processing_cfg["rules_post"] = args.rules_post
-        processing_requested = True
-    if args.enable_quality:
-        processing_cfg["enable_quality"] = True
-        processing_requested = True
-    if args.disable_quality:
-        processing_cfg["enable_quality"] = False
-        processing_requested = True
-    if args.text_protect:
-        processing_cfg["text_protect"] = True
-        processing_requested = True
-    if args.no_text_protect:
-        processing_cfg["text_protect"] = False
-        processing_requested = True
-
-    existing_processing = (
-        pipeline_profile.get("processing")
-        if isinstance(pipeline_profile.get("processing"), dict)
-        else {}
-    )
-    if args.source_lang and (processing_requested or existing_processing):
-        processing_cfg["source_lang"] = args.source_lang
-    if args.glossary:
-        pipeline_profile["glossary"] = args.glossary
-        if processing_requested or existing_processing:
-            processing_cfg["glossary"] = args.glossary
-    if processing_requested or existing_processing:
-        pipeline_profile["processing"] = {**existing_processing, **processing_cfg}
-
-    print(f"[FlowV2] Provider: {pipeline_profile.get('provider')}")
-    print(f"[FlowV2] Prompt: {pipeline_profile.get('prompt')}")
-    print(f"[FlowV2] Parser: {pipeline_profile.get('parser')}")
-    print(f"[FlowV2] LinePolicy: {pipeline_profile.get('line_policy')}")
-    print(f"[FlowV2] ChunkPolicy: {pipeline_profile.get('chunk_policy')}")
-
-    runner = PipelineRunner(store, pipeline_profile)
     try:
+        store = ProfileStore(args.profiles_dir)
+        pipeline_profile = store.load_profile("pipeline", args.pipeline)
+        processing_cfg: dict[str, object] = {}
+        processing_requested = False
+        if args.rules_pre:
+            processing_cfg["rules_pre"] = args.rules_pre
+            processing_requested = True
+        if args.rules_post:
+            processing_cfg["rules_post"] = args.rules_post
+            processing_requested = True
+        if args.enable_quality:
+            processing_cfg["enable_quality"] = True
+            processing_requested = True
+        if args.disable_quality:
+            processing_cfg["enable_quality"] = False
+            processing_requested = True
+        if args.text_protect:
+            processing_cfg["text_protect"] = True
+            processing_requested = True
+        if args.no_text_protect:
+            processing_cfg["text_protect"] = False
+            processing_requested = True
+
+        existing_processing = (
+            pipeline_profile.get("processing")
+            if isinstance(pipeline_profile.get("processing"), dict)
+            else {}
+        )
+        if args.source_lang and (processing_requested or existing_processing):
+            processing_cfg["source_lang"] = args.source_lang
+        if args.glossary:
+            pipeline_profile["glossary"] = args.glossary
+            if processing_requested or existing_processing:
+                processing_cfg["glossary"] = args.glossary
+        if processing_requested or existing_processing:
+            pipeline_profile["processing"] = {**existing_processing, **processing_cfg}
+
+        print(f"[FlowV2] Provider: {pipeline_profile.get('provider')}")
+        print(f"[FlowV2] Prompt: {pipeline_profile.get('prompt')}")
+        print(f"[FlowV2] Parser: {pipeline_profile.get('parser')}")
+        print(f"[FlowV2] LinePolicy: {pipeline_profile.get('line_policy')}")
+        print(f"[FlowV2] ChunkPolicy: {pipeline_profile.get('chunk_policy')}")
+
+        runner = PipelineRunner(store, pipeline_profile)
         output_path = runner.run(
             args.file,
             output_path=args.output,
@@ -94,9 +94,12 @@ def main() -> int:
             cache_dir=args.cache_dir,
         )
     except Exception as e:
-        emit_error(str(e), title="Pipeline V2 Fatal Error")
+        import traceback
+        error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
+        emit_error(error_msg, title="Pipeline V2 Fatal Error")
         print(f"[FlowV2] Fatal error: {e}", file=sys.stderr)
         return 1
+        
     print(f"[FlowV2] Output saved: {output_path}")
     return 0
 

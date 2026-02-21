@@ -407,6 +407,27 @@ export interface ElectronAPI {
     statusCounts?: Record<string, number>;
     latencyMs?: number;
   }>;
+  pipelineV2SandboxTest: (payload: {
+    text: string;
+    pipeline: Record<string, any>;
+  }) => Promise<{
+    ok: boolean;
+    data?: {
+      ok: boolean;
+      source_text: string;
+      pre_processed?: string;
+      raw_request: string;
+      raw_response: string;
+      parsed_result: string;
+      post_processed?: string;
+      pre_traces?: Array<{ rule: any, type: string, pattern: string, before: string, after: string }>;
+      post_traces?: Array<{ rule: any, type: string, pattern: string, before: string, after: string }>;
+      pre_rules_count?: number;
+      post_rules_count?: number;
+      error?: string;
+    };
+    error?: string;
+  }>;
   pipelineV2Run: (payload: {
     filePath: string;
     pipelineId: string;

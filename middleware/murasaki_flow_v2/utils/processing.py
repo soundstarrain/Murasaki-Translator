@@ -237,12 +237,12 @@ class ProcessingProcessor:
             return None
         return TextProtector(patterns=self._protect_patterns)
 
-    def apply_pre(self, text: str) -> str:
+    def apply_pre(self, text: str, traces: Optional[List[Dict[str, Any]]] = None) -> str:
         if not self.has_pre_rules:
             return text
         with self._pre_lock:
             return self._pre.process(
-                text, strict_line_count=self.options.strict_line_count
+                text, strict_line_count=self.options.strict_line_count, traces=traces
             )
 
     def apply_post(
@@ -251,6 +251,7 @@ class ProcessingProcessor:
         *,
         src_text: Optional[str] = None,
         protector: Optional[TextProtector] = None,
+        traces: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         if not self.has_post_rules and protector is None:
             return text
@@ -260,6 +261,7 @@ class ProcessingProcessor:
                 src_text=src_text,
                 protector=protector,
                 strict_line_count=self.options.strict_line_count,
+                traces=traces
             )
 
     def check_quality(

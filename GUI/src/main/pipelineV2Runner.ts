@@ -75,9 +75,10 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
         resume,
         cacheDir,
         saveCache,
-      },
+        runId: payloadRunId,
+      }: any,
     ) => {
-      const reqRunId = String(payload.runId || "").trim();
+      const reqRunId = String(payloadRunId || "").trim();
       const runId = reqRunId || Date.now().toString();
 
       // 如果已有活动的 V2 进程，拒绝
@@ -221,12 +222,12 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
           python.type === "bundle"
             ? spawn(python.path, scriptArgs.slice(1))
             : spawn(python.path, moduleArgs, {
-                cwd: middlewarePath,
-                env: {
-                  ...process.env,
-                  PYTHONIOENCODING: "utf-8",
-                },
-              });
+              cwd: middlewarePath,
+              env: {
+                ...process.env,
+                PYTHONIOENCODING: "utf-8",
+              },
+            });
         activeChild = child;
 
         let stdoutBuffer = "";
@@ -249,6 +250,16 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
           const str = buf.toString();
           // stderr 仅发到 pipelinev2-log 调试通道
           deps.sendLog({ runId, message: str, level: "error" });
+          const win = deps.getMainWindow();
+          if (win && str.trim()) {
+            const payload = {
+              title: "Pipeline V2 Error (Stderr)",
+              message: str.trim(),
+            };
+            // Remove newlines in str to avoid breaking the JSON line parser
+            const safeStr = JSON.stringify(payload);
+            win.webContents.send("log-update", `JSON_ERROR:${safeStr}\n`);
+          }
         });
 
         child.on("error", (err) => {

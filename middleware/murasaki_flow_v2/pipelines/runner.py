@@ -33,7 +33,7 @@ from murasaki_flow_v2.utils.log_protocol import (
     ProgressTracker, emit_output_path, emit_cache_path, emit_retry, emit_error, emit_warning,
 )
 
-MAX_CONCURRENCY = 64
+MAX_CONCURRENCY = 256
 
 
 class PipelineRunner:
@@ -333,13 +333,13 @@ class PipelineRunner:
         if expected_line_ids:
             missing: List[str] = []
             lines: List[str] = []
-            for line_id in expected_line_ids:
+            for i, line_id in enumerate(expected_line_ids):
                 key = str(line_id + 1)
                 if key in entries:
                     lines.append(entries[key])
                     continue
-                if line_id < len(ordered):
-                    lines.append(ordered[line_id])
+                if i < len(ordered):
+                    lines.append(ordered[i])
                     continue
                 missing.append(key)
             if missing:
@@ -444,7 +444,13 @@ class PipelineRunner:
 
         settings = pipeline.get("settings") or {}
         try:
-            max_retries = int(settings.get("max_retries") or 0)
+            raw_max_retries = settings.get("max_retries")
+            if raw_max_retries is None or raw_max_retries == "":
+                raw_max_retries = provider.profile.get("max_retries")
+            if raw_max_retries is None or str(raw_max_retries).strip() == "":
+                max_retries = 3
+            else:
+                max_retries = int(raw_max_retries)
         except (ValueError, TypeError):
             max_retries = 3
         adaptive: Optional[AdaptiveConcurrency] = None
@@ -753,7 +759,7 @@ class PipelineRunner:
             concurrency = 1
 
         if concurrency == 0:
-            adaptive = AdaptiveConcurrency(max_limit=max(1, min(len(blocks), 16)))
+            adaptive = AdaptiveConcurrency(max_limit=max(1, min(len(blocks), 128)))
         else:
             concurrency = max(1, min(concurrency, MAX_CONCURRENCY))
 
