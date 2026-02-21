@@ -566,10 +566,14 @@ class PipelineRunner:
                 )
                 temp_progress_file.flush()
 
+        _p_profile = provider.profile if provider else {}
+        _provider_url = str(_p_profile.get("url") or _p_profile.get("api_base") or _p_profile.get("base_url") or "")
+
         tracker = ProgressTracker(
             total_blocks=len(blocks),
             total_source_lines=len(source_lines),
             total_source_chars=sum(len(l) for l in source_lines),
+            api_url=_provider_url if _provider_url else None,
         )
 
         translated_blocks: List[Optional[TextBlock]] = [None] * len(blocks)
@@ -602,11 +606,18 @@ class PipelineRunner:
             context_cfg = prompt_profile.get("context") or {}
             line_index = None
             if block.metadata:
-                meta = block.metadata[0]
-                if isinstance(meta, int):
-                    line_index = meta
+                for meta in block.metadata:
+                    if isinstance(meta, int):
+                        line_index = meta
+                        break
+                        
+            # 对于块模式或缺失真实行号的结构化模式，我们不能伪造 line_index
+            fallback_index = line_index if line_index is not None else idx
+                
             # 分块模式 context：基于块的完整行范围，而非仅首行
             blk_start, blk_end = self._block_line_range(block)
+            if blk_start == 0 and blk_end == 0:
+                blk_start, blk_end = fallback_index, fallback_index + 1
             context_before = ""
             context_after = ""
             target_line_ids: List[int] = []
@@ -633,9 +644,9 @@ class PipelineRunner:
             if protector and not use_jsonl:
                 source_text = protector.protect(source_text)
 
-            if use_jsonl and line_index is not None and active_source_lines:
+            if use_jsonl and active_source_lines:
                 start, end = self._resolve_source_window(
-                    active_source_lines, line_index, context_cfg
+                    active_source_lines, fallback_index, context_cfg
                 )
                 before_count = max(0, int(context_cfg.get("before_lines") or 0))
                 after_count = max(0, int(context_cfg.get("after_lines") or 0))
@@ -656,7 +667,7 @@ class PipelineRunner:
                         block.metadata, start, end
                     )
                 if not target_line_ids:
-                    target_line_ids = [line_index]
+                    target_line_ids = [fallback_index]
 
             messages = build_messages(
                 prompt_profile,
@@ -673,12 +684,18 @@ class PipelineRunner:
             while attempt <= max_retries:
                 try:
                     request = provider.build_request(messages, settings)
+                    import time
+                    _t0 = time.time()
                     response = provider.send(request)
+                    _ping_ms = int((time.time() - _t0) * 1000)
+                    
                     # 记录 API 请求统计（token usage）
-                    _usage = (response.raw or {}).get("usage", {})
+                    raw_dict = response.raw or {}
+                    _usage = raw_dict.get("usage") or raw_dict.get("data", {}).get("usage") or {}
                     tracker.note_request(
                         input_tokens=_usage.get("prompt_tokens", 0) or 0,
                         output_tokens=_usage.get("completion_tokens", 0) or 0,
+                        ping=_ping_ms,
                     )
                     if use_jsonl and target_line_ids:
                         translated = self._parse_jsonl_response(
@@ -797,6 +814,7 @@ class PipelineRunner:
                     futures: Dict[Any, int] = {}
                     while next_pos < len(pending_indices) or futures:
                         limit = adaptive.get_limit()
+                        tracker.current_concurrency = limit
                         while next_pos < len(pending_indices) and len(futures) < limit:
                             idx = pending_indices[next_pos]
                             futures[executor.submit(translate_block, idx, blocks[idx])] = idx
@@ -809,8 +827,11 @@ class PipelineRunner:
                                 _, translated_block = future.result()
                                 translated_blocks[idx] = translated_block
                                 adaptive.note_success()
+                                valid_meta = [m for m in (blocks[idx].metadata or []) if isinstance(m, int)]
+                                lines_done = len(valid_meta) if valid_meta else None
                                 tracker.block_done(
-                                    idx, blocks[idx].prompt_text, translated_block.prompt_text
+                                    idx, blocks[idx].prompt_text, translated_block.prompt_text,
+                                    lines_done=lines_done
                                 )
                             except Exception:
                                 for pending in futures:
@@ -818,12 +839,16 @@ class PipelineRunner:
                                 raise
                             break
             elif pending_indices:
+                tracker.current_concurrency = concurrency
                 if concurrency <= 1 or len(pending_indices) <= 1:
                     for idx in pending_indices:
                         _, translated_block = translate_block(idx, blocks[idx])
                         translated_blocks[idx] = translated_block
+                        valid_meta = [m for m in (blocks[idx].metadata or []) if isinstance(m, int)]
+                        lines_done = len(valid_meta) if valid_meta else None
                         tracker.block_done(
-                            idx, blocks[idx].prompt_text, translated_block.prompt_text
+                            idx, blocks[idx].prompt_text, translated_block.prompt_text,
+                            lines_done=lines_done
                         )
                 else:
                     with ThreadPoolExecutor(max_workers=concurrency) as executor:
@@ -834,10 +859,13 @@ class PipelineRunner:
                         for future in as_completed(futures):
                             idx = futures[future]
                             try:
-                                _, translated_block = future.result()
+                                _ , translated_block = future.result()
                                 translated_blocks[idx] = translated_block
+                                valid_meta = [m for m in (blocks[idx].metadata or []) if isinstance(m, int)]
+                                lines_done = len(valid_meta) if valid_meta else None
                                 tracker.block_done(
-                                    idx, blocks[idx].prompt_text, translated_block.prompt_text
+                                    idx, blocks[idx].prompt_text, translated_block.prompt_text,
+                                    lines_done=lines_done
                                 )
                             except Exception:
                                 for pending in futures:
@@ -857,7 +885,15 @@ class PipelineRunner:
 
         if not output_path:
             base, ext = os.path.splitext(input_path)
-            output_path = f"{base}_translated{ext}"
+            provider_model = str(provider.profile.get("model") or "").strip()
+            # fallback cascade: Try getting provider model -> provider ref -> pipeline id
+            model_name = (
+                provider_model or provider_ref or pipeline_id or "translated"
+            )
+            # sanitize for filename
+            import re
+            safe_model_name = re.sub(r'[\\/*?:"<>|]', '_', model_name)
+            output_path = f"{base}_{safe_model_name}{ext}"
 
         emit_output_path(output_path)
 

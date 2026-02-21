@@ -37,10 +37,16 @@ def emit_progress(
     total: int,
     elapsed: float,
     speed_chars: float = 0,
+    speed_lines: float = 0,
+    speed_gen: float = 0,
+    speed_eval: float = 0,
     total_lines: int = 0,
     total_chars: int = 0,
     source_lines: int = 0,
     source_chars: int = 0,
+    api_ping: Optional[int] = None,
+    api_concurrency: int = 0,
+    api_url: Optional[str] = None,
 ) -> None:
     """Emit JSON_PROGRESS compatible with Dashboard's progress parser."""
     percent = round(current / max(total, 1) * 100, 1)
@@ -52,10 +58,16 @@ def emit_progress(
         "elapsed": round(elapsed, 1),
         "remaining": round(max(0, remaining), 1),
         "speed_chars": round(speed_chars, 1),
+        "speed_lines": round(speed_lines, 2),
+        "speed_gen": round(speed_gen, 1),
+        "speed_eval": round(speed_eval, 1),
         "total_lines": total_lines,
         "total_chars": total_chars,
         "source_lines": source_lines,
         "source_chars": source_chars,
+        "api_ping": api_ping,
+        "api_concurrency": api_concurrency,
+        "api_url": api_url,
     })
 
 
@@ -171,6 +183,9 @@ class ProgressTracker:
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     error_status_codes: Counter = field(default_factory=Counter)
+    last_ping: Optional[int] = None
+    current_concurrency: int = 1
+    api_url: Optional[str] = None
 
     def block_done(
         self,
@@ -179,11 +194,12 @@ class ProgressTracker:
         output_text: str,
         *,
         emit_preview: bool = True,
+        lines_done: Optional[int] = None,
     ) -> None:
         """Record a completed block and emit progress + preview."""
         src_lines = src_text.count("\n") + 1 if src_text else 0
         src_chars = len(src_text)
-        out_lines = output_text.count("\n") + 1 if output_text else 0
+        out_lines = lines_done if lines_done is not None else (output_text.count("\n") + 1 if output_text else 0)
         out_chars = len(output_text)
 
         with self._lock:
@@ -193,19 +209,30 @@ class ProgressTracker:
             completed = self.completed_blocks
             _total_lines = self.total_output_lines
             _total_chars = self.total_output_chars
+            _input_tokens = self.total_input_tokens
+            _output_tokens = self.total_output_tokens
             elapsed = time.time() - self.start_time
 
         speed_chars = _total_chars / max(elapsed, 0.1)
+        speed_lines = _total_lines / max(elapsed, 0.1)
+        speed_gen = _output_tokens / max(elapsed, 0.1)
+        speed_eval = _input_tokens / max(elapsed, 0.1)
 
         emit_progress(
             current=completed,
             total=self.total_blocks,
             elapsed=elapsed,
             speed_chars=speed_chars,
+            speed_lines=speed_lines,
+            speed_gen=speed_gen,
+            speed_eval=speed_eval,
             total_lines=_total_lines,
             total_chars=_total_chars,
             source_lines=self.total_source_lines,
             source_chars=self.total_source_chars,
+            api_ping=self.last_ping,
+            api_concurrency=self.current_concurrency,
+            api_url=self.api_url,
         )
 
         if emit_preview:
@@ -220,12 +247,15 @@ class ProgressTracker:
         *,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        ping: Optional[int] = None,
     ) -> None:
         """Record a successful API request with token usage."""
         with self._lock:
             self.total_requests += 1
             self.total_input_tokens += input_tokens
             self.total_output_tokens += output_tokens
+            if ping is not None:
+                self.last_ping = ping
 
     def note_retry(self, status_code: Optional[int] = None) -> None:
         """Record a retry event."""

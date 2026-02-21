@@ -1066,6 +1066,15 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                 retries: data.current !== prev.current ? 0 : prev.retries,
               }));
 
+              if (data.api_ping !== undefined || data.api_concurrency !== undefined || data.api_url !== undefined) {
+                setApiMonitorData(prev => ({
+                  ...prev,
+                  ping: data.api_ping !== undefined ? data.api_ping : prev.ping,
+                  concurrency: data.api_concurrency !== undefined ? data.api_concurrency : prev.concurrency,
+                  url: data.api_url !== undefined ? data.api_url : prev.url,
+                }));
+              }
+
               // Track for history record
               progressDataRef.current = {
                 total: data.total ?? 0,
@@ -3657,8 +3666,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                       >
                         <option value="chars">{t.dashboard.charPerSec}</option>
                         <option value="tokens">Tokens/s</option>
-                        <option value="vram">VRAM %</option>
-                        <option value="gpu">GPU %</option>
+                        {engineMode !== "v2" && <option value="vram">VRAM %</option>}
+                        {engineMode !== "v2" && <option value="gpu">GPU %</option>}
                       </select>
                       <ChevronDown className="w-2.5 h-2.5 absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
                     </div>
