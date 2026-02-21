@@ -43,6 +43,7 @@ export interface TriggerEvent {
   | "rep_penalty_increase"
   | "line_mismatch"
   | "anchor_missing"
+  | "provider_error"
   | "parse_fallback"
   | "kana_residue"
   | "hangeul_residue"
@@ -84,6 +85,8 @@ export interface TranslationRecord {
   filePath: string;
   /** Output file path (if available) */
   outputPath?: string;
+  /** Cache file path for proofreading (if available) */
+  cachePath?: string;
   /** Model name used for translation */
   modelName?: string;
   /** ISO timestamp when translation started */
@@ -137,7 +140,7 @@ export interface TranslationRecord {
     providerName?: string;
     promptName?: string;
     parserName?: string;
-    chunkType?: "line" | "legacy";
+    chunkType?: "line" | "block" | "legacy";
   };
   /** V2 API 统计（仅 V2 模式） */
   v2Stats?: {

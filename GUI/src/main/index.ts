@@ -3801,44 +3801,46 @@ ipcMain.handle(
       }
 
       let outPath = "";
-
-      // Logic must match main.py and start-translation handler
-      if (config.outputDir && fs.existsSync(config.outputDir)) {
-        // Custom Directory logic: input_translated.ext
-        // From line 773: const baseName = basename(inputFile, `.${ext}`)
-        // But main.py uses os.path.splitext logic? NO, index.ts logic (773) is used to pass --output.
-        // So if outputDir is active, MAIN.PY USES IT AS IS.
-        // Index.ts logic:
-        const ext = inputFile.split(".").pop(); // simple split
-        // basename in node handling ext might be tricky if multiple dots.
-        // Line 773: basename(inputFile, `.${ext}`)
-        const baseName = basename(inputFile, `.${ext}`);
-        const outFilename = `${baseName}_translated.${ext}`;
-        outPath = join(config.outputDir, outFilename);
-      } else {
-        // Default logic from main.py:
-        // output_path = f"{base}_{model_name}{ext}"
-        const ext = extname(inputFile);
-        const base = inputFile.substring(0, inputFile.length - ext.length);
-
-        // 从模型路径提取模型名称（去掉扩展名）
-        // 健壮性处理：兼容 Windows/POSIX 路径分隔符
-        let modelName = "unknown";
-        if (
-          config.modelPath &&
-          typeof config.modelPath === "string" &&
-          config.modelPath.trim()
-        ) {
-          // 统一处理 Windows (\\) 和 POSIX (/) 分隔符
-          const normalizedPath = config.modelPath.replace(/\\/g, "/");
-          const fileName = normalizedPath.split("/").pop() || "";
-          modelName = fileName.replace(/\.gguf$/i, "") || "unknown";
+      const engineMode = String(config?.engineMode || "").trim();
+      if (config?.outputPath && typeof config.outputPath === "string") {
+        outPath = config.outputPath;
+      } else if (engineMode === "v2") {
+        if (config.outputDir && fs.existsSync(config.outputDir)) {
+          const ext = extname(inputFile);
+          const baseName = basename(inputFile, ext);
+          const outFilename = ext
+            ? `${baseName}_translated${ext}`
+            : `${baseName}_translated`;
+          outPath = join(config.outputDir, outFilename);
+        } else {
+          const ext = extname(inputFile);
+          const base = inputFile.substring(0, inputFile.length - ext.length);
+          outPath = `${base}_translated${ext}`;
         }
-
-        const suffix = `_${modelName}`;
-        outPath = `${base}${suffix}${ext}`;
+      } else {
+        // Logic must match main.py and start-translation handler
+        if (config.outputDir && fs.existsSync(config.outputDir)) {
+          const ext = inputFile.split(".").pop();
+          const baseName = basename(inputFile, `.${ext}`);
+          const outFilename = `${baseName}_translated.${ext}`;
+          outPath = join(config.outputDir, outFilename);
+        } else {
+          const ext = extname(inputFile);
+          const base = inputFile.substring(0, inputFile.length - ext.length);
+          let modelName = "unknown";
+          if (
+            config.modelPath &&
+            typeof config.modelPath === "string" &&
+            config.modelPath.trim()
+          ) {
+            const normalizedPath = config.modelPath.replace(/\\/g, "/");
+            const fileName = normalizedPath.split("/").pop() || "";
+            modelName = fileName.replace(/\.gguf$/i, "") || "unknown";
+          }
+          const suffix = `_${modelName}`;
+          outPath = `${base}${suffix}${ext}`;
+        }
       }
-
       console.log("[check-output-file-exists] inputFile:", inputFile);
       console.log("[check-output-file-exists] outPath:", outPath);
 

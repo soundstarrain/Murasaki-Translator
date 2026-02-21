@@ -412,12 +412,16 @@ export interface ElectronAPI {
     pipelineId: string;
     profilesDir: string;
     outputPath?: string;
+    outputDir?: string;
     rulesPrePath?: string;
     rulesPostPath?: string;
     glossaryPath?: string;
     sourceLang?: string;
     enableQuality?: boolean;
     textProtect?: boolean;
+    resume?: boolean;
+    cacheDir?: string;
+    saveCache?: boolean;
   }) => Promise<{ ok: boolean; runId: string; code?: number; error?: any }>;
   stopTranslation: () => void;
   pipelineV2Stop: () => void;

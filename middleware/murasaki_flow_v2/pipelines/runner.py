@@ -10,6 +10,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from murasaki_translator.documents.factory import DocumentFactory
 from murasaki_translator.documents.txt import TxtDocument
+from murasaki_translator.documents.srt import SrtDocument
+from murasaki_translator.documents.ass import AssDocument
+from murasaki_translator.core.cache import TranslationCache
 from murasaki_translator.core.chunker import TextBlock
 
 from murasaki_flow_v2.registry.profile_store import ProfileStore
@@ -19,6 +22,7 @@ from murasaki_flow_v2.prompts.registry import PromptRegistry
 from murasaki_flow_v2.prompts.builder import build_messages
 from murasaki_flow_v2.policies.registry import PolicyRegistry
 from murasaki_flow_v2.policies.chunk_registry import ChunkPolicyRegistry
+from murasaki_flow_v2.policies.chunk_policy import LineChunkPolicy
 from murasaki_flow_v2.policies.line_policy import LinePolicyError
 from murasaki_flow_v2.parsers.base import ParserError
 from murasaki_flow_v2.providers.base import ProviderError
@@ -125,6 +129,100 @@ class PipelineRunner:
             text = block.prompt_text
             if text.endswith("\n"):
                 block.prompt_text = text[:-1]
+
+    @staticmethod
+    def _ensure_line_chunk_keeps_empty(doc: object, chunk_policy: Any) -> None:
+        if not isinstance(chunk_policy, LineChunkPolicy):
+            return
+        if not isinstance(doc, (SrtDocument, AssDocument)):
+            return
+        options = (
+            chunk_policy.profile.get("options")
+            if isinstance(chunk_policy.profile.get("options"), dict)
+            else {}
+        )
+        if "keep_empty" not in options:
+            options["keep_empty"] = True
+            chunk_policy.profile["options"] = options
+
+    @staticmethod
+    def _load_resume_file(
+        path: str,
+        expected: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Dict[int, Dict[str, str]], bool]:
+        entries: Dict[int, Dict[str, str]] = {}
+        if not os.path.exists(path):
+            return entries, False
+        matched = False
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+        except Exception:
+            return entries, False
+
+        start_idx = 0
+        if lines:
+            try:
+                header = json.loads(lines[0])
+            except Exception:
+                header = None
+            if isinstance(header, dict) and header.get("type") == "fingerprint":
+                start_idx = 1
+                matched = True
+                if expected:
+                    for key, value in expected.items():
+                        if value is None or value == "":
+                            continue
+                        if header.get(key) != value:
+                            return {}, False
+
+        for raw in lines[start_idx:]:
+            try:
+                data = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            idx = data.get("index")
+            if idx is None:
+                idx = data.get("block_idx") or data.get("block")
+            if idx is None:
+                continue
+            try:
+                idx = int(idx)
+            except (TypeError, ValueError):
+                continue
+            dst = (
+                data.get("dst")
+                if data.get("dst") is not None
+                else data.get("output")
+                if data.get("output") is not None
+                else data.get("preview_text")
+                if data.get("preview_text") is not None
+                else data.get("out_text")
+            )
+            if dst is None:
+                continue
+            src = data.get("src") if data.get("src") is not None else data.get("src_text")
+            entries[idx] = {"src": str(src or ""), "dst": str(dst or "")}
+
+        if entries and start_idx == 0:
+            matched = True
+        return entries, matched
+
+    @staticmethod
+    def _load_resume_cache(
+        output_path: str,
+        cache_dir: Optional[str] = None,
+    ) -> Dict[int, Dict[str, str]]:
+        resolved_cache_dir = cache_dir if cache_dir and os.path.isdir(cache_dir) else None
+        cache = TranslationCache(output_path, custom_cache_dir=resolved_cache_dir, source_path="")
+        if not cache.load():
+            return {}
+        entries: Dict[int, Dict[str, str]] = {}
+        for block in cache.blocks:
+            entries[block.index] = {"src": block.src, "dst": block.dst}
+        return entries
 
     @staticmethod
     def _should_apply_line_policy(
@@ -257,7 +355,15 @@ class PipelineRunner:
                 return "\n".join(entries.values()).strip("\n")
         return "\n".join(ordered).strip("\n")
 
-    def run(self, input_path: str, output_path: Optional[str] = None) -> str:
+    def run(
+        self,
+        input_path: str,
+        output_path: Optional[str] = None,
+        *,
+        resume: bool = False,
+        save_cache: bool = True,
+        cache_dir: Optional[str] = None,
+    ) -> str:
         pipeline = self.pipeline
         provider_ref = str(pipeline.get("provider") or "")
         prompt_ref = str(pipeline.get("prompt") or "")
@@ -279,6 +385,18 @@ class PipelineRunner:
             or chunk_policy.profile.get("type")
             or ""
         )
+        context_cfg = prompt_profile.get("context") or {}
+        source_format = str(context_cfg.get("source_format") or "").strip().lower()
+        parser_type = ""
+        if parser is not None:
+            parser_type = str(parser.profile.get("type") or "").strip().lower()
+        if source_format == "jsonl" and chunk_type == "line":
+            if parser_type and parser_type != "jsonl":
+                emit_warning(
+                    0,
+                    "source_format=jsonl forces JSONL parsing; selected parser will be ignored.",
+                    "quality",
+                )
         apply_line_policy = self._should_apply_line_policy(
             pipeline, line_policy, chunk_type
         )
@@ -286,9 +404,34 @@ class PipelineRunner:
         _lpe_lock = threading.Lock()
 
         doc = DocumentFactory.get_document(input_path)
+        self._ensure_line_chunk_keeps_empty(doc, chunk_policy)
         items = doc.load()
         source_lines = self._extract_source_lines(items)
         blocks = chunk_policy.chunk(items)
+
+        temp_progress_path = f"{output_path}.temp.jsonl"
+        pipeline_id = str(pipeline.get("id") or "")
+        fingerprint = {
+            "type": "fingerprint",
+            "version": 1,
+            "input": input_path,
+            "pipeline": pipeline_id,
+            "chunk_type": chunk_type,
+        }
+        expected_fingerprint = {
+            "input": input_path,
+            "pipeline": pipeline_id,
+            "chunk_type": chunk_type,
+        }
+        resume_entries: Dict[int, Dict[str, str]] = {}
+        resume_matched = False
+        if resume:
+            resume_entries, resume_matched = self._load_resume_file(
+                temp_progress_path, expected=expected_fingerprint
+            )
+            if not resume_entries:
+                resume_entries = self._load_resume_cache(output_path, cache_dir)
+                resume_matched = False
 
         processing_cfg = pipeline.get("processing") or {}
         if not isinstance(processing_cfg, dict):
@@ -356,14 +499,68 @@ class PipelineRunner:
                 processing_processor.apply_pre(line) for line in source_lines
             ]
 
-        translated_blocks: List[Optional[TextBlock]] = [None] * len(blocks)
-
         # --- Dashboard 日志协议 ---
+        temp_progress_file = None
+        temp_lock = threading.Lock()
+        try:
+            temp_mode = "a" if resume and resume_entries and resume_matched else "w"
+            temp_progress_file = open(
+                temp_progress_path, temp_mode, encoding="utf-8", buffering=1
+            )
+            if temp_mode == "w":
+                temp_progress_file.write(
+                    json.dumps(fingerprint, ensure_ascii=False) + "\n"
+                )
+                temp_progress_file.flush()
+        except Exception:
+            temp_progress_file = None
+
+        def write_temp_entry(idx: int, src_text: str, dst_text: str) -> None:
+            if not temp_progress_file:
+                return
+            payload = {
+                "type": "block",
+                "index": idx,
+                "src": src_text,
+                "dst": dst_text,
+            }
+            with temp_lock:
+                temp_progress_file.write(
+                    json.dumps(payload, ensure_ascii=False) + "\n"
+                )
+                temp_progress_file.flush()
+
         tracker = ProgressTracker(
             total_blocks=len(blocks),
             total_source_lines=len(source_lines),
             total_source_chars=sum(len(l) for l in source_lines),
         )
+
+        translated_blocks: List[Optional[TextBlock]] = [None] * len(blocks)
+        resume_completed = 0
+        resume_output_lines = 0
+        resume_output_chars = 0
+        if resume_entries:
+            for idx, block in enumerate(blocks):
+                entry = resume_entries.get(idx)
+                if not entry:
+                    continue
+                dst_text = str(entry.get("dst") or "")
+                translated_blocks[idx] = TextBlock(
+                    id=idx + 1,
+                    prompt_text=dst_text,
+                    metadata=block.metadata,
+                )
+                resume_completed += 1
+                if dst_text:
+                    resume_output_lines += dst_text.count("\n") + 1
+                    resume_output_chars += len(dst_text)
+            if resume_completed > 0:
+                tracker.seed_progress(
+                    completed_blocks=resume_completed,
+                    output_lines=resume_output_lines,
+                    output_chars=resume_output_chars,
+                )
 
         def translate_block(idx: int, block: TextBlock) -> Tuple[int, TextBlock]:
             context_cfg = prompt_profile.get("context") or {}
@@ -484,6 +681,7 @@ class PipelineRunner:
                             )
                         translated = checked[0]
                         last_translation = translated
+                    write_temp_entry(idx, block.prompt_text, translated)
                     return idx, TextBlock(
                         id=idx + 1,
                         prompt_text=translated,
@@ -524,11 +722,13 @@ class PipelineRunner:
                                 if last_translation is not None
                                 else source_lines[line_index]
                             )
+                            write_temp_entry(idx, block.prompt_text, fallback_text)
                             return idx, TextBlock(
                                 id=idx + 1,
                                 prompt_text=fallback_text,
                                 metadata=block.metadata,
                             )
+                        tracker.note_error(_status_code)
                         raise
             if last_error:
                 raise RuntimeError(last_error)
@@ -550,50 +750,69 @@ class PipelineRunner:
         else:
             concurrency = max(1, min(concurrency, MAX_CONCURRENCY))
 
-        if adaptive is not None and len(blocks) > 1:
-            with ThreadPoolExecutor(max_workers=adaptive.max_limit) as executor:
-                next_idx = 0
-                futures: Dict[Any, int] = {}
-                while next_idx < len(blocks) or futures:
-                    limit = adaptive.get_limit()
-                    while next_idx < len(blocks) and len(futures) < limit:
-                        futures[executor.submit(translate_block, next_idx, blocks[next_idx])] = next_idx
-                        next_idx += 1
-                    if not futures:
-                        continue
-                    for future in as_completed(futures):
-                        idx = futures.pop(future)
-                        try:
-                            _, translated_block = future.result()
-                            translated_blocks[idx] = translated_block
-                            adaptive.note_success()
-                            tracker.block_done(idx, blocks[idx].prompt_text, translated_block.prompt_text)
-                        except Exception:
-                            for pending in futures:
-                                pending.cancel()
-                            raise
-                        break
-        elif concurrency <= 1 or len(blocks) <= 1:
-            for idx, block in enumerate(blocks):
-                _, translated_block = translate_block(idx, block)
-                translated_blocks[idx] = translated_block
-                tracker.block_done(idx, block.prompt_text, translated_block.prompt_text)
-        else:
-            with ThreadPoolExecutor(max_workers=concurrency) as executor:
-                futures = {
-                    executor.submit(translate_block, idx, block): idx
-                    for idx, block in enumerate(blocks)
-                }
-                for future in as_completed(futures):
-                    idx = futures[future]
-                    try:
-                        _, translated_block = future.result()
+        pending_indices = [
+            idx for idx, block in enumerate(blocks) if translated_blocks[idx] is None
+        ]
+
+        try:
+            if adaptive is not None and len(pending_indices) > 1:
+                with ThreadPoolExecutor(max_workers=adaptive.max_limit) as executor:
+                    next_pos = 0
+                    futures: Dict[Any, int] = {}
+                    while next_pos < len(pending_indices) or futures:
+                        limit = adaptive.get_limit()
+                        while next_pos < len(pending_indices) and len(futures) < limit:
+                            idx = pending_indices[next_pos]
+                            futures[executor.submit(translate_block, idx, blocks[idx])] = idx
+                            next_pos += 1
+                        if not futures:
+                            continue
+                        for future in as_completed(futures):
+                            idx = futures.pop(future)
+                            try:
+                                _, translated_block = future.result()
+                                translated_blocks[idx] = translated_block
+                                adaptive.note_success()
+                                tracker.block_done(
+                                    idx, blocks[idx].prompt_text, translated_block.prompt_text
+                                )
+                            except Exception:
+                                for pending in futures:
+                                    pending.cancel()
+                                raise
+                            break
+            elif pending_indices:
+                if concurrency <= 1 or len(pending_indices) <= 1:
+                    for idx in pending_indices:
+                        _, translated_block = translate_block(idx, blocks[idx])
                         translated_blocks[idx] = translated_block
-                        tracker.block_done(idx, blocks[idx].prompt_text, translated_block.prompt_text)
-                    except Exception:
-                        for pending in futures:
-                            pending.cancel()
-                        raise
+                        tracker.block_done(
+                            idx, blocks[idx].prompt_text, translated_block.prompt_text
+                        )
+                else:
+                    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                        futures = {
+                            executor.submit(translate_block, idx, blocks[idx]): idx
+                            for idx in pending_indices
+                        }
+                        for future in as_completed(futures):
+                            idx = futures[future]
+                            try:
+                                _, translated_block = future.result()
+                                translated_blocks[idx] = translated_block
+                                tracker.block_done(
+                                    idx, blocks[idx].prompt_text, translated_block.prompt_text
+                                )
+                            except Exception:
+                                for pending in futures:
+                                    pending.cancel()
+                                raise
+        finally:
+            if temp_progress_file:
+                try:
+                    temp_progress_file.close()
+                except Exception:
+                    pass
 
         if any(block is None for block in translated_blocks):
             raise RuntimeError("translation_incomplete")
@@ -623,6 +842,15 @@ class PipelineRunner:
                         )
                     except Exception:
                         pass
+                    for entry in warnings:
+                        try:
+                            emit_warning(
+                                int(entry.get("line", 0) or 0),
+                                str(entry.get("message", "")),
+                                str(entry.get("type", "quality") or "quality"),
+                            )
+                        except Exception:
+                            continue
 
         if line_policy_errors:
             error_path = f"{output_path}.line_errors.jsonl"
@@ -640,5 +868,42 @@ class PipelineRunner:
             self._normalize_txt_blocks(translated_blocks)
 
         doc.save(output_path, translated_blocks)
+
+        if save_cache:
+            resolved_cache_dir = (
+                cache_dir if cache_dir and os.path.isdir(cache_dir) else None
+            )
+            translation_cache = TranslationCache(
+                output_path,
+                custom_cache_dir=resolved_cache_dir,
+                source_path=input_path,
+            )
+            for idx, block in enumerate(blocks):
+                translated_block = translated_blocks[idx]
+                if translated_block is None:
+                    continue
+                translation_cache.add_block(
+                    idx,
+                    block.prompt_text,
+                    translated_block.prompt_text,
+                )
+            provider_model = str(provider.profile.get("model") or "").strip()
+            model_name = (
+                provider_model or provider_ref or pipeline_id or "unknown"
+            )
+            glossary_path = (
+                glossary_spec if isinstance(glossary_spec, str) else ""
+            )
+            translation_cache.save(
+                model_name=model_name,
+                glossary_path=glossary_path,
+                concurrency=concurrency,
+            )
+
         tracker.emit_final_stats()
+        try:
+            if os.path.exists(temp_progress_path):
+                os.remove(temp_progress_path)
+        except Exception:
+            pass
         return output_path

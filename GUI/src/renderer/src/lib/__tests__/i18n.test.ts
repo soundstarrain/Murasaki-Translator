@@ -80,4 +80,17 @@ describe("i18n", () => {
       expect(terminalLabel).not.toContain("{count}");
     }
   });
+
+  it("includes v2 pipeline and provider error labels", () => {
+    for (const lang of Object.values(translations)) {
+      const dashboard = (lang as { dashboard?: Record<string, any> }).dashboard;
+      expect(dashboard?.selectPipelineTitle).toBeTruthy();
+      expect(dashboard?.selectPipelineDesc).toBeTruthy();
+      expect(dashboard?.retryMessages?.providerError).toBeTruthy();
+
+      const triggerLabels = (lang as { historyView?: any }).historyView
+        ?.triggerLabels;
+      expect(triggerLabels?.provider_error).toBeTruthy();
+    }
+  });
 });

@@ -27,6 +27,9 @@ def main() -> int:
     parser.add_argument("--rules-pre", dest="rules_pre", help="Pre-process rules (JSON)")
     parser.add_argument("--rules-post", dest="rules_post", help="Post-process rules (JSON)")
     parser.add_argument("--glossary", help="Glossary JSON file")
+    parser.add_argument("--resume", action="store_true", help="Resume from temp progress")
+    parser.add_argument("--cache-dir", help="Custom directory to store cache files")
+    parser.add_argument("--no-cache", action="store_true", help="Disable cache saving")
     parser.add_argument("--source-lang", default="ja", help="Source language for QC (e.g. ja)")
     parser.add_argument("--enable-quality", action="store_true", help="Enable V1 quality checks")
     parser.add_argument("--disable-quality", action="store_true", help="Disable V1 quality checks")
@@ -83,7 +86,13 @@ def main() -> int:
 
     runner = PipelineRunner(store, pipeline_profile)
     try:
-        output_path = runner.run(args.file, output_path=args.output)
+        output_path = runner.run(
+            args.file,
+            output_path=args.output,
+            resume=bool(args.resume),
+            save_cache=not bool(args.no_cache),
+            cache_dir=args.cache_dir,
+        )
     except Exception as e:
         emit_error(str(e), title="Pipeline V2 Fatal Error")
         print(f"[FlowV2] Fatal error: {e}", file=sys.stderr)

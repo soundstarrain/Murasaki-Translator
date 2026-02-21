@@ -103,6 +103,16 @@ const api = {
     pipelineId: string;
     profilesDir: string;
     outputPath?: string;
+    outputDir?: string;
+    rulesPrePath?: string;
+    rulesPostPath?: string;
+    glossaryPath?: string;
+    sourceLang?: string;
+    enableQuality?: boolean;
+    textProtect?: boolean;
+    resume?: boolean;
+    cacheDir?: string;
+    saveCache?: boolean;
   }) => ipcRenderer.invoke("pipelinev2-run", payload),
   pipelineV2Stop: () => ipcRenderer.send("stop-pipelinev2"),
   getHardwareSpecs: () => ipcRenderer.invoke("get-hardware-specs"),

@@ -2294,7 +2294,20 @@ export default function ProofreadView({
           // Priority: Explicit cachePath > Output Path + .cache.json > Input Path + .cache.json
           let cachePath = h.cachePath;
           if (!cachePath && h.outputPath) {
-            cachePath = h.outputPath + ".cache.json";
+            const cacheDir = (h as any)?.config?.cacheDir;
+            const dir = String(cacheDir || "").trim();
+            if (dir) {
+              const fileName =
+                h.outputPath.split(/[/\\]/).pop() || h.outputPath;
+              const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+              const prefix =
+                dir.endsWith("\\") || dir.endsWith("/")
+                  ? dir
+                  : `${dir}${sep}`;
+              cachePath = `${prefix}${fileName}.cache.json`;
+            } else {
+              cachePath = h.outputPath + ".cache.json";
+            }
           }
           if (!cachePath && h.filePath) {
             cachePath = h.filePath + ".cache.json";

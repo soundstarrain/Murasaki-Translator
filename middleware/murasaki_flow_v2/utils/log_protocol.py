@@ -98,15 +98,14 @@ def emit_final(
         "outputLines": output_lines,
         "outputChars": output_chars,
     }
-    # V2 专属字段仅在有值时才输出
-    if total_requests > 0:
-        data["totalRequests"] = total_requests
-        data["totalRetries"] = total_retries
-        data["totalErrors"] = total_errors
-        data["totalInputTokens"] = total_input_tokens
-        data["totalOutputTokens"] = total_output_tokens
-        if error_status_codes:
-            data["errorStatusCodes"] = error_status_codes
+    # V2 专属字段始终输出（0 也保留，便于历史落库）
+    data["totalRequests"] = total_requests
+    data["totalRetries"] = total_retries
+    data["totalErrors"] = total_errors
+    data["totalInputTokens"] = total_input_tokens
+    data["totalOutputTokens"] = total_output_tokens
+    if error_status_codes:
+        data["errorStatusCodes"] = error_status_codes
     emit("JSON_FINAL", data)
 
 
@@ -234,6 +233,30 @@ class ProgressTracker:
             self.total_errors += 1
             if status_code is not None:
                 self.error_status_codes[status_code] += 1
+
+    def seed_progress(
+        self,
+        *,
+        completed_blocks: int,
+        output_lines: int,
+        output_chars: int,
+    ) -> None:
+        """Seed progress counters for resume mode and emit a baseline progress update."""
+        with self._lock:
+            self.completed_blocks = max(0, min(completed_blocks, self.total_blocks))
+            self.total_output_lines = max(0, output_lines)
+            self.total_output_chars = max(0, output_chars)
+            completed = self.completed_blocks
+        emit_progress(
+            current=completed,
+            total=self.total_blocks,
+            elapsed=0,
+            speed_chars=0,
+            total_lines=self.total_output_lines,
+            total_chars=self.total_output_chars,
+            source_lines=self.total_source_lines,
+            source_chars=self.total_source_chars,
+        )
 
     def emit_final_stats(self) -> None:
         """Emit JSON_FINAL with accumulated statistics (incl. V2 API stats)."""

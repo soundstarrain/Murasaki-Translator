@@ -1,6 +1,7 @@
 import { ipcMain, BrowserWindow } from "electron";
 import { spawn, ChildProcess } from "child_process";
-import { join } from "path";
+import { existsSync } from "fs";
+import { basename, extname, join } from "path";
 import { validatePipelineRun } from "./pipelineV2Validation";
 
 type PythonPath = { type: "python" | "bundle"; path: string };
@@ -69,12 +70,16 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
         pipelineId,
         profilesDir,
         outputPath,
+        outputDir,
         rulesPrePath,
         rulesPostPath,
         glossaryPath,
         sourceLang,
         enableQuality,
         textProtect,
+        resume,
+        cacheDir,
+        saveCache,
       },
     ) => {
       // 如果已有活动的 V2 进程，拒绝
@@ -118,9 +123,18 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
         "--profiles-dir",
         profilesDir,
       ];
-      if (outputPath) {
-        scriptArgs.push("--output", outputPath);
-        moduleArgs.push("--output", outputPath);
+      let resolvedOutputPath = outputPath;
+      if (!resolvedOutputPath && outputDir && existsSync(outputDir)) {
+        const ext = extname(filePath);
+        const baseName = ext ? basename(filePath, ext) : basename(filePath);
+        const outFilename = ext
+          ? `${baseName}_translated${ext}`
+          : `${baseName}_translated`;
+        resolvedOutputPath = join(outputDir, outFilename);
+      }
+      if (resolvedOutputPath) {
+        scriptArgs.push("--output", resolvedOutputPath);
+        moduleArgs.push("--output", resolvedOutputPath);
       }
       if (rulesPrePath) {
         scriptArgs.push("--rules-pre", rulesPrePath);
@@ -152,11 +166,29 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
         scriptArgs.push("--no-text-protect");
         moduleArgs.push("--no-text-protect");
       }
+      if (resume) {
+        scriptArgs.push("--resume");
+        moduleArgs.push("--resume");
+      }
+      if (cacheDir && existsSync(cacheDir)) {
+        scriptArgs.push("--cache-dir", cacheDir);
+        moduleArgs.push("--cache-dir", cacheDir);
+      }
+      if (saveCache === false) {
+        scriptArgs.push("--no-cache");
+        moduleArgs.push("--no-cache");
+      }
 
       stopRequested = false;
 
       return await new Promise<{ ok: boolean; runId: string; code?: number }>(
         (resolve) => {
+          let settled = false;
+          const finalize = (result: { ok: boolean; runId: string; code?: number }) => {
+            if (settled) return;
+            settled = true;
+            resolve(result);
+          };
           const child =
             python.type === "bundle"
               ? spawn(python.path, scriptArgs.slice(1))
@@ -191,6 +223,30 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
             deps.sendLog({ runId, message: str, level: "error" });
           });
 
+          child.on("error", (err) => {
+            console.error("[FlowV2] Spawn error:", err);
+            const win = deps.getMainWindow();
+            if (win) {
+              const payload = {
+                title: "Pipeline V2 Error",
+                message: String(err?.message || err),
+              };
+              win.webContents.send(
+                "log-update",
+                `JSON_ERROR:${JSON.stringify(payload)}\n`,
+              );
+              win.webContents.send("process-exit", {
+                code: 1,
+                signal: null,
+                stopRequested: false,
+                runId,
+              });
+            }
+            activeChild = null;
+            stopRequested = false;
+            finalize({ ok: false, runId, code: 1 });
+          });
+
           child.on("close", (code, signal) => {
             // 刷新剩余 stdout 缓冲
             if (stdoutBuffer.trim()) {
@@ -216,7 +272,7 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
               });
             }
 
-            resolve({ ok: code === 0, runId, code: code ?? undefined });
+            finalize({ ok: code === 0, runId, code: code ?? undefined });
           });
         },
       );

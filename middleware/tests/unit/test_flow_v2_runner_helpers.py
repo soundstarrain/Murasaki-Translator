@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -11,6 +12,7 @@ if str(_MIDDLEWARE_ROOT) not in sys.path:
 from murasaki_flow_v2.pipelines.runner import PipelineRunner
 from murasaki_flow_v2.registry.profile_store import ProfileStore
 from murasaki_flow_v2.validation import validate_profile
+from murasaki_translator.core.cache import TranslationCache
 from murasaki_translator.core.chunker import TextBlock
 
 
@@ -75,6 +77,56 @@ class TestFlowV2RunnerHelpers(unittest.TestCase):
             }
             result = validate_profile("pipeline", pipeline, store=store)
             self.assertIn("parser_requires_jsonl_prompt", result.errors)
+
+    def test_load_resume_file_matches_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "output.temp.jsonl")
+            fingerprint = {
+                "type": "fingerprint",
+                "input": "demo.txt",
+                "pipeline": "pipe1",
+                "chunk_type": "line",
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(fingerprint, ensure_ascii=False) + "\n")
+                f.write(json.dumps({"index": 0, "src": "a", "dst": "b"}, ensure_ascii=False) + "\n")
+
+            entries, matched = PipelineRunner._load_resume_file(
+                path,
+                expected={
+                    "input": "demo.txt",
+                    "pipeline": "pipe1",
+                    "chunk_type": "line",
+                },
+            )
+            self.assertTrue(matched)
+            self.assertIn(0, entries)
+            self.assertEqual(entries[0]["dst"], "b")
+
+            entries, matched = PipelineRunner._load_resume_file(
+                path,
+                expected={"input": "demo.txt", "pipeline": "other"},
+            )
+            self.assertFalse(matched)
+            self.assertEqual(entries, {})
+
+    def test_load_resume_cache_reads_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "demo.txt")
+            cache_dir = os.path.join(temp_dir, "cache")
+            os.makedirs(cache_dir, exist_ok=True)
+
+            cache = TranslationCache(
+                output_path,
+                custom_cache_dir=cache_dir,
+                source_path="",
+            )
+            cache.add_block(0, "src", "dst")
+            cache.save(model_name="demo", glossary_path="", concurrency=1)
+
+            entries = PipelineRunner._load_resume_cache(output_path, cache_dir)
+            self.assertIn(0, entries)
+            self.assertEqual(entries[0]["dst"], "dst")
 
 
 if __name__ == "__main__":

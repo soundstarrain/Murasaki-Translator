@@ -205,7 +205,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       } catch { /* ignore */ }
       return "";
     });
-    const [v2Profiles, setV2Profiles] = useState<Array<{ id: string; name: string; providerName?: string }>>([]);
+    const [v2Profiles, setV2Profiles] = useState<Array<{ id: string; name: string; providerName?: string; chunkType?: "line" | "block" }>>([]);
     const engineModeRef = useRef(engineMode);
     useEffect(() => { engineModeRef.current = engineMode; }, [engineMode]);
     useEffect(() => { localStorage.setItem("config_engine_mode", engineMode); }, [engineMode]);
@@ -220,6 +220,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             id: p.id,
             name: p.name || p.id,
             providerName: p.providerName,
+            chunkType: normalizeChunkType(p.chunk_type ?? p.chunkType),
           })));
           // 如果当前没选择但ApiManager有选择，自动同步
           if (!v2PipelineId && profiles.length > 0) {
@@ -450,6 +451,16 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       return labels.short;
     };
 
+    const normalizeChunkType = (
+      raw: unknown,
+    ): "line" | "block" | undefined => {
+      if (typeof raw !== "string") return undefined;
+      const normalized = raw.trim().toLowerCase();
+      if (normalized === "line") return "line";
+      if (normalized === "block" || normalized === "legacy") return "block";
+      return undefined;
+    };
+
     // Collapsible Panels
     const [queueCollapsed, setQueueCollapsed] = useState(false);
     const [logsCollapsed, setLogsCollapsed] = useState(false);
@@ -485,6 +496,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       sourceLines: number;
       sourceChars: number;
       outputPath: string;
+      cacheDir: string;
+      cachePath: string;
       speeds: number[];
     }>({
       total: 0,
@@ -494,6 +507,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       sourceLines: 0,
       sourceChars: 0,
       outputPath: "",
+      cacheDir: "",
+      cachePath: "",
       speeds: [],
     });
     const finalStatsRef = useRef<{
@@ -733,6 +748,13 @@ export const Dashboard = forwardRef<any, DashboardProps>(
               (progressDataRef.current.chars / effectiveDuration).toFixed(1),
             )
             : 0);
+        const resolvedCachePath = progressDataRef.current.outputPath
+          ? progressDataRef.current.cachePath ||
+          resolveCachePath(
+            progressDataRef.current.outputPath,
+            progressDataRef.current.cacheDir,
+          )
+          : "";
         updateRecord(currentRecordIdRef.current, {
           endTime: new Date().toISOString(),
           duration: Math.round(effectiveDuration),
@@ -752,6 +774,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           sourceLines: progressDataRef.current.sourceLines,
           sourceChars: progressDataRef.current.sourceChars,
           outputPath: progressDataRef.current.outputPath,
+          cachePath: resolvedCachePath || undefined,
           avgSpeed: avgSpeed,
           logs: logsBufferRef.current.slice(-MAX_HISTORY_LOG_LINES),
           llamaLogs: llamaLogsBufferRef.current.slice(-MAX_HISTORY_LLAMA_LOG_LINES),
@@ -769,6 +792,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           sourceLines: 0,
           sourceChars: 0,
           outputPath: "",
+          cacheDir: "",
+          cachePath: "",
           speeds: [],
         };
         finalStatsRef.current = null;
@@ -1002,6 +1027,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                 sourceChars:
                   data.source_chars ?? progressDataRef.current.sourceChars,
                 outputPath: progressDataRef.current.outputPath, // 保留已设置的输出路径
+                cacheDir: progressDataRef.current.cacheDir,
+                cachePath: progressDataRef.current.cachePath,
                 speeds:
                   data.speed_chars > 0
                     ? [
@@ -1039,7 +1066,9 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                       ? "empty_retry"
                       : data.type === "anchor_missing"
                         ? "anchor_missing"
-                        : "line_mismatch";
+                        : data.type === "provider_error"
+                          ? "provider_error"
+                          : "line_mismatch";
               const retryMessages = t.dashboard.retryMessages;
               const coverageText =
                 typeof data.coverage === "number"
@@ -1064,12 +1093,14 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                         : data.type === "anchor_missing"
                           ? retryMessages.anchorMissing
                             .replace("{block}", String(data.block))
-                          : retryMessages.lineMismatch
-                            .replace("{block}", String(data.block))
-                            .replace(
-                              "{diff}",
-                              String(data.src_lines - data.dst_lines),
-                            ),
+                          : data.type === "provider_error"
+                            ? retryMessages.providerError
+                            : retryMessages.lineMismatch
+                              .replace("{block}", String(data.block))
+                              .replace(
+                                "{diff}",
+                                String(data.src_lines - data.dst_lines),
+                              ),
               });
             } catch (e) {
               console.error("JSON_RETRY Parse Error:", e, log);
@@ -1107,8 +1138,15 @@ export const Dashboard = forwardRef<any, DashboardProps>(
               const data = JSON.parse(
                 log.substring("JSON_OUTPUT_PATH:".length),
               );
-              progressDataRef.current.outputPath = data.path || "";
-              if (data.path) setLastOutputPath(data.path);
+              const outputPath = data.path || "";
+              progressDataRef.current.outputPath = outputPath;
+              progressDataRef.current.cachePath = outputPath
+                ? resolveCachePath(
+                  outputPath,
+                  progressDataRef.current.cacheDir,
+                )
+                : "";
+              if (outputPath) setLastOutputPath(outputPath);
             } catch (e) {
               console.error("Output Path Parse Error:", e);
             }
@@ -1167,6 +1205,21 @@ export const Dashboard = forwardRef<any, DashboardProps>(
 
               // Update history record with final stats
               if (currentRecordIdRef.current) {
+                const v2Stats =
+                  data.totalRequests !== undefined
+                    ? {
+                      totalRequests: Number(data.totalRequests || 0),
+                      totalRetries: Number(data.totalRetries || 0),
+                      totalErrors: Number(data.totalErrors || 0),
+                      totalInputTokens: Number(data.totalInputTokens || 0),
+                      totalOutputTokens: Number(data.totalOutputTokens || 0),
+                      errorStatusCodes:
+                        data.errorStatusCodes &&
+                          typeof data.errorStatusCodes === "object"
+                          ? data.errorStatusCodes
+                          : undefined,
+                    }
+                    : undefined;
                 updateRecord(currentRecordIdRef.current, {
                   sourceLines: data.sourceLines,
                   sourceChars: data.sourceChars,
@@ -1174,6 +1227,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                   totalChars: data.outputChars,
                   avgSpeed: data.avgSpeed,
                   duration: data.totalTime,
+                  ...(v2Stats ? { v2Stats } : {}),
                 });
               }
             } catch (e) {
@@ -1943,12 +1997,24 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       remoteInfoRef.current = null;
 
       const finalConfig = { ...config, highFidelity: undefined, outputDir: config.outputDir ?? undefined };
+      progressDataRef.current = {
+        total: 0,
+        current: 0,
+        lines: 0,
+        chars: 0,
+        sourceLines: 0,
+        sourceChars: 0,
+        outputPath: "",
+        cacheDir: String(finalConfig.cacheDir || ""),
+        cachePath: "",
+        speeds: [],
+      };
       const recordModelLabel =
         effectiveModelPath.split(/[/\\]/).pop() || effectiveModelPath;
 
       const newRecord: TranslationRecord = {
         id: recordId,
-        fileName: inputPath.split(/[/\\]/).pop() || inputPath,
+        fileName: inputPath.split("\\").join("/").split("/").pop() || inputPath,
         filePath: inputPath,
         modelName: recordModelLabel,
         startTime: new Date().toISOString(),
@@ -1975,11 +2041,24 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     };
 
     // --- V2 Pipeline 启动 ---
-    const startV2Translation = async (inputPath: string) => {
-      if (!v2PipelineId) {
+    const startV2Translation = async (
+      inputPath: string,
+      forceResume?: boolean,
+      glossaryOverride?: string,
+    ) => {
+      let customConfig: FileConfig = {};
+      const item = queueRef.current.find((q) => q.path === inputPath);
+      if (item?.config && !item.config.useGlobalDefaults) {
+        customConfig = item.config;
+      }
+
+      const effectivePipelineId = (
+        customConfig.v2PipelineId || v2PipelineId || ""
+      ).trim();
+      if (!effectivePipelineId) {
         showAlert({
-          title: lang === "en" ? "Select Plan" : "请选择翻译方案",
-          description: lang === "en" ? "Please select an API translation plan before starting." : "请先选择一个 API 翻译方案。",
+          title: t.dashboard.selectPipelineTitle,
+          description: t.dashboard.selectPipelineDesc,
           variant: "warning",
         });
         return;
@@ -2002,21 +2081,102 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       setChartData([]);
       chartHistoriesRef.current = { chars: [], tokens: [], vram: [], gpu: [] };
       setProgress({
-        current: 0, total: 0, percent: 0, elapsed: 0, remaining: 0,
-        speedLines: 0, speedChars: 0, speedEval: 0, speedGen: 0, retries: 0,
+        current: 0,
+        total: 0,
+        percent: 0,
+        elapsed: 0,
+        remaining: 0,
+        speedLines: 0,
+        speedChars: 0,
+        speedEval: 0,
+        speedGen: 0,
+        retries: 0,
       });
       setPreviewBlocks({});
       setLastOutputPath("");
       localStorage.removeItem("last_preview_blocks");
+      remoteInfoRef.current = null;
 
-      // 创建 V2 历史记录
+      const resolvedGlossaryPath =
+        customConfig.glossaryPath !== undefined
+          ? customConfig.glossaryPath
+          : glossaryOverride !== undefined
+            ? glossaryOverride
+            : glossaryPath;
+      const resolvedOutputDir =
+        customConfig.outputDir !== undefined
+          ? customConfig.outputDir
+          : localStorage.getItem("config_output_dir") || "";
+      const resolvedResume =
+        forceResume !== undefined
+          ? forceResume
+          : customConfig.resume ??
+          localStorage.getItem("config_resume") === "true";
+      const resolvedCacheDir =
+        customConfig.cacheDir !== undefined
+          ? customConfig.cacheDir
+          : localStorage.getItem("config_cache_dir") || "";
+      progressDataRef.current = {
+        total: 0,
+        current: 0,
+        lines: 0,
+        chars: 0,
+        sourceLines: 0,
+        sourceChars: 0,
+        outputPath: "",
+        cacheDir: String(resolvedCacheDir || ""),
+        cachePath: "",
+        speeds: [],
+      };
+
+      const selectedProfile = v2Profiles.find(
+        (p) => p.id === effectivePipelineId,
+      );
+      let pipelineName = selectedProfile?.name || effectivePipelineId;
+      let providerName = selectedProfile?.providerName;
+      let chunkType = selectedProfile?.chunkType;
+
+      try {
+        const pipelineProfile =
+          await window.api?.pipelineV2ProfilesLoad?.(
+            "pipeline",
+            effectivePipelineId,
+          );
+        const pipelineData = pipelineProfile?.data;
+        if (pipelineProfile?.name) {
+          pipelineName = pipelineProfile.name;
+        } else if (pipelineData?.name) {
+          pipelineName = pipelineData.name;
+        }
+        if (pipelineData?.provider) {
+          const providerProfile =
+            await window.api?.pipelineV2ProfilesLoad?.(
+              "api",
+              String(pipelineData.provider),
+            );
+          providerName = providerProfile?.name || String(pipelineData.provider);
+        }
+        if (pipelineData?.chunk_policy) {
+          const chunkProfile =
+            await window.api?.pipelineV2ProfilesLoad?.(
+              "chunk",
+              String(pipelineData.chunk_policy),
+            );
+          const rawChunkType =
+            chunkProfile?.data?.chunk_type ?? chunkProfile?.data?.type;
+          const normalizedChunkType = normalizeChunkType(rawChunkType);
+          if (normalizedChunkType) chunkType = normalizedChunkType;
+        }
+      } catch (e) {
+        console.error("[Dashboard] Failed to resolve pipeline meta:", e);
+      }
+
       const recordId = Date.now().toString();
       currentRecordIdRef.current = recordId;
       logsBufferRef.current = [];
       triggersBufferRef.current = [];
       llamaLogsBufferRef.current = [];
 
-      const selectedProfile = v2Profiles.find(p => p.id === v2PipelineId);
       const newRecord: TranslationRecord = {
         id: recordId,
         fileName: inputPath.split(/[/\\]/).pop() || inputPath,
@@ -2029,23 +2189,34 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         triggers: [],
         logs: [],
         engineVersion: "v2",
+        config: {
+          engineMode: "v2",
+          v2PipelineId: effectivePipelineId,
+          outputDir: resolvedOutputDir || undefined,
+          cacheDir: resolvedCacheDir || undefined,
+          resume: Boolean(resolvedResume),
+        },
         v2Config: {
-          pipelineId: v2PipelineId,
-          pipelineName: selectedProfile?.name || v2PipelineId,
-          providerName: selectedProfile?.providerName,
-          chunkType: "legacy",
+          pipelineId: effectivePipelineId,
+          pipelineName,
+          providerName,
+          chunkType,
         },
       };
       addRecord(newRecord);
 
-      // 获取 profiles 目录
-      const profilesDir = await window.api?.pipelineV2ProfilesPath?.() || "";
+      const profilesDir = (await window.api?.pipelineV2ProfilesPath?.()) || "";
+      const outputDir = resolvedOutputDir.trim();
+      const cacheDir = resolvedCacheDir.trim();
 
       window.api?.pipelineV2Run?.({
         filePath: inputPath,
-        pipelineId: v2PipelineId,
+        pipelineId: effectivePipelineId,
         profilesDir,
-        glossaryPath: glossaryPath || undefined,
+        outputDir: outputDir || undefined,
+        glossaryPath: resolvedGlossaryPath || undefined,
+        resume: Boolean(resolvedResume),
+        cacheDir: cacheDir || undefined,
       });
     };
 
@@ -2067,7 +2238,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       if (engineMode === "v2") {
         // V2 模式直接启动，不需要模型检查
         const inputPath = queue[0].path;
-        await startV2Translation(inputPath);
+        await checkAndStartV2(inputPath, 0);
         return;
       }
 
@@ -2084,6 +2255,76 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         handleStartQueue();
       }
     }, [active, isRunning, queue, handleStartQueue]);
+
+    const checkAndStartV2 = async (inputPath: string, index: number) => {
+      const queueItem = queueRef.current[index];
+      const customConfig =
+        queueItem?.config && !queueItem.config.useGlobalDefaults
+          ? queueItem.config
+          : undefined;
+      const effectivePipelineId = (
+        customConfig?.v2PipelineId || v2PipelineId || ""
+      ).trim();
+      if (!effectivePipelineId) {
+        showAlert({
+          title: t.dashboard.selectPipelineTitle,
+          description: t.dashboard.selectPipelineDesc,
+          variant: "warning",
+        });
+        return;
+      }
+
+      const outputDir =
+        customConfig?.outputDir !== undefined
+          ? customConfig.outputDir
+          : localStorage.getItem("config_output_dir") || "";
+      const config = {
+        engineMode: "v2",
+        outputDir: outputDir || undefined,
+      };
+
+      const checkResult = await window.api?.checkOutputFileExists(
+        inputPath,
+        config,
+      );
+
+      if (checkResult?.exists && checkResult.path) {
+        setConfirmModal({
+          isOpen: true,
+          file: inputPath.split(/[/\\]/).pop() || inputPath,
+          path: checkResult.path,
+          onResume: () => {
+            setConfirmModal(null);
+            setCurrentQueueIndex(index);
+            startV2Translation(inputPath, true);
+          },
+          onOverwrite: () => {
+            setConfirmModal(null);
+            setCurrentQueueIndex(index);
+            startV2Translation(inputPath, false);
+          },
+          onSkip:
+            index < queue.length - 1
+              ? () => {
+                setConfirmModal(null);
+                checkAndStartV2(queue[index + 1].path, index + 1);
+              }
+              : undefined,
+          onStopAll: () => {
+            setConfirmModal(null);
+            handleStop();
+          },
+          onCancel: () => {
+            setConfirmModal(null);
+            setIsRunning(false);
+            setCurrentQueueIndex(-1);
+          },
+        });
+      } else {
+        setCurrentQueueIndex(index);
+        startV2Translation(inputPath);
+      }
+    };
 
     const checkAndStart = async (inputPath: string, index: number) => {
       // ... (Duplicate config logic? Or refactor?)
@@ -2187,7 +2428,12 @@ export const Dashboard = forwardRef<any, DashboardProps>(
 
     // Keep checkAndStartRef in sync for use in stale-closure contexts
     useEffect(() => {
-      checkAndStartRef.current = checkAndStart;
+      checkAndStartRef.current = (inputPath: string, index: number) => {
+        if (engineModeRef.current === "v2") {
+          return checkAndStartV2(inputPath, index);
+        }
+        return checkAndStart(inputPath, index);
+      };
     });
 
     const handleStop = () => {
@@ -2222,6 +2468,17 @@ export const Dashboard = forwardRef<any, DashboardProps>(
     const getOutputDir = (path: string) => {
       const lastSep = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
       return lastSep >= 0 ? path.slice(0, lastSep) : "";
+    };
+
+    const resolveCachePath = (outputPath: string, cacheDir?: string) => {
+      if (!outputPath) return "";
+      const dir = (cacheDir || "").trim();
+      if (!dir) return `${outputPath}.cache.json`;
+      const fileName = outputPath.split(/[/\\]/).pop() || outputPath;
+      const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+      const prefix =
+        dir.endsWith("\\") || dir.endsWith("/") ? dir : `${dir}${sep}`;
+      return `${prefix}${fileName}.cache.json`;
     };
 
     const handleOpenOutput = async (mode: "file" | "folder") => {

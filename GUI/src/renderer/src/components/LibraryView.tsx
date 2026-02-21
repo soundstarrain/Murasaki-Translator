@@ -67,6 +67,7 @@ interface LibraryViewProps {
   onProofreadFile?: (cachePath: string) => void;
   isRunning?: boolean;
   remoteRuntime?: UseRemoteRuntimeResult;
+  globalEngineMode?: "v1" | "v2";
 }
 
 interface QueueImportPreview {
@@ -101,24 +102,32 @@ function getCachePath(
   filePath: string,
   outputDir?: string,
   modelPath?: string,
+  options?: { cacheDir?: string; engineMode?: "v1" | "v2" },
 ): string {
   // Handle both slash types correctly. lastIndexOf returns -1 if not found, checking both ensures we find the real separator.
   const lastSep = Math.max(
     filePath.lastIndexOf("\\"),
     filePath.lastIndexOf("/"),
   );
-  const dir = outputDir
-    ? outputDir
-    : lastSep === -1
-      ? "."
-      : filePath.substring(0, lastSep);
+  const preferredDir = String(options?.cacheDir || "").trim();
+  const dir = preferredDir
+    ? preferredDir
+    : outputDir
+      ? outputDir
+      : lastSep === -1
+        ? "."
+        : filePath.substring(0, lastSep);
   const baseName = filePath.substring(lastSep + 1).replace(/\.[^.]+$/, "");
   const extMatch = filePath.match(/\.[^.]+$/);
   const ext = extMatch ? extMatch[0] : "";
   const modelName = getModelNameFromPath(modelPath);
-  const outputName = modelName
-    ? `${baseName}_${modelName}${ext}`
-    : `${baseName}${ext}`;
+  const mode = options?.engineMode === "v2" ? "v2" : "v1";
+  const outputName =
+    mode === "v2"
+      ? `${baseName}_translated${ext}`
+      : modelName
+        ? `${baseName}_${modelName}${ext}`
+        : `${baseName}${ext}`;
   const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
   const joined =
     dir.endsWith("\\") || dir.endsWith("/")
@@ -126,6 +135,20 @@ function getCachePath(
       : `${dir}${sep}${outputName}`;
   return `${joined}.cache.json`;
 }
+
+const resolveCachePathFromOutput = (
+  outputPath: string,
+  cacheDir?: string,
+) => {
+  if (!outputPath) return "";
+  const dir = String(cacheDir || "").trim();
+  if (!dir) return `${outputPath}.cache.json`;
+  const fileName = outputPath.split(/[/\\]/).pop() || outputPath;
+  const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+  const prefix =
+    dir.endsWith("\\") || dir.endsWith("/") ? dir : `${dir}${sep}`;
+  return `${prefix}${fileName}.cache.json`;
+};
 
 // ============ Texts ============
 
@@ -1657,6 +1680,7 @@ export function LibraryView({
   onProofreadFile,
   isRunning = false,
   remoteRuntime,
+  globalEngineMode,
 }: LibraryViewProps) {
   const t = texts[lang];
   const { alertProps, showConfirm } = useAlertModal();
@@ -2709,7 +2733,10 @@ export function LibraryView({
             // Logic copied from ProofreadView: history record -> cache path
             if (match.cachePath) targetPath = match.cachePath;
             else if (match.outputPath)
-              targetPath = match.outputPath + ".cache.json";
+              targetPath = resolveCachePathFromOutput(
+                match.outputPath,
+                match.config?.cacheDir,
+              );
             else targetPath = match.filePath + ".cache.json";
           }
         }
@@ -2719,15 +2746,28 @@ export function LibraryView({
 
       // Strategy 2: Default Guess (Fallback if not in history)
       if (!targetPath) {
+        const useGlobalDefaults = !item.config || item.config.useGlobalDefaults;
         let outputDir = item.config?.outputDir;
-        if (!outputDir && item.config?.useGlobalDefaults) {
+        if (!outputDir && useGlobalDefaults) {
           outputDir = localStorage.getItem("config_output_dir") || undefined;
         }
         let modelPath = item.config?.model;
-        if (!modelPath) {
+        if (!modelPath && useGlobalDefaults) {
           modelPath = localStorage.getItem("config_model") || undefined;
         }
-        targetPath = getCachePath(item.path, outputDir, modelPath);
+        let cacheDir = item.config?.cacheDir;
+        if (!cacheDir && useGlobalDefaults) {
+          cacheDir = localStorage.getItem("config_cache_dir") || undefined;
+        }
+        const storedEngineMode = localStorage.getItem("config_engine_mode");
+        const engineMode =
+          item.config?.engineMode ||
+          globalEngineMode ||
+          (storedEngineMode === "v2" ? "v2" : "v1");
+        targetPath = getCachePath(item.path, outputDir, modelPath, {
+          cacheDir,
+          engineMode,
+        });
       }
 
       console.log("[Proofread] Resolved target:", targetPath);

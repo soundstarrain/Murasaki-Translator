@@ -45,5 +45,6 @@ describe("pipelineV2Profiles concurrency helpers", () => {
     expect(Array.isArray(payload.messages)).toBe(true);
     expect(payload.messages.length).toBe(32);
     expect(payload.messages.every((item) => item.content === "你好")).toBe(true);
+    expect(payload.max_tokens).toBe(8);
   });
 });
