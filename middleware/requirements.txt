@@ -21,7 +21,7 @@ pyyaml>=6.0.0
 opencc-python-reimplemented>=0.1.7
 
 # Hardware Monitoring
-pynvml>=11.0.0
+pynvml>=11.0.0  # NVIDIA GPU (Windows/Linux)
 
 # Term Extraction (Japanese Tokenizer)
 # fugashi: MeCab wrapper for Japanese morphological analysis

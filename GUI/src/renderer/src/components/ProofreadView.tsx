@@ -2024,7 +2024,9 @@ export default function ProofreadView({
               )}
               {/* Display layer: two independent text flows to avoid cross-column copy linkage */}
               <div
-                className={useEnhancedLinePreview ? "grid bg-background/60" : "grid"}
+                className={
+                  useEnhancedLinePreview ? "grid bg-background/60" : "grid"
+                }
                 style={{
                   gridTemplateColumns: gridTemplate,
                   gridAutoRows: `minmax(${layoutMetrics.rowMinHeight}px, auto)`,
@@ -2033,12 +2035,11 @@ export default function ProofreadView({
               >
                 {linePairs.map((pair, rowIdx) => {
                   const isWarning = simSet.has(pair.lineNumber);
-                  const rowToneClass =
-                    useEnhancedLinePreview
-                      ? rowIdx % 2 === 0
-                        ? "bg-background/30"
-                        : "bg-muted/20"
-                      : "";
+                  const rowToneClass = useEnhancedLinePreview
+                    ? rowIdx % 2 === 0
+                      ? "bg-background/30"
+                      : "bg-muted/20"
+                    : "";
                   const rowDividerClass =
                     !useEnhancedLinePreview || rowIdx === linePairs.length - 1
                       ? ""
@@ -2051,8 +2052,8 @@ export default function ProofreadView({
                     paddingBottom: `${layoutMetrics.textVerticalPadding}px`,
                     lineHeight: `${layoutMetrics.lineHeight}px`,
                     fontFamily:
-                      '"Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace',
-                    fontSize: `${layoutMetrics.textFontSize}px`,
+                      'var(--font-translation, "Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace)',
+                    fontSize: `var(--font-translation-size, ${layoutMetrics.textFontSize}px)`,
                     fontWeight: layoutMetrics.textFontWeight,
                     wordBreak: "break-word",
                     display: "flex",
@@ -2100,12 +2101,11 @@ export default function ProofreadView({
                 })}
                 {linePairs.map((pair, rowIdx) => {
                   const isWarning = simSet.has(pair.lineNumber);
-                  const rowToneClass =
-                    useEnhancedLinePreview
-                      ? rowIdx % 2 === 0
-                        ? "bg-background/30"
-                        : "bg-muted/20"
-                      : "";
+                  const rowToneClass = useEnhancedLinePreview
+                    ? rowIdx % 2 === 0
+                      ? "bg-background/30"
+                      : "bg-muted/20"
+                    : "";
                   const rowDividerClass =
                     !useEnhancedLinePreview || rowIdx === linePairs.length - 1
                       ? ""
@@ -2118,8 +2118,8 @@ export default function ProofreadView({
                     paddingBottom: `${layoutMetrics.textVerticalPadding}px`,
                     lineHeight: `${layoutMetrics.lineHeight}px`,
                     fontFamily:
-                      '"Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace',
-                    fontSize: `${layoutMetrics.textFontSize}px`,
+                      'var(--font-translation, "Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace)',
+                    fontSize: `var(--font-translation-size, ${layoutMetrics.textFontSize}px)`,
                     fontWeight: layoutMetrics.textFontWeight,
                     wordBreak: "break-word",
                     display: "flex",
@@ -2200,8 +2200,8 @@ export default function ProofreadView({
                         paddingBottom: `${layoutMetrics.textVerticalPadding}px`,
                         lineHeight: `${layoutMetrics.lineHeight}px`,
                         fontFamily:
-                          '"Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace',
-                        fontSize: `${layoutMetrics.textFontSize}px`,
+                          'var(--font-translation, "Cascadia Mono", Consolas, "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace)',
+                        fontSize: `var(--font-translation-size, ${layoutMetrics.textFontSize}px)`,
                         fontWeight: layoutMetrics.textFontWeight,
                         wordBreak: "break-word",
                         whiteSpace: "pre-wrap",
@@ -3493,382 +3493,392 @@ export default function ProofreadView({
               {retryForm.engineMode === "v1" && (
                 <>
                   <div className="space-y-4 border-t pt-5">
-                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  {pv.retrySectionInference}
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">
-                      {t.config.promptPreset}
-                    </label>
-                    <select
-                      className="w-full border border-border p-2 rounded bg-secondary text-foreground text-xs"
-                      value={retryForm.preset}
-                      onChange={(e) =>
-                        updateRetryDraft({ preset: e.target.value })
-                      }
-                    >
-                      <option value="novel">
-                        {t.dashboard.promptPresetLabels.novel}
-                      </option>
-                      <option value="script">
-                        {t.dashboard.promptPresetLabels.script}
-                      </option>
-                      <option value="short">
-                        {t.dashboard.promptPresetLabels.short}
-                      </option>
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">
-                      {t.config.device.mode}
-                    </label>
-                    <select
-                      className="w-full border border-border p-2 rounded bg-secondary text-foreground text-xs"
-                      value={retryForm.deviceMode}
-                      onChange={(e) =>
-                        updateRetryDraft({
-                          deviceMode: e.target.value as "auto" | "cpu",
-                        })
-                      }
-                    >
-                      <option value="auto">{t.config.device.modes.auto}</option>
-                      <option value="cpu">{t.config.device.modes.cpu}</option>
-                    </select>
-                  </div>
-                  {retryForm.deviceMode === "auto" && (
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-xs text-muted-foreground">
-                        {t.config.device.gpuId}
-                      </label>
-                      <input
-                        type="text"
-                        className="w-full border p-2 rounded text-sm bg-secondary"
-                        value={retryForm.gpuDeviceId}
-                        onChange={(e) =>
-                          updateRetryDraft({ gpuDeviceId: e.target.value })
-                        }
-                      />
-                      <p className="text-[10px] text-muted-foreground">
-                        {t.config.device.gpuIdDesc}
-                      </p>
+                    <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      {pv.retrySectionInference}
                     </div>
-                  )}
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">
-                      {t.config.gpuLayers}
-                    </label>
-                    <select
-                      className="w-full border border-border p-2 rounded bg-secondary text-foreground text-xs"
-                      value={retryForm.gpuLayers}
-                      onChange={(e) =>
-                        updateRetryDraft({ gpuLayers: e.target.value })
-                      }
-                      disabled={retryForm.deviceMode === "cpu"}
-                    >
-                      <option value="-1">-1</option>
-                      <option value="0">0</option>
-                      <option value="16">16</option>
-                      <option value="24">24</option>
-                      <option value="32">32</option>
-                      <option value="48">48</option>
-                      <option value="64">64</option>
-                    </select>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">
+                          {t.config.promptPreset}
+                        </label>
+                        <select
+                          className="w-full border border-border p-2 rounded bg-secondary text-foreground text-xs"
+                          value={retryForm.preset}
+                          onChange={(e) =>
+                            updateRetryDraft({ preset: e.target.value })
+                          }
+                        >
+                          <option value="novel">
+                            {t.dashboard.promptPresetLabels.novel}
+                          </option>
+                          <option value="script">
+                            {t.dashboard.promptPresetLabels.script}
+                          </option>
+                          <option value="short">
+                            {t.dashboard.promptPresetLabels.short}
+                          </option>
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">
+                          {t.config.device.mode}
+                        </label>
+                        <select
+                          className="w-full border border-border p-2 rounded bg-secondary text-foreground text-xs"
+                          value={retryForm.deviceMode}
+                          onChange={(e) =>
+                            updateRetryDraft({
+                              deviceMode: e.target.value as "auto" | "cpu",
+                            })
+                          }
+                        >
+                          <option value="auto">
+                            {t.config.device.modes.auto}
+                          </option>
+                          <option value="cpu">
+                            {t.config.device.modes.cpu}
+                          </option>
+                        </select>
+                      </div>
+                      {retryForm.deviceMode === "auto" && (
+                        <div className="space-y-2 col-span-2">
+                          <label className="text-xs text-muted-foreground">
+                            {t.config.device.gpuId}
+                          </label>
+                          <input
+                            type="text"
+                            className="w-full border p-2 rounded text-sm bg-secondary"
+                            value={retryForm.gpuDeviceId}
+                            onChange={(e) =>
+                              updateRetryDraft({ gpuDeviceId: e.target.value })
+                            }
+                          />
+                          <p className="text-[10px] text-muted-foreground">
+                            {t.config.device.gpuIdDesc}
+                          </p>
+                        </div>
+                      )}
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">
+                          {t.config.gpuLayers}
+                        </label>
+                        <select
+                          className="w-full border border-border p-2 rounded bg-secondary text-foreground text-xs"
+                          value={retryForm.gpuLayers}
+                          onChange={(e) =>
+                            updateRetryDraft({ gpuLayers: e.target.value })
+                          }
+                          disabled={retryForm.deviceMode === "cpu"}
+                        >
+                          <option value="-1">-1</option>
+                          <option value="0">0</option>
+                          <option value="16">16</option>
+                          <option value="24">24</option>
+                          <option value="32">32</option>
+                          <option value="48">48</option>
+                          <option value="64">64</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">
+                          {t.config.ctxSize}
+                        </label>
+                        <input
+                          type="number"
+                          className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                          value={retryForm.ctxSize}
+                          onChange={(e) =>
+                            updateRetryDraft({ ctxSize: e.target.value })
+                          }
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">
-                      {t.config.ctxSize}
-                    </label>
-                    <input
-                      type="number"
-                      className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                      value={retryForm.ctxSize}
-                      onChange={(e) =>
-                        updateRetryDraft({ ctxSize: e.target.value })
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
 
-              <div className="space-y-4 border-t pt-5">
-                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  {pv.retrySectionSampling}
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">
-                      {pv.retryTemperature}
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                      value={retryForm.temperature}
-                      onChange={(e) =>
-                        updateRetryDraft({
-                          temperature: parseFloat(e.target.value) || 0.7,
-                        })
-                      }
-                    />
+                  <div className="space-y-4 border-t pt-5">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      {pv.retrySectionSampling}
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">
+                          {pv.retryTemperature}
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                          value={retryForm.temperature}
+                          onChange={(e) =>
+                            updateRetryDraft({
+                              temperature: parseFloat(e.target.value) || 0.7,
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">
+                          {pv.retryStrictMode}
+                        </label>
+                        <select
+                          className="w-full border border-border p-2 rounded bg-secondary text-foreground text-xs"
+                          value={retryForm.strictMode}
+                          onChange={(e) =>
+                            updateRetryDraft({ strictMode: e.target.value })
+                          }
+                        >
+                          <option value="off">{av.strictModeOff}</option>
+                          <option value="subs">{av.strictModeSubs}</option>
+                          <option value="all">{av.strictModeAll}</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">
+                          {pv.retryRepPenaltyBase}
+                        </label>
+                        <input
+                          type="number"
+                          step="0.05"
+                          className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                          value={retryForm.repPenaltyBase}
+                          onChange={(e) =>
+                            updateRetryDraft({
+                              repPenaltyBase: parseFloat(e.target.value) || 1.0,
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">
+                          {pv.retryRepPenaltyMax}
+                        </label>
+                        <input
+                          type="number"
+                          step="0.05"
+                          className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                          value={retryForm.repPenaltyMax}
+                          onChange={(e) =>
+                            updateRetryDraft({
+                              repPenaltyMax: parseFloat(e.target.value) || 1.5,
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">
+                          {pv.retryRepPenaltyStep}
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                          value={retryForm.repPenaltyStep}
+                          onChange={(e) =>
+                            updateRetryDraft({
+                              repPenaltyStep: parseFloat(e.target.value) || 0.1,
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">
-                      {pv.retryStrictMode}
-                    </label>
-                    <select
-                      className="w-full border border-border p-2 rounded bg-secondary text-foreground text-xs"
-                      value={retryForm.strictMode}
-                      onChange={(e) =>
-                        updateRetryDraft({ strictMode: e.target.value })
-                      }
-                    >
-                      <option value="off">{av.strictModeOff}</option>
-                      <option value="subs">{av.strictModeSubs}</option>
-                      <option value="all">{av.strictModeAll}</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">
-                      {pv.retryRepPenaltyBase}
-                    </label>
-                    <input
-                      type="number"
-                      step="0.05"
-                      className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                      value={retryForm.repPenaltyBase}
-                      onChange={(e) =>
-                        updateRetryDraft({
-                          repPenaltyBase: parseFloat(e.target.value) || 1.0,
-                        })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">
-                      {pv.retryRepPenaltyMax}
-                    </label>
-                    <input
-                      type="number"
-                      step="0.05"
-                      className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                      value={retryForm.repPenaltyMax}
-                      onChange={(e) =>
-                        updateRetryDraft({
-                          repPenaltyMax: parseFloat(e.target.value) || 1.5,
-                        })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">
-                      {pv.retryRepPenaltyStep}
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                      value={retryForm.repPenaltyStep}
-                      onChange={(e) =>
-                        updateRetryDraft({
-                          repPenaltyStep: parseFloat(e.target.value) || 0.1,
-                        })
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
 
-              <div className="space-y-4 border-t pt-5">
-                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  {pv.retrySectionStructural}
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">{pv.retryLineCheck}</span>
-                  <Switch
-                    checked={retryForm.lineCheck}
-                    onCheckedChange={(v) => updateRetryDraft({ lineCheck: v })}
-                  />
-                </div>
-                {retryForm.lineCheck && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground">
-                        {pv.retryLineToleranceAbs}
-                      </label>
-                      <input
-                        type="number"
-                        className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                        value={retryForm.lineToleranceAbs}
-                        onChange={(e) =>
-                          updateRetryDraft({
-                            lineToleranceAbs: parseInt(e.target.value, 10) || 0,
-                          })
+                  <div className="space-y-4 border-t pt-5">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      {pv.retrySectionStructural}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm">{pv.retryLineCheck}</span>
+                      <Switch
+                        checked={retryForm.lineCheck}
+                        onCheckedChange={(v) =>
+                          updateRetryDraft({ lineCheck: v })
                         }
                       />
                     </div>
-                    <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground">
-                        {pv.retryLineTolerancePct}
-                      </label>
-                      <input
-                        type="number"
-                        className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                        value={retryForm.lineTolerancePct}
-                        onChange={(e) =>
-                          updateRetryDraft({
-                            lineTolerancePct: parseInt(e.target.value, 10) || 0,
-                          })
+                    {retryForm.lineCheck && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-xs text-muted-foreground">
+                            {pv.retryLineToleranceAbs}
+                          </label>
+                          <input
+                            type="number"
+                            className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                            value={retryForm.lineToleranceAbs}
+                            onChange={(e) =>
+                              updateRetryDraft({
+                                lineToleranceAbs:
+                                  parseInt(e.target.value, 10) || 0,
+                              })
+                            }
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs text-muted-foreground">
+                            {pv.retryLineTolerancePct}
+                          </label>
+                          <input
+                            type="number"
+                            className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                            value={retryForm.lineTolerancePct}
+                            onChange={(e) =>
+                              updateRetryDraft({
+                                lineTolerancePct:
+                                  parseInt(e.target.value, 10) || 0,
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between pt-2">
+                      <span className="text-sm">{pv.retryAnchorCheck}</span>
+                      <Switch
+                        checked={retryForm.anchorCheck}
+                        onCheckedChange={(v) =>
+                          updateRetryDraft({ anchorCheck: v })
                         }
                       />
                     </div>
+                    {retryForm.anchorCheck && (
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">
+                          {pv.retryAnchorRetries}
+                        </label>
+                        <input
+                          type="number"
+                          className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                          value={retryForm.anchorCheckRetries}
+                          onChange={(e) =>
+                            updateRetryDraft({
+                              anchorCheckRetries:
+                                parseInt(e.target.value, 10) || 1,
+                            })
+                          }
+                        />
+                      </div>
+                    )}
                   </div>
-                )}
-                <div className="flex items-center justify-between pt-2">
-                  <span className="text-sm">{pv.retryAnchorCheck}</span>
-                  <Switch
-                    checked={retryForm.anchorCheck}
-                    onCheckedChange={(v) =>
-                      updateRetryDraft({ anchorCheck: v })
-                    }
-                  />
-                </div>
-                {retryForm.anchorCheck && (
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">
-                      {pv.retryAnchorRetries}
-                    </label>
-                    <input
-                      type="number"
-                      className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                      value={retryForm.anchorCheckRetries}
-                      onChange={(e) =>
-                        updateRetryDraft({
-                          anchorCheckRetries: parseInt(e.target.value, 10) || 1,
-                        })
-                      }
-                    />
-                  </div>
-                )}
-              </div>
 
-              <div className="space-y-4 border-t pt-5">
-                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  {pv.retrySectionDynamic}
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">
-                      {pv.retryMaxRetries}
-                    </label>
-                    <input
-                      type="number"
-                      className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                      value={retryForm.maxRetries}
-                      onChange={(e) =>
-                        updateRetryDraft({
-                          maxRetries: parseInt(e.target.value, 10) || 1,
-                        })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-foreground">
-                      {pv.retryTempBoost}
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                      value={retryForm.retryTempBoost}
-                      onChange={(e) =>
-                        updateRetryDraft({
-                          retryTempBoost: parseFloat(e.target.value) || 0.0,
-                        })
-                      }
-                    />
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">{pv.retryPromptFeedback}</span>
-                  <Switch
-                    checked={retryForm.retryPromptFeedback}
-                    onCheckedChange={(v) =>
-                      updateRetryDraft({ retryPromptFeedback: v })
-                    }
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-4 border-t pt-5">
-                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  {pv.retrySectionCoverage}
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">{pv.retryCoverageCheck}</span>
-                  <Switch
-                    checked={retryForm.coverageCheck}
-                    onCheckedChange={(v) =>
-                      updateRetryDraft({ coverageCheck: v })
-                    }
-                  />
-                </div>
-                {retryForm.coverageCheck && (
-                  <div className="space-y-3">
+                  <div className="space-y-4 border-t pt-5">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      {pv.retrySectionDynamic}
+                    </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1">
                         <label className="text-xs text-muted-foreground">
-                          {pv.retryOutputHitThreshold}
+                          {pv.retryMaxRetries}
                         </label>
                         <input
                           type="number"
                           className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                          value={retryForm.outputHitThreshold}
+                          value={retryForm.maxRetries}
                           onChange={(e) =>
                             updateRetryDraft({
-                              outputHitThreshold:
-                                parseInt(e.target.value, 10) || 0,
+                              maxRetries: parseInt(e.target.value, 10) || 1,
                             })
                           }
                         />
                       </div>
                       <div className="space-y-1">
                         <label className="text-xs text-muted-foreground">
-                          {pv.retryCotCoverageThreshold}
+                          {pv.retryTempBoost}
                         </label>
                         <input
                           type="number"
+                          step="0.01"
                           className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                          value={retryForm.cotCoverageThreshold}
+                          value={retryForm.retryTempBoost}
                           onChange={(e) =>
                             updateRetryDraft({
-                              cotCoverageThreshold:
-                                parseInt(e.target.value, 10) || 0,
+                              retryTempBoost: parseFloat(e.target.value) || 0.0,
                             })
                           }
                         />
                       </div>
                     </div>
-                    <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground">
-                        {pv.retryCoverageRetries}
-                      </label>
-                      <input
-                        type="number"
-                        className="w-full border p-2 rounded text-sm bg-secondary text-center"
-                        value={retryForm.coverageRetries}
-                        onChange={(e) =>
-                          updateRetryDraft({
-                            coverageRetries: parseInt(e.target.value, 10) || 1,
-                          })
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm">{pv.retryPromptFeedback}</span>
+                      <Switch
+                        checked={retryForm.retryPromptFeedback}
+                        onCheckedChange={(v) =>
+                          updateRetryDraft({ retryPromptFeedback: v })
                         }
                       />
                     </div>
                   </div>
-                )}
-              </div>
+
+                  <div className="space-y-4 border-t pt-5">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      {pv.retrySectionCoverage}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm">{pv.retryCoverageCheck}</span>
+                      <Switch
+                        checked={retryForm.coverageCheck}
+                        onCheckedChange={(v) =>
+                          updateRetryDraft({ coverageCheck: v })
+                        }
+                      />
+                    </div>
+                    {retryForm.coverageCheck && (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground">
+                              {pv.retryOutputHitThreshold}
+                            </label>
+                            <input
+                              type="number"
+                              className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                              value={retryForm.outputHitThreshold}
+                              onChange={(e) =>
+                                updateRetryDraft({
+                                  outputHitThreshold:
+                                    parseInt(e.target.value, 10) || 0,
+                                })
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground">
+                              {pv.retryCotCoverageThreshold}
+                            </label>
+                            <input
+                              type="number"
+                              className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                              value={retryForm.cotCoverageThreshold}
+                              onChange={(e) =>
+                                updateRetryDraft({
+                                  cotCoverageThreshold:
+                                    parseInt(e.target.value, 10) || 0,
+                                })
+                              }
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs text-muted-foreground">
+                            {pv.retryCoverageRetries}
+                          </label>
+                          <input
+                            type="number"
+                            className="w-full border p-2 rounded text-sm bg-secondary text-center"
+                            value={retryForm.coverageRetries}
+                            onChange={(e) =>
+                              updateRetryDraft({
+                                coverageRetries:
+                                  parseInt(e.target.value, 10) || 1,
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
             </div>

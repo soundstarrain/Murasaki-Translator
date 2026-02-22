@@ -7,6 +7,7 @@
 *   新增 `murasaki_flow_v2` 独立运行时，包含 Provider/Prompt/Parser/Policy/Chunk 全链路注册与执行，支持从配置组合成可复用 Pipeline。
 *   新增 Pipeline V2 Runner：支持并发执行（含自适应并发 `concurrency=0`）、中断/强杀、断点恢复（resume + cache + fingerprint），并可按需启用质量检查与文本保护。
 *   新增 Flow V2 结构化日志协议与统计上报：统一输出路径、缓存路径、重试事件、告警事件与最终统计。
+*   补充：收敛本地字体权限为仅允许 `local-fonts`，并恢复 `.vscode` 本地调试配置默认不入库策略。
 
 ### API 管理中心（GUI）
 

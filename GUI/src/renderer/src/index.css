@@ -26,6 +26,9 @@
 
 @layer base {
   :root {
+    --font-log-size: 10px;
+    --font-translation-size: 13px;
+
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
 
@@ -311,4 +314,24 @@ select option:checked {
   color: white;
   font-size: 12px;
   font-weight: bold;
+}
+
+/* Three-layer font architecture:
+   --font-ui: overrides the Tailwind font-sans stack for all UI elements
+   --font-log: log viewer / terminal output
+   --font-translation: proofread / translation preview */
+
+/* When --font-ui is set, override Tailwind's font-sans utility */
+.font-sans {
+  font-family: var(--font-ui, -apple-system, BlinkMacSystemFont, "Hiragino Sans", "PingFang SC", "PingFang TC", "Segoe UI", "Microsoft YaHei", "Meiryo", "Noto Sans CJK SC", "Ubuntu", sans-serif);
+}
+
+.log-text {
+  font-family: var(--font-log, "SF Mono", "Menlo", "Cascadia Mono", "Consolas", "Meiryo", "MS Gothic", "SimSun", "Ubuntu Mono", "Noto Sans Mono CJK SC", monospace);
+  font-size: var(--font-log-size, 10px);
+}
+
+.translation-text {
+  font-family: var(--font-translation, "Cascadia Mono", "Consolas", "Meiryo", "MS Gothic", "SimSun", "Courier New", monospace);
+  font-size: var(--font-translation-size, 13px);
 }

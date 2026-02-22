@@ -90,3 +90,6 @@ AGENTS.md
 middleware/remote-sync
 middleware/uploads
 middleware/outputs
+
+.claude
+local

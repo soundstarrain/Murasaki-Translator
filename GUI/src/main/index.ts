@@ -6,6 +6,7 @@ import {
   dialog,
   Notification,
   nativeTheme,
+  session,
 } from "electron";
 import type { IpcMainEvent as ElectronEvent } from "electron";
 import {
@@ -30,7 +31,10 @@ import {
   registerPipelineV2Profiles,
 } from "./pipelineV2Profiles";
 import { stopPipelineV2Server } from "./pipelineV2Server";
-import { registerPipelineV2Runner, stopPipelineV2Runner } from "./pipelineV2Runner";
+import {
+  registerPipelineV2Runner,
+  stopPipelineV2Runner,
+} from "./pipelineV2Runner";
 import { createApiStatsService } from "./apiStatsStore";
 
 let pythonProcess: ChildProcess | null = null;
@@ -456,6 +460,44 @@ function cleanupTempDirectory(): void {
   }
 }
 
+// macOS GPU 监控 sudo 配置
+async function setupMacOSGPUMonitoring(): Promise<void> {
+  if (process.platform !== "darwin") return;
+
+  try {
+    const { execSync, exec } = require("child_process");
+
+    // 检查是否已配置免密 sudo
+    try {
+      execSync("sudo -n powermetrics --help", {
+        timeout: 2000,
+        stdio: "ignore",
+      });
+      console.log("[GPU Monitor] powermetrics sudo already configured");
+      return;
+    } catch {
+      console.log(
+        "[GPU Monitor] powermetrics sudo not configured, prompting user...",
+      );
+    }
+
+    // 使用 osascript 弹出 macOS 原生授权对话框
+    const username = require("os").userInfo().username;
+    const sudoersContent = `${username} ALL=(ALL) NOPASSWD: /usr/bin/powermetrics`;
+    const command = `osascript -e 'do shell script "mkdir -p /etc/sudoers.d && echo \\"${sudoersContent}\\" > /etc/sudoers.d/murasaki-powermetrics && chmod 0440 /etc/sudoers.d/murasaki-powermetrics" with administrator privileges'`;
+
+    exec(command, (error: NodeJS.ErrnoException | null) => {
+      if (error) {
+        console.log("[GPU Monitor] User cancelled or failed:", error.message);
+      } else {
+        console.log("[GPU Monitor] powermetrics sudo configured successfully");
+      }
+    });
+  } catch (error) {
+    console.error("[GPU Monitor] Setup error:", error);
+  }
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
@@ -472,6 +514,18 @@ app.whenReady().then(() => {
   app.on("browser-window-created", (_, window) => {
     optimizer.watchWindowShortcuts(window);
   });
+
+  // Grant only local-fonts permission for queryLocalFonts() API.
+  session.defaultSession.setPermissionRequestHandler(
+    (_webContents, permission, callback) => {
+      callback((permission as string) === "local-fonts");
+    },
+  );
+  session.defaultSession.setPermissionCheckHandler(
+    (_webContents, permission) => {
+      return (permission as string) === "local-fonts";
+    },
+  );
 
   createWindow();
   const resolveProfilesDir = () => {
@@ -525,6 +579,9 @@ app.whenReady().then(() => {
       });
     },
   });
+
+  // macOS: 配置 GPU 监控 sudo（在窗口创建后）
+  setupMacOSGPUMonitoring();
 
   app.on("activate", function () {
     // On macOS it's common to re-create a window in the app when the
@@ -790,6 +847,24 @@ const spawnPythonProcess = (
     // Python mode: python script.py args
     cmd = pythonInfo.path;
     finalArgs = args;
+
+    // debugpy injection: when ELECTRON_PYTHON_DEBUG=1, wrap with debugpy so a
+    // VSCode debugger can attach to the spawned Python process on port 5678.
+    if (process.env.ELECTRON_PYTHON_DEBUG === "1") {
+      const debugPort = process.env.ELECTRON_PYTHON_DEBUG_PORT || "5678";
+      finalArgs = [
+        "-m",
+        "debugpy",
+        "--listen",
+        debugPort,
+        "--wait-for-client",
+        ...finalArgs,
+      ];
+      console.log(
+        `[Spawn Python] debugpy enabled – waiting for debugger on port ${debugPort}`,
+      );
+    }
+
     console.log(`[Spawn Python] ${cmd} ${args[0]}... (Env Sanitized)`);
   }
 
