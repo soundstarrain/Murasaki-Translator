@@ -447,6 +447,7 @@ const HIDDEN_PROFILE_IDS: Partial<Record<ProfileKind, Set<string>>> = {
 const DEFAULT_TAGGED_PATTERN = "^@@(?P<id>\\d+)@@(?P<text>.*)$";
 const DEFAULT_POLICY_ID = "line_tolerant";
 const DEFAULT_CHUNK_ID = "chunk_legacy_doc";
+const DEFAULT_LINE_CHUNK_ID = "chunk_line_default";
 const HIDE_ALL_PROFILE_IDS = false;
 const HIDE_PROFILE_ID_DISPLAY = new Set([DEFAULT_POLICY_ID, DEFAULT_CHUNK_ID]);
 const DEFAULT_PROTECTED_PROFILE_IDS = new Set([
@@ -506,7 +507,11 @@ const DEFAULT_PROFILE_NAME_ALIASES: Record<string, string[]> = {
     "默认分行策略",
     "默认行配置",
   ],
+  line_quality: ["Line Quality Guard", "行质量守卫"],
+  line_strict: ["Strict Line Policy", "行严格策略"],
   chunk_line_default: ["Default Line Chunk"],
+  chunk_line_loose: ["Line Loose Chunk", "宽松分行分块"],
+  chunk_line_strict: ["Line Strict Chunk", "严格分行分块"],
   chunk_legacy_doc: ["默认分块策略", "Default Chunk Strategy", "Default Chunk"],
 };
 
@@ -2394,14 +2399,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
 
   const showLineChunkLabel = useMemo(() => {
     let count = 0;
-    for (const id of profileIndex.chunk) {
+    for (const id of visibleProfileIndex.chunk) {
       if (chunkTypeIndex[id] === "line") {
         count += 1;
         if (count > 1) return true;
       }
     }
     return false;
-  }, [profileIndex.chunk, chunkTypeIndex]);
+  }, [visibleProfileIndex.chunk, chunkTypeIndex]);
 
   const getStrategyLabel = (lineId: string, chunkId: string) => {
     const lineLabel = lineId ? getProfileLabel("policy", lineId) : "";
@@ -4023,9 +4028,9 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         (result?.yaml ? (safeLoadYaml(result.yaml) as any) : null);
       const nextData: any = { ...(data || {}), id: pipelineId };
       nextData.provider = providerId;
-      const fallbackPrompt = profileIndex.prompt[0] || "";
-      const fallbackParser = profileIndex.parser[0] || "";
-      const fallbackChunk = profileIndex.chunk[0] || "";
+      const fallbackPrompt = visibleProfileIndex.prompt[0] || "";
+      const fallbackParser = visibleProfileIndex.parser[0] || "";
+      const fallbackChunk = visibleProfileIndex.chunk[0] || "";
       if (!nextData.prompt && fallbackPrompt) nextData.prompt = fallbackPrompt;
       if (!nextData.parser && fallbackParser) nextData.parser = fallbackParser;
       if (!nextData.chunk_policy && fallbackChunk)
@@ -4038,7 +4043,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           nextData.apply_line_policy = hasLinePolicy;
         }
         if (nextData.apply_line_policy && !hasLinePolicy) {
-          const fallbackPolicy = profileIndex.policy[0] || "";
+          const fallbackPolicy = visibleProfileIndex.policy[0] || "";
           if (fallbackPolicy) nextData.line_policy = fallbackPolicy;
         }
       } else {
@@ -8313,11 +8318,49 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       }
     };
 
-    const strategyPolicyIds = orderProfileIds("policy", profileIndex.policy);
-    const strategyChunkIds = orderProfileIds("chunk", profileIndex.chunk);
+    const strategyPolicyIds = orderProfileIds(
+      "policy",
+      visibleProfileIndex.policy,
+    );
+    const strategyChunkIds = orderProfileIds(
+      "chunk",
+      visibleProfileIndex.chunk,
+    );
+    const allStrategyPolicyIds = orderProfileIds("policy", profileIndex.policy);
+    const allStrategyChunkIds = orderProfileIds("chunk", profileIndex.chunk);
 
     const resolveLinePolicyFallback = () =>
-      pipelineComposer.linePolicy || strategyPolicyIds[0] || "";
+      pipelineComposer.linePolicy ||
+      strategyPolicyIds[0] ||
+      (allStrategyPolicyIds.includes(DEFAULT_POLICY_ID)
+        ? DEFAULT_POLICY_ID
+        : allStrategyPolicyIds[0] || "");
+
+    const resolveDefaultLineChunk = () => {
+      if (allStrategyChunkIds.includes(DEFAULT_LINE_CHUNK_ID)) {
+        return DEFAULT_LINE_CHUNK_ID;
+      }
+      return (
+        allStrategyChunkIds.find(
+          (chunkId) => inferChunkType(chunkId) === "line",
+        ) || ""
+      );
+    };
+
+    const resolveDefaultBlockChunk = () => {
+      if (allStrategyChunkIds.includes(DEFAULT_CHUNK_ID)) {
+        return DEFAULT_CHUNK_ID;
+      }
+      return (
+        strategyChunkIds.find(
+          (chunkId) => inferChunkType(chunkId) === "block",
+        ) ||
+        allStrategyChunkIds.find(
+          (chunkId) => inferChunkType(chunkId) === "block",
+        ) ||
+        ""
+      );
+    };
 
     const buildStrategyOptions = () => {
       const options: Array<{
@@ -8325,29 +8368,64 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         label: string;
         disabled?: boolean;
       }> = [];
+
       const lineCandidates = strategyPolicyIds.length
         ? strategyPolicyIds
-        : [""];
-      const lineFallback = resolveLinePolicyFallback();
-      strategyChunkIds.forEach((chunkId) => {
-        const chunkType = inferChunkType(chunkId);
-        if (chunkType === "line") {
-          lineCandidates.forEach((linePolicy) => {
-            const resolvedLinePolicy = linePolicy || lineFallback;
-            options.push({
-              value: encodeStrategyCombo(resolvedLinePolicy, chunkId),
-              label: getStrategyLabel(resolvedLinePolicy, chunkId),
-              disabled: !resolvedLinePolicy,
-            });
-          });
-        } else {
+        : resolveLinePolicyFallback()
+          ? [resolveLinePolicyFallback()]
+          : [];
+      const visibleLineChunks = strategyChunkIds.filter(
+        (chunkId) => inferChunkType(chunkId) === "line",
+      );
+      const lineChunksForOptions = visibleLineChunks.length
+        ? visibleLineChunks
+        : resolveDefaultLineChunk()
+          ? [resolveDefaultLineChunk()]
+          : [];
+
+      for (const chunkId of lineChunksForOptions) {
+        if (!lineCandidates.length) {
           options.push({
             value: encodeStrategyCombo("", chunkId),
             label: getStrategyLabel("", chunkId),
+            disabled: true,
+          });
+          continue;
+        }
+        for (const linePolicyId of lineCandidates) {
+          options.push({
+            value: encodeStrategyCombo(linePolicyId, chunkId),
+            label: getStrategyLabel(linePolicyId, chunkId),
+            disabled: false,
           });
         }
-      });
-      return options;
+      }
+
+      const visibleBlockChunks = strategyChunkIds.filter(
+        (chunkId) => inferChunkType(chunkId) === "block",
+      );
+      const blockChunksForOptions = visibleBlockChunks.length
+        ? visibleBlockChunks
+        : resolveDefaultBlockChunk()
+          ? [resolveDefaultBlockChunk()]
+          : [];
+      for (const blockChunkId of blockChunksForOptions) {
+        options.push({
+          value: encodeStrategyCombo("", blockChunkId),
+          label: getStrategyLabel("", blockChunkId),
+          disabled: false,
+        });
+      }
+
+      // Guard against accidental duplicates when ids are reused.
+      const deduped: typeof options = [];
+      const seenValues = new Set<string>();
+      for (const item of options) {
+        if (seenValues.has(item.value)) continue;
+        seenValues.add(item.value);
+        deduped.push(item);
+      }
+      return deduped;
     };
 
     const strategyOptions = buildStrategyOptions();
@@ -8388,7 +8466,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
         const nextLinePolicy =
           linePolicy ||
           pipelineComposer.linePolicy ||
-          strategyPolicyIds[0] ||
+          resolveLinePolicyFallback() ||
           "";
         applyPipelineChange({
           linePolicy: nextLinePolicy,
@@ -9301,8 +9379,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     const customForKind = customTemplates[kind] || [];
     const hiddenSet = new Set(hiddenTemplates[kind] || []);
     const templates = [...builtInTemplates, ...customForKind];
+    // Template visibility is managed by template hide state only.
+    // Built-in profile hiding (list/editor scope) should not affect template library.
     const visibleTemplates = templates.filter(
-      (item) => !hiddenSet.has(item.id) && !isHiddenProfile(kind, item.id),
+      (item) => !hiddenSet.has(item.id),
     );
     return visibleTemplates.map((item) => {
       const meta = getTemplateMeta(item.id, item.meta);
@@ -9389,7 +9469,14 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
                     <h3 className="font-bold text-base leading-tight line-clamp-2 text-foreground/90 group-hover:text-foreground dark:group-hover:text-primary transition-colors">
                       {name || texts.untitledProfile}
                     </h3>
-                    <p className="text-[10px] uppercase font-mono text-muted-foreground/60 tracking-wider">
+                    <p
+                      className={cn(
+                        "text-[10px] uppercase font-mono text-muted-foreground/60 tracking-wider",
+                        HIDE_ALL_PROFILE_IDS || HIDE_PROFILE_ID_DISPLAY.has(id)
+                          ? "opacity-0"
+                          : "opacity-100",
+                      )}
+                    >
                       {id.slice(0, 12)}
                     </p>
                   </div>

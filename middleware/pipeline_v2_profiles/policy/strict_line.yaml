@@ -1,0 +1,5 @@
+id: line_strict
+name: Strict Line Policy
+type: strict
+options:
+  on_mismatch: error

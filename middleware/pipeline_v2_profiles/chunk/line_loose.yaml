@@ -1,0 +1,6 @@
+id: chunk_line_loose
+name: Line Loose Chunk
+chunk_type: line
+options:
+  strict: false
+  keep_empty: false

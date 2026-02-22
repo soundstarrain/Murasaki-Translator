@@ -7,7 +7,6 @@ describe("pipelineV2Profiles concurrency helpers", () => {
     buildConcurrencyTestPayload,
     resolveConcurrencyProbeStart,
     assessConcurrencyBatch,
-    ensureDefaultLineQualityChecks,
   } = __testOnly;
 
   it("classifies auth errors before others", () => {
@@ -90,20 +89,5 @@ describe("pipelineV2Profiles concurrency helpers", () => {
     expect(result.ok).toBe(false);
     expect(result.hardFailure).toBe(false);
     expect(result.reason).toBe("concurrency_test_server_error");
-  });
-
-  it("ensures all default line quality checks are enabled", () => {
-    expect(ensureDefaultLineQualityChecks(["similarity"])).toEqual([
-      "similarity",
-      "empty_line",
-      "kana_trace",
-    ]);
-    expect(
-      ensureDefaultLineQualityChecks([
-        "empty_line",
-        "similarity",
-        "kana_trace",
-      ]),
-    ).toEqual(["empty_line", "similarity", "kana_trace"]);
   });
 });

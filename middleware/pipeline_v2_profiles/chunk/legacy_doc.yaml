@@ -1,6 +1,6 @@
 id: chunk_legacy_doc
 name: 默认分块策略
-chunk_type: legacy
+chunk_type: block
 options:
   mode: chunk
   target_chars: 1000

@@ -1,5 +1,6 @@
-id: parser_tagged_line
-name: Tagged Line Parser
+﻿id: parser_tagged_line
+name: 行号标记解析
 type: tagged_line
 options:
   pattern: "^@@(?P<id>\\d+)@@(?P<text>.*)$"
+

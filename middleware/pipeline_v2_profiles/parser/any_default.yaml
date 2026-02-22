@@ -1,15 +1,15 @@
-﻿id: parser_any_default
-name: Any Parser
+id: parser_any_default
+name: 多解析级联（JSONL优先）
 type: any
 options:
   parsers:
+    - type: jsonl
+      options:
+        path: translation
     - type: json_object
       options:
         path: translation
     - type: json_array
-    - type: jsonl
-      options:
-        path: translation
     - type: tagged_line
       options:
         pattern: "^@@(?P<id>\\d+)@@(?P<text>.*)$"

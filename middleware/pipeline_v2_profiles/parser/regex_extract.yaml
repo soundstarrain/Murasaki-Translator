@@ -1,8 +1,9 @@
-id: parser_regex_extract
-name: Regex Extract Parser
+﻿id: parser_regex_extract
+name: 正则提取解析
 type: regex
 options:
   pattern: "(?s)```(?:text|translation)?\\n(?P<content>.*?)\\n```"
   group: content
   flags:
     - dotall
+

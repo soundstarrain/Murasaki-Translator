@@ -605,18 +605,16 @@ describe("apiManager view i18n", () => {
     expect(missing).toEqual([]);
   });
 
-  it("keeps only supported chunk strategy labels", () => {
-    const removedKeys = [
-      "chunk_line_strict",
-      "chunk_line_loose",
-      "chunk_line_keep",
-    ];
+  it("keeps supported chunk strategy labels", () => {
+    const removedKeys = ["chunk_line_keep"];
     for (const lang of Object.values(translations)) {
       const profileNames = lang.apiManager.profileNames as Record<
         string,
         string
       >;
       expect(profileNames.chunk_legacy_doc).toBeTruthy();
+      expect(profileNames.chunk_line_strict).toBeTruthy();
+      expect(profileNames.chunk_line_loose).toBeTruthy();
       for (const key of removedKeys) {
         expect(profileNames[key]).toBeUndefined();
       }
@@ -815,7 +813,7 @@ describe("apiManager view profile index", () => {
 });
 
 describe("apiManager view segmentation strategy", () => {
-  it("builds strategy options from full policy/chunk index", async () => {
+  it("builds scheme strategy options from visible profiles with default fallback", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const filePath = path.resolve(
@@ -826,9 +824,16 @@ describe("apiManager view segmentation strategy", () => {
       "ApiManagerView.tsx",
     );
     const content = fs.readFileSync(filePath, "utf-8");
-    expect(content).toContain('orderProfileIds("policy", profileIndex.policy)');
-    expect(content).toContain('orderProfileIds("chunk", profileIndex.chunk)');
+    expect(content).toContain("DEFAULT_LINE_CHUNK_ID");
+    expect(content).toContain("resolveDefaultLineChunk");
+    expect(content).toContain("resolveDefaultBlockChunk");
+    expect(content).toContain("visibleProfileIndex.policy");
+    expect(content).toContain("visibleProfileIndex.chunk");
     expect(content).toContain("lineCandidates");
+    expect(content).toContain("visibleLineChunks");
+    expect(content).toContain("visibleBlockChunks");
+    expect(content).toContain("lineChunksForOptions");
+    expect(content).toContain("blockChunksForOptions");
   });
 });
 
