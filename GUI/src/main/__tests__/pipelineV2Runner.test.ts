@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { delimiter } from "path";
 import { __testOnly } from "../pipelineV2Runner";
 
 describe("pipelineV2Runner buffered output", () => {
@@ -37,6 +38,52 @@ describe("pipelineV2Runner bundle args", () => {
       "--file",
       "demo.txt",
     ]);
+  });
+});
+
+describe("pipelineV2Runner execution args", () => {
+  it("uses script args directly for python runtime", () => {
+    const args = ["main.py", "--file", "demo.txt"];
+    expect(
+      __testOnly.resolveExecutionArgs(
+        { type: "python", path: "python.exe" },
+        args,
+      ),
+    ).toEqual(args);
+  });
+
+  it("uses bundle resolver for bundled runtime", () => {
+    const args = ["main.py", "--file", "demo.txt"];
+    expect(
+      __testOnly.resolveExecutionArgs(
+        { type: "bundle", path: "murasaki-engine" },
+        args,
+      ),
+    ).toEqual(["--file", "demo.txt"]);
+  });
+});
+
+describe("pipelineV2Runner python path env", () => {
+  it("prepends middleware path to PYTHONPATH", () => {
+    const middlewarePath = "middleware_path";
+    const existingPath = "existing_pkg_path";
+    const env = __testOnly.withMiddlewarePythonPath(
+      { PYTHONPATH: existingPath },
+      middlewarePath,
+    );
+    expect(env.PYTHONPATH).toBe(`${middlewarePath}${delimiter}${existingPath}`);
+    expect(env.PYTHONIOENCODING).toBe("utf-8");
+  });
+
+  it("does not duplicate middleware path when already present", () => {
+    const middlewarePath = "middleware_path";
+    const existingPath = "existing_pkg_path";
+    const originalPythonPath = `${middlewarePath}${delimiter}${existingPath}`;
+    const env = __testOnly.withMiddlewarePythonPath(
+      { PYTHONPATH: originalPythonPath },
+      middlewarePath,
+    );
+    expect(env.PYTHONPATH).toBe(originalPythonPath);
   });
 });
 

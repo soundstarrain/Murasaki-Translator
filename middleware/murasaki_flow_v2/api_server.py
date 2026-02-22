@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +16,16 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
+
+
+def _bootstrap_package_path() -> None:
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    middleware_dir = os.path.dirname(package_dir)
+    if middleware_dir not in sys.path:
+        sys.path.insert(0, middleware_dir)
+
+
+_bootstrap_package_path()
 
 from murasaki_flow_v2.registry.profile_store import ProfileStore
 from murasaki_flow_v2.validation import validate_profile

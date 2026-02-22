@@ -1,5 +1,5 @@
 import { spawn, ChildProcessWithoutNullStreams } from "child_process";
-import { basename, join } from "path";
+import { basename, delimiter, join } from "path";
 import net from "net";
 
 type PythonPath = { type: "python" | "bundle"; path: string };
@@ -17,8 +17,7 @@ type ServerState = {
 };
 
 const state: ServerState = {};
-const PYTHON_INTERPRETER_NAME_RE =
-  /^python(?:\d+(?:\.\d+)*)?(?:\.exe)?$/i;
+const PYTHON_INTERPRETER_NAME_RE = /^python(?:\d+(?:\.\d+)*)?(?:\.exe)?$/i;
 
 export type PipelineV2Status = {
   mode: "server" | "local";
@@ -98,6 +97,37 @@ const resolveBundleArgs = (
   return scriptArgs.slice(1);
 };
 
+const resolveExecutionArgs = (
+  python: PythonPath,
+  scriptArgs: string[],
+): string[] => {
+  if (python.type === "bundle") {
+    return resolveBundleArgs(python.path, scriptArgs);
+  }
+  // Python embeddable runtime on Windows may fail to resolve package modules with -m.
+  return scriptArgs;
+};
+
+const withMiddlewarePythonPath = (
+  env: NodeJS.ProcessEnv,
+  middlewarePath: string,
+): NodeJS.ProcessEnv => {
+  const nextEnv: NodeJS.ProcessEnv = {
+    ...env,
+    PYTHONIOENCODING: "utf-8",
+  };
+  const existingRaw = String(nextEnv.PYTHONPATH || "");
+  const existingEntries = existingRaw
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!existingEntries.includes(middlewarePath)) {
+    existingEntries.unshift(middlewarePath);
+  }
+  nextEnv.PYTHONPATH = existingEntries.join(delimiter);
+  return nextEnv;
+};
+
 const pickFreePort = (): Promise<number> =>
   new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -171,22 +201,12 @@ export const ensurePipelineV2Server = async (
       "--port",
       String(port),
     ];
-    const moduleArgs = [
-      "-m",
-      "murasaki_flow_v2.api_server",
-      "--profiles-dir",
-      profilesDir,
-      "--host",
-      host,
-      "--port",
-      String(port),
-    ];
 
     let stderrBuffer = "";
-    const child =
-      python.type === "bundle"
-        ? spawn(python.path, resolveBundleArgs(python.path, scriptArgs))
-        : spawn(python.path, moduleArgs, { cwd: middlewarePath });
+    const child = spawn(python.path, resolveExecutionArgs(python, scriptArgs), {
+      cwd: middlewarePath,
+      env: withMiddlewarePythonPath(process.env, middlewarePath),
+    });
 
     state.proc = child;
     state.baseUrl = baseUrl;
@@ -232,4 +252,6 @@ export const ensurePipelineV2Server = async (
 
 export const __testOnly = {
   resolveBundleArgs,
+  resolveExecutionArgs,
+  withMiddlewarePythonPath,
 };

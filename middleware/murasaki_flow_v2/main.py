@@ -6,6 +6,16 @@ import argparse
 import os
 import sys
 
+
+def _bootstrap_package_path() -> None:
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    middleware_dir = os.path.dirname(package_dir)
+    if middleware_dir not in sys.path:
+        sys.path.insert(0, middleware_dir)
+
+
+_bootstrap_package_path()
+
 # Windows 控制台 UTF-8 兼容（与 V1 一致）
 try:
     sys.stdout.reconfigure(encoding='utf-8')

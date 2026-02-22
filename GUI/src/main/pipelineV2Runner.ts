@@ -1,7 +1,7 @@
 import { ipcMain, BrowserWindow } from "electron";
 import { spawn, ChildProcess } from "child_process";
 import { existsSync, unlinkSync, writeFileSync } from "fs";
-import { basename, extname, join } from "path";
+import { basename, delimiter, extname, join } from "path";
 import { validatePipelineRun } from "./pipelineV2Validation";
 import type { ApiStatsEventInput } from "./apiStatsStore";
 
@@ -11,9 +11,7 @@ type RunnerDeps = {
   getPythonPath: () => PythonPath;
   getMiddlewarePath: () => string;
   getMainWindow: () => BrowserWindow | null;
-  recordApiStatsEvent?: (
-    event: ApiStatsEventInput,
-  ) => void | Promise<void>;
+  recordApiStatsEvent?: (event: ApiStatsEventInput) => void | Promise<void>;
   sendLog: (payload: {
     runId: string;
     message: string;
@@ -27,8 +25,7 @@ let stopRequested = false;
 let activeStopFlagPath: string | null = null;
 let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
 const FORCE_KILL_TIMEOUT_MS = 15000;
-const PYTHON_INTERPRETER_NAME_RE =
-  /^python(?:\d+(?:\.\d+)*)?(?:\.exe)?$/i;
+const PYTHON_INTERPRETER_NAME_RE = /^python(?:\d+(?:\.\d+)*)?(?:\.exe)?$/i;
 
 const clearForceKillTimer = () => {
   if (!forceKillTimer) return;
@@ -115,6 +112,37 @@ const resolveBundleArgs = (
     return scriptArgs;
   }
   return scriptArgs.slice(1);
+};
+
+const resolveExecutionArgs = (
+  python: PythonPath,
+  scriptArgs: string[],
+): string[] => {
+  if (python.type === "bundle") {
+    return resolveBundleArgs(python.path, scriptArgs);
+  }
+  // Python embeddable runtime on Windows may fail to resolve package modules with -m.
+  return scriptArgs;
+};
+
+const withMiddlewarePythonPath = (
+  env: NodeJS.ProcessEnv,
+  middlewarePath: string,
+): NodeJS.ProcessEnv => {
+  const nextEnv: NodeJS.ProcessEnv = {
+    ...env,
+    PYTHONIOENCODING: "utf-8",
+  };
+  const existingRaw = String(nextEnv.PYTHONPATH || "");
+  const existingEntries = existingRaw
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!existingEntries.includes(middlewarePath)) {
+    existingEntries.unshift(middlewarePath);
+  }
+  nextEnv.PYTHONPATH = existingEntries.join(delimiter);
+  return nextEnv;
 };
 
 const API_STATS_EVENT_PREFIX = "JSON_API_STATS_EVENT:";
@@ -222,18 +250,6 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
         "--run-id",
         runId,
       ];
-      const moduleArgs = [
-        "-m",
-        "murasaki_flow_v2.main",
-        "--file",
-        filePath,
-        "--pipeline",
-        pipelineId,
-        "--profiles-dir",
-        profilesDir,
-        "--run-id",
-        runId,
-      ];
       const stopFlagPath = join(
         middlewarePath,
         `temp_flowv2_stop_${runId}.flag`,
@@ -246,7 +262,6 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
         console.warn("[FlowV2] Failed to clear stale stop flag:", e);
       }
       scriptArgs.push("--stop-flag", stopFlagPath);
-      moduleArgs.push("--stop-flag", stopFlagPath);
       let resolvedOutputPath = outputPath;
       if (!resolvedOutputPath && outputDir && existsSync(outputDir)) {
         const ext = extname(filePath);
@@ -258,7 +273,6 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
       }
       if (resolvedOutputPath) {
         scriptArgs.push("--output", resolvedOutputPath);
-        moduleArgs.push("--output", resolvedOutputPath);
       }
 
       const temporaryRulePaths: string[] = [];
@@ -269,7 +283,11 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
               unlinkSync(path);
             }
           } catch (e) {
-            console.warn("[FlowV2] Failed to cleanup temp rules file:", path, e);
+            console.warn(
+              "[FlowV2] Failed to cleanup temp rules file:",
+              path,
+              e,
+            );
           }
         }
         temporaryRulePaths.length = 0;
@@ -293,7 +311,6 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
       }
       if (activeRulesPrePath) {
         scriptArgs.push("--rules-pre", activeRulesPrePath);
-        moduleArgs.push("--rules-pre", activeRulesPrePath);
       }
 
       let activeRulesPostPath = rulesPostPath;
@@ -317,41 +334,31 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
       }
       if (activeRulesPostPath) {
         scriptArgs.push("--rules-post", activeRulesPostPath);
-        moduleArgs.push("--rules-post", activeRulesPostPath);
       }
       if (glossaryPath) {
         scriptArgs.push("--glossary", glossaryPath);
-        moduleArgs.push("--glossary", glossaryPath);
       }
       if (sourceLang) {
         scriptArgs.push("--source-lang", sourceLang);
-        moduleArgs.push("--source-lang", sourceLang);
       }
       if (enableQuality === true) {
         scriptArgs.push("--enable-quality");
-        moduleArgs.push("--enable-quality");
       } else if (enableQuality === false) {
         scriptArgs.push("--disable-quality");
-        moduleArgs.push("--disable-quality");
       }
       if (textProtect === true) {
         scriptArgs.push("--text-protect");
-        moduleArgs.push("--text-protect");
       } else if (textProtect === false) {
         scriptArgs.push("--no-text-protect");
-        moduleArgs.push("--no-text-protect");
       }
       if (resume) {
         scriptArgs.push("--resume");
-        moduleArgs.push("--resume");
       }
       if (cacheDir && existsSync(cacheDir)) {
         scriptArgs.push("--cache-dir", cacheDir);
-        moduleArgs.push("--cache-dir", cacheDir);
       }
       if (saveCache === false) {
         scriptArgs.push("--no-cache");
-        moduleArgs.push("--no-cache");
       }
 
       stopRequested = false;
@@ -376,16 +383,10 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
         };
         let child: ChildProcess;
         try {
-          child =
-            python.type === "bundle"
-              ? spawn(python.path, resolveBundleArgs(python.path, scriptArgs))
-              : spawn(python.path, moduleArgs, {
-                  cwd: middlewarePath,
-                  env: {
-                    ...process.env,
-                    PYTHONIOENCODING: "utf-8",
-                  },
-                });
+          child = spawn(python.path, resolveExecutionArgs(python, scriptArgs), {
+            cwd: middlewarePath,
+            env: withMiddlewarePythonPath(process.env, middlewarePath),
+          });
         } catch (err) {
           console.error("[FlowV2] Spawn failed:", err);
           const win = deps.getMainWindow();
@@ -424,17 +425,18 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
               const enrichedEvent: ApiStatsEventInput = {
                 ...statsEvent,
                 runId:
-                  typeof statsEvent.runId === "string" && statsEvent.runId.trim()
+                  typeof statsEvent.runId === "string" &&
+                  statsEvent.runId.trim()
                     ? statsEvent.runId
                     : runId,
                 source:
                   typeof statsEvent.source === "string" &&
-                    statsEvent.source.trim()
+                  statsEvent.source.trim()
                     ? statsEvent.source
                     : "translation_run",
                 origin:
                   typeof statsEvent.origin === "string" &&
-                    statsEvent.origin.trim()
+                  statsEvent.origin.trim()
                     ? statsEvent.origin
                     : "pipeline_v2_runner",
               };
@@ -536,5 +538,7 @@ export const registerPipelineV2Runner = (deps: RunnerDeps) => {
 export const __testOnly = {
   flushBufferedLines,
   resolveBundleArgs,
+  resolveExecutionArgs,
+  withMiddlewarePythonPath,
   parseApiStatsEventLine,
 };
