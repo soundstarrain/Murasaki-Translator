@@ -6,13 +6,88 @@ import json
 import subprocess
 import sys
 import re
+import shutil
 
 
 def _windows_creationflags():
     return subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
 
 
+def _run_windows_command(args, timeout=5):
+    try:
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=_windows_creationflags()
+        )
+    except Exception:
+        return None
+
+
+def _parse_bytes_to_gb(raw_value):
+    if raw_value is None:
+        return 0.0
+    try:
+        text = str(raw_value).strip()
+        if not text:
+            return 0.0
+        return int(float(text)) / (1024**3)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _classify_gpu_name(name, vram_gb=0.0):
+    upper_name = str(name or "").upper()
+
+    if 'NVIDIA' in upper_name:
+        return {
+            "backend": "cuda",
+            "is_unified_memory": False,
+            "priority": 300
+        }
+
+    if 'AMD' in upper_name or 'RADEON' in upper_name or 'ATI' in upper_name:
+        integrated_hint = 'APU' in upper_name or 'RADEON(TM) GRAPHICS' in upper_name
+        return {
+            "backend": "vulkan",
+            "is_unified_memory": bool(vram_gb <= 0 and integrated_hint),
+            "priority": 220 if vram_gb > 0 else 180
+        }
+
+    if 'INTEL' in upper_name:
+        is_arc = 'ARC' in upper_name
+        integrated_hint = any(
+            token in upper_name for token in ['UHD', 'IRIS', 'HD GRAPHICS', 'XE GRAPHICS']
+        )
+        return {
+            "backend": "vulkan",
+            "is_unified_memory": bool(vram_gb <= 0 and (integrated_hint or not is_arc)),
+            "priority": 210 if is_arc else 160
+        }
+
+    return {
+        "backend": "vulkan",
+        "is_unified_memory": False,
+        "priority": 120 if vram_gb > 0 else 80
+    }
+
+
+def _pick_best_gpu_candidate(candidates):
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda item: (item["priority"], item["vram_gb"]))
+    return {
+        "name": best["name"],
+        "vram_gb": round(best["vram_gb"], 1),
+        "backend": best["backend"],
+        "is_unified_memory": best["is_unified_memory"]
+    }
+
+
 def _parse_windows_gpu_rows(rows):
+    candidates = []
     for row in rows:
         name = str(row.get('Name', '')).strip()
         if not name:
@@ -20,30 +95,16 @@ def _parse_windows_gpu_rows(rows):
         if 'Microsoft' in name or 'Basic' in name:
             continue
 
-        vram_gb = 0.0
-        adapter_ram = row.get('AdapterRAM')
-        if adapter_ram is not None:
-            try:
-                vram_gb = int(str(adapter_ram).strip()) / (1024**3)
-            except (ValueError, TypeError):
-                vram_gb = 0.0
-
-        backend = "vulkan"
-        upper_name = name.upper()
-        if 'NVIDIA' in upper_name:
-            backend = "cuda"
-        elif 'AMD' in upper_name or 'RADEON' in upper_name:
-            backend = "vulkan"
-        elif 'INTEL' in upper_name:
-            backend = "vulkan"
-
-        return {
+        vram_gb = _parse_bytes_to_gb(row.get('AdapterRAM'))
+        classified = _classify_gpu_name(name, vram_gb)
+        candidates.append({
             "name": name,
-            "vram_gb": round(vram_gb, 1),
-            "backend": backend,
-            "is_unified_memory": False
-        }
-    return None
+            "vram_gb": vram_gb,
+            "backend": classified["backend"],
+            "is_unified_memory": classified["is_unified_memory"],
+            "priority": classified["priority"]
+        })
+    return _pick_best_gpu_candidate(candidates)
 
 
 def get_gpu_info():
@@ -109,69 +170,24 @@ def _get_macos_gpu_info():
 
 
 def _get_windows_gpu_info():
-    """Windows: 优先 nvidia-smi，回退 wmic / PowerShell CIM"""
+    """Windows: 优先 nvidia-smi，回退 PowerShell CIM，再回退 WMIC"""
     # 1. 尝试 NVIDIA GPU
     nvidia_info = _get_nvidia_gpu_info()
     if nvidia_info["vram_gb"] > 0:
         return nvidia_info
-    
-    # 2. 回退到 wmic 获取任意 GPU
-    try:
-        result = subprocess.run(
-            ['wmic', 'path', 'win32_VideoController', 'get', 'Name,AdapterRAM', '/format:csv'],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            creationflags=_windows_creationflags()
-        )
-        if result.returncode == 0:
-            lines = [l.strip() for l in result.stdout.strip().split('\n') if l.strip() and 'Node' not in l]
-            for line in lines:
-                parts = line.split(',')
-                if len(parts) >= 3:
-                    adapter_ram = parts[1].strip()
-                    name = parts[2].strip()
-                    
-                    # 跳过虚拟显卡
-                    if 'Microsoft' in name or 'Basic' in name:
-                        continue
-                    
-                    vram_gb = 0.0
-                    if adapter_ram and adapter_ram.isdigit():
-                        vram_gb = int(adapter_ram) / (1024**3)
-                    
-                    backend = "vulkan"
-                    if 'NVIDIA' in name.upper():
-                        backend = "cuda"
-                    elif 'AMD' in name.upper() or 'RADEON' in name.upper():
-                        backend = "vulkan"
-                    elif 'INTEL' in name.upper():
-                        backend = "vulkan"
-                    
-                    return {
-                        "name": name,
-                        "vram_gb": round(vram_gb, 1),
-                        "backend": backend,
-                        "is_unified_memory": False
-                    }
-    except Exception:
-        pass
 
-    # 3. WMIC 在新版 Windows 可能缺失，回退 PowerShell CIM
+    # 2. 优先 PowerShell CIM（WMIC 在新版 Windows 可能缺失/卡顿）
     try:
-        result = subprocess.run(
+        result = _run_windows_command(
             [
                 'powershell',
                 '-NoProfile',
                 '-Command',
                 'Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json -Compress'
             ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            creationflags=_windows_creationflags()
+            timeout=8
         )
-        if result.returncode == 0 and result.stdout.strip():
+        if result and result.returncode == 0 and result.stdout.strip():
             parsed = json.loads(result.stdout.strip())
             rows = parsed if isinstance(parsed, list) else [parsed]
             gpu = _parse_windows_gpu_rows(rows)
@@ -179,6 +195,30 @@ def _get_windows_gpu_info():
                 return gpu
     except Exception:
         pass
+
+    # 3. 最后回退 WMIC（仅在命令可用时）
+    if shutil.which('wmic'):
+        try:
+            result = _run_windows_command(
+                ['wmic', 'path', 'win32_VideoController', 'get', 'Name,AdapterRAM', '/format:csv'],
+                timeout=6
+            )
+            if result and result.returncode == 0:
+                lines = [l.strip() for l in result.stdout.strip().split('\n') if l.strip() and 'Node' not in l]
+                rows = []
+                for line in lines:
+                    parts = line.split(',')
+                    if len(parts) < 3:
+                        continue
+                    rows.append({
+                        'Name': parts[2].strip(),
+                        'AdapterRAM': parts[1].strip()
+                    })
+                gpu = _parse_windows_gpu_rows(rows)
+                if gpu:
+                    return gpu
+        except Exception:
+            pass
     
     return {"name": "Unknown (Windows)", "vram_gb": 0, "backend": "cpu", "is_unified_memory": False}
 
@@ -195,7 +235,7 @@ def _get_linux_gpu_info():
     if amd_info["vram_gb"] > 0:
         return amd_info
     
-    # 3. 回退到 lspci 检测
+    # 3. 回退到 lspci 检测（按供应商优先级挑选，避免混合显卡误选）
     try:
         result = subprocess.run(
             ['lspci'],
@@ -204,14 +244,23 @@ def _get_linux_gpu_info():
             timeout=5
         )
         if result.returncode == 0:
+            candidates = []
             for line in result.stdout.split('\n'):
                 if 'VGA' in line or '3D' in line:
-                    if 'NVIDIA' in line.upper():
-                        return {"name": line.split(':')[-1].strip(), "vram_gb": 0, "backend": "cuda", "is_unified_memory": False}
-                    elif 'AMD' in line.upper() or 'ATI' in line.upper():
-                        return {"name": line.split(':')[-1].strip(), "vram_gb": 0, "backend": "vulkan", "is_unified_memory": False}
-                    elif 'INTEL' in line.upper():
-                        return {"name": line.split(':')[-1].strip(), "vram_gb": 0, "backend": "vulkan", "is_unified_memory": False}
+                    name = line.split(':')[-1].strip()
+                    if not name:
+                        continue
+                    classified = _classify_gpu_name(name, 0.0)
+                    candidates.append({
+                        "name": name,
+                        "vram_gb": 0.0,
+                        "backend": classified["backend"],
+                        "is_unified_memory": classified["is_unified_memory"],
+                        "priority": classified["priority"]
+                    })
+            gpu = _pick_best_gpu_candidate(candidates)
+            if gpu:
+                return gpu
     except Exception:
         pass
     
@@ -220,7 +269,6 @@ def _get_linux_gpu_info():
 
 def _get_nvidia_gpu_info():
     """获取 NVIDIA GPU 信息 (跨平台 + Windows 多路径)"""
-    import shutil
     import sys
     
     # Windows 上 nvidia-smi 可能不在 PATH 中
@@ -331,32 +379,32 @@ def _get_system_ram():
     """获取系统内存 (跨平台)"""
     try:
         if sys.platform == 'win32':
-            result = subprocess.run(
-                ['wmic', 'computersystem', 'get', 'totalphysicalmemory'],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                creationflags=_windows_creationflags()
-            )
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')
-                if len(lines) > 1 and lines[1].strip().isdigit():
-                    return int(lines[1].strip()) / (1024**3)
-            result = subprocess.run(
+            # 先走 CIM，避免 WMIC 在部分机器上长时间卡住。
+            result = _run_windows_command(
                 [
                     'powershell',
                     '-NoProfile',
                     '-Command',
                     '(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory'
                 ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                creationflags=_windows_creationflags()
+                timeout=5
             )
-            ram_raw = result.stdout.strip()
-            if result.returncode == 0 and ram_raw.isdigit():
-                return int(ram_raw) / (1024**3)
+            if result and result.returncode == 0:
+                ram_gb = _parse_bytes_to_gb(result.stdout.strip())
+                if ram_gb > 0:
+                    return ram_gb
+
+            if shutil.which('wmic'):
+                result = _run_windows_command(
+                    ['wmic', 'computersystem', 'get', 'totalphysicalmemory'],
+                    timeout=4
+                )
+                if result and result.returncode == 0:
+                    lines = result.stdout.strip().split('\n')
+                    if len(lines) > 1:
+                        ram_gb = _parse_bytes_to_gb(lines[1].strip())
+                        if ram_gb > 0:
+                            return ram_gb
         elif sys.platform == 'darwin':
             result = subprocess.run(
                 ['sysctl', '-n', 'hw.memsize'],

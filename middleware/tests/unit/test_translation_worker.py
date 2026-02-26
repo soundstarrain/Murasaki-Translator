@@ -9,7 +9,12 @@ if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
 import translation_worker as worker_module
-from translation_worker import TranslationTask, TranslationWorker, TaskStatus
+from translation_worker import (
+    TranslationTask,
+    TranslationWorker,
+    TaskStatus,
+    normalize_cuda_visible_devices,
+)
 
 
 class DummyStdout:
@@ -168,6 +173,31 @@ class DummyRequest:
         self.fix_kana = overrides.get("fix_kana", False)
         self.fix_punctuation = overrides.get("fix_punctuation", False)
         self.gpu_device_id = overrides.get("gpu_device_id")
+
+
+@pytest.mark.unit
+def test_normalize_cuda_visible_devices_accepts_multi_gpu_indices():
+    assert normalize_cuda_visible_devices("0, 1,1") == "0,1"
+    assert normalize_cuda_visible_devices("0 2") == "0,2"
+    assert normalize_cuda_visible_devices("0；2") == "0,2"
+    assert normalize_cuda_visible_devices("-1") == "-1"
+
+
+@pytest.mark.unit
+def test_normalize_cuda_visible_devices_accepts_uuid_tokens():
+    assert (
+        normalize_cuda_visible_devices("GPU-aaaaaaaa-bbbb-cccc-dddd")
+        == "GPU-aaaaaaaa-bbbb-cccc-dddd"
+    )
+    assert (
+        normalize_cuda_visible_devices("MIG-GPU-aaaa/1/2")
+        == "MIG-GPU-aaaa/1/2"
+    )
+
+
+@pytest.mark.unit
+def test_normalize_cuda_visible_devices_rejects_invalid_tokens():
+    assert normalize_cuda_visible_devices("abc,@@@") is None
 
 
 @pytest.mark.unit
@@ -339,6 +369,63 @@ async def test_translate_protect_patterns_outside_allowed(monkeypatch, tmp_path)
     assert arg != str(protect_path)
     assert Path(arg).parent == worker._temp_artifact_dir
     assert arg.endswith(".txt")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_translate_sets_normalized_cuda_visible_devices(monkeypatch, tmp_path):
+    worker = TranslationWorker(model_path="model.gguf")
+    monkeypatch.setattr(worker, "is_ready", lambda: True)
+
+    captured = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["env"] = kwargs.get("env", {})
+        return DummyProcess([])
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    task = TranslationTask(
+        task_id="gpu-id-valid",
+        request=DummyRequest(gpu_device_id="0, 1,1"),
+    )
+    outputs_dir = Path(__file__).resolve().parents[2] / "outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    output_path = outputs_dir / f"{task.task_id}_output.txt"
+    output_path.write_text("ok", encoding="utf-8")
+
+    result = await worker.translate(task)
+    assert result == "ok"
+    assert captured["env"].get("CUDA_VISIBLE_DEVICES") == "0,1"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_translate_ignores_invalid_gpu_device_id(monkeypatch, tmp_path):
+    worker = TranslationWorker(model_path="model.gguf")
+    monkeypatch.setattr(worker, "is_ready", lambda: True)
+
+    captured = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["env"] = kwargs.get("env", {})
+        return DummyProcess([])
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    task = TranslationTask(
+        task_id="gpu-id-invalid",
+        request=DummyRequest(gpu_device_id="abc,@@"),
+    )
+    outputs_dir = Path(__file__).resolve().parents[2] / "outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    output_path = outputs_dir / f"{task.task_id}_output.txt"
+    output_path.write_text("ok", encoding="utf-8")
+
+    result = await worker.translate(task)
+    assert result == "ok"
+    assert "CUDA_VISIBLE_DEVICES" not in captured["env"]
+    assert any("Ignored invalid gpu_device_id" in line for line in task.logs)
 
 
 @pytest.mark.unit

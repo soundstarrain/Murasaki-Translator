@@ -2,6 +2,7 @@
  * Remote Translation Client
  * Connects to a remote translation service and exposes an API compatible with local workflow.
  */
+import { normalizeCudaVisibleDevices } from "./gpuDeviceId";
 
 interface RemoteServerConfig {
   url: string;
@@ -418,7 +419,7 @@ export class RemoteClient {
       fix_ruby: options.fixRuby ?? false,
       fix_kana: options.fixKana ?? false,
       fix_punctuation: options.fixPunctuation ?? false,
-      gpu_device_id: options.gpuDeviceId,
+      gpu_device_id: normalizeCudaVisibleDevices(options.gpuDeviceId),
     };
 
     const response = (await this.fetch(

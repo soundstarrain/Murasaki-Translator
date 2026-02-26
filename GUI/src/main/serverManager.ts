@@ -6,6 +6,7 @@ import os from "os";
 import { randomBytes } from "crypto";
 import { is } from "@electron-toolkit/utils";
 import { getMiddlewarePath } from "./platform";
+import { normalizeCudaVisibleDevices } from "./gpuDeviceId";
 
 const getUserDataPath = () => getMiddlewarePath();
 
@@ -694,9 +695,17 @@ sys.exit(0 if not missing else 3)
     }
 
     if (this.deviceMode !== "cpu" && config?.gpuDeviceId !== undefined) {
-      const gpuDeviceId = String(config.gpuDeviceId).trim();
-      if (gpuDeviceId.length > 0) {
-        env.CUDA_VISIBLE_DEVICES = gpuDeviceId;
+      const rawGpuDeviceId = String(config.gpuDeviceId).trim();
+      const normalizedGpuDeviceId = normalizeCudaVisibleDevices(rawGpuDeviceId);
+      if (normalizedGpuDeviceId) {
+        env.CUDA_VISIBLE_DEVICES = normalizedGpuDeviceId;
+        this.appendLog(
+          `[Daemon] CUDA_VISIBLE_DEVICES=${normalizedGpuDeviceId}`,
+        );
+      } else if (rawGpuDeviceId.length > 0) {
+        this.appendLog(
+          `[Daemon] Ignored invalid GPU device ID: ${rawGpuDeviceId}`,
+        );
       }
     }
 

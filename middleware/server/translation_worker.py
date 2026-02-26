@@ -30,6 +30,40 @@ from datetime import datetime
 # 添加父目录到 path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+_CUDA_DEVICE_TOKEN_PATTERN = re.compile(
+    r"^(?:-1|\d+|GPU-[A-Za-z0-9-]+|MIG-[A-Za-z0-9/-]+)$",
+    re.IGNORECASE,
+)
+
+
+def normalize_cuda_visible_devices(raw_value: Any) -> Optional[str]:
+    """规范化 CUDA_VISIBLE_DEVICES 输入，支持多卡编号/UUID。"""
+    if raw_value is None:
+        return None
+    raw = str(raw_value).strip()
+    if not raw:
+        return None
+
+    tokens = [token.strip() for token in re.split(r"[,;\s，；]+", raw) if token.strip()]
+    if not tokens:
+        return None
+
+    normalized: List[str] = []
+    seen = set()
+
+    for token in tokens:
+        if not _CUDA_DEVICE_TOKEN_PATTERN.match(token):
+            continue
+        canonical = str(int(token)) if token.isdigit() else token
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        normalized.append(canonical)
+
+    if not normalized:
+        return None
+    return ",".join(normalized)
+
 
 class TaskStatus(Enum):
     """任务状态"""
@@ -855,8 +889,15 @@ class TranslationWorker:
             # 设置环境变量确保日志即时性
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
-            if request.gpu_device_id:
-                env["CUDA_VISIBLE_DEVICES"] = str(request.gpu_device_id)
+            normalized_gpu_device_id = normalize_cuda_visible_devices(
+                request.gpu_device_id
+            )
+            if normalized_gpu_device_id:
+                env["CUDA_VISIBLE_DEVICES"] = normalized_gpu_device_id
+            elif request.gpu_device_id not in (None, ""):
+                task.add_log(
+                    f"[WARN] Ignored invalid gpu_device_id: {request.gpu_device_id}"
+                )
 
             # 使用进程组启动，确保 cancel 时子进程一起销毁
             if sys.platform != 'win32':

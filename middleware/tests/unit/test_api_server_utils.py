@@ -18,6 +18,8 @@ from api_server import (
     _parse_env_bool,
     _parse_env_str,
     _mask_secret,
+    _normalize_gpu_device_id,
+    TranslateRequest,
 )
 
 
@@ -124,3 +126,21 @@ def test_mask_secret():
     assert _mask_secret("") == "(not-set)"
     assert _mask_secret("short") == "********"
     assert _mask_secret("1234567890") == "1234...7890"
+
+
+@pytest.mark.unit
+def test_normalize_gpu_device_id():
+    assert _normalize_gpu_device_id(None) is None
+    assert _normalize_gpu_device_id("0, 1,1") == "0,1"
+    assert _normalize_gpu_device_id("-1") == "-1"
+    assert _normalize_gpu_device_id("GPU-aaaa-bbbb") == "GPU-aaaa-bbbb"
+    assert _normalize_gpu_device_id("abc,@@") is None
+
+
+@pytest.mark.unit
+def test_translate_request_gpu_device_id_validator():
+    request = TranslateRequest(text="hello", gpu_device_id="0, 2,2")
+    assert request.gpu_device_id == "0,2"
+
+    invalid_request = TranslateRequest(text="hello", gpu_device_id="abc")
+    assert invalid_request.gpu_device_id is None

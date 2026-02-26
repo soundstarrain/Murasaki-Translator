@@ -25,6 +25,7 @@ import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import fs from "fs";
 import { ServerManager } from "./serverManager";
+import { normalizeCudaVisibleDevices } from "./gpuDeviceId";
 import { getLlamaServerPath, detectPlatform } from "./platform";
 import { TranslateOptions } from "./remoteClient";
 import {
@@ -54,6 +55,7 @@ let remoteTranslationBridge: {
 } | null = null;
 let mainWindow: BrowserWindow | null = null;
 let hardwareSpecsInFlight: Promise<any> | null = null;
+let hardwareSpecsProcess: ChildProcess | null = null;
 let hardwareSpecsCache: {
   at: number;
   data: any;
@@ -296,6 +298,36 @@ const requestRemoteTaskCancel = (reason?: string): boolean => {
   return true;
 };
 
+const terminateChildProcessTree = (
+  targetProcess: ChildProcess | null,
+  logPrefix: string,
+) => {
+  if (!targetProcess) return;
+  const pid = targetProcess.pid;
+
+  if (process.platform === "win32" && pid) {
+    const killProc = spawn("taskkill", ["/pid", pid.toString(), "/f", "/t"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    killProc.on("error", (err) => {
+      console.error(`${logPrefix} taskkill spawn error:`, err.message);
+      try {
+        targetProcess.kill("SIGKILL");
+      } catch {
+        // ignore fallback kill failure
+      }
+    });
+    return;
+  }
+
+  try {
+    targetProcess.kill("SIGKILL");
+  } catch {
+    // ignore best-effort kill failure
+  }
+};
+
 const requestStopForLocalTranslationProcess = (targetProcess: ChildProcess) => {
   translationStopRequested = true;
   const pid = targetProcess.pid;
@@ -463,14 +495,20 @@ async function cleanupProcesses(): Promise<void> {
   // 停止翻译进程。
   if (pythonProcess) {
     try {
-      pythonProcess.kill();
-      if (process.platform === "win32" && pythonProcess.pid) {
-        spawn("taskkill", ["/pid", pythonProcess.pid.toString(), "/f", "/t"]);
-      }
+      terminateChildProcessTree(pythonProcess, "[App]");
     } catch (e) {
       console.error("[App] Error killing python process:", e);
     }
     pythonProcess = null;
+  }
+
+  if (hardwareSpecsProcess) {
+    try {
+      terminateChildProcessTree(hardwareSpecsProcess, "[App][HardwareSpecs]");
+    } catch (e) {
+      console.error("[App] Error killing hardware specs process:", e);
+    }
+    hardwareSpecsProcess = null;
   }
 
   try {
@@ -2338,6 +2376,30 @@ ipcMain.handle("get-system-diagnostics", async () => {
     return match ? match[1] : null;
   };
 
+  const parseVulkanDetails = (
+    output: string,
+  ): { version?: string; devices?: string[] } => {
+    const versionMatch = output.match(
+      /Vulkan Instance Version:\s*(\d+\.\d+\.\d+)/i,
+    );
+    const version = versionMatch ? versionMatch[1] : undefined;
+    const devices = Array.from(
+      new Set(
+        output
+          .split(/\r?\n/)
+          .map((line: string) => {
+            const match = line.match(/GPU\s*\d+\s*:\s*(.+)$/i);
+            return match ? match[1].trim() : "";
+          })
+          .filter((line: string) => Boolean(line)),
+      ),
+    );
+    return {
+      version,
+      devices: devices.length > 0 ? devices : undefined,
+    };
+  };
+
   // GPU Detection (NVIDIA) - parallel execution
   const gpuPromise = (async () => {
     try {
@@ -2614,21 +2676,21 @@ ipcMain.handle("get-system-diagnostics", async () => {
         5000,
       );
       const output = `${stdout}\n${stderr}`;
-      const versionMatch = output.match(
-        /Vulkan Instance Version:\s*(\d+\.\d+\.\d+)/i,
-      );
-      const version = versionMatch ? versionMatch[1] : undefined;
-      result.vulkan = { available: true, version };
+      const details = parseVulkanDetails(output);
+      result.vulkan = {
+        available: true,
+        version: details.version,
+        devices: details.devices,
+      };
     } catch {
       try {
         const { stdout, stderr } = await execWithTimeout("vulkaninfo", 5000);
         const output = `${stdout}\n${stderr}`;
-        const versionMatch = output.match(
-          /Vulkan Instance Version:\s*(\d+\.\d+\.\d+)/i,
-        );
+        const details = parseVulkanDetails(output);
         result.vulkan = {
           available: true,
-          version: versionMatch ? versionMatch[1] : undefined,
+          version: details.version,
+          devices: details.devices,
         };
         return;
       } catch {
@@ -3043,6 +3105,7 @@ ipcMain.handle("get-hardware-specs", async () => {
       // shell: false, // Default is false in helper
       // env merged in helper
     });
+    hardwareSpecsProcess = proc;
 
     let output = "";
     let errorOutput = "";
@@ -3053,7 +3116,10 @@ ipcMain.handle("get-hardware-specs", async () => {
       resolved = true;
       const errMsg = "Get specs timeout - killing process";
       console.error(errMsg);
-      proc.kill();
+      terminateChildProcessTree(proc, "[HardwareSpecs]");
+      if (hardwareSpecsProcess === proc) {
+        hardwareSpecsProcess = null;
+      }
       resolve({ error: errMsg });
     }, 30000);
 
@@ -3068,6 +3134,9 @@ ipcMain.handle("get-hardware-specs", async () => {
       if (resolved) return;
       resolved = true;
       clearTimeout(timeout);
+      if (hardwareSpecsProcess === proc) {
+        hardwareSpecsProcess = null;
+      }
       const errMsg = `Failed to spawn specs process: ${err.message}`;
       console.error(errMsg);
       resolve({ error: errMsg });
@@ -3077,6 +3146,9 @@ ipcMain.handle("get-hardware-specs", async () => {
       if (resolved) return;
       resolved = true;
       clearTimeout(timeout);
+      if (hardwareSpecsProcess === proc) {
+        hardwareSpecsProcess = null;
+      }
 
       if (code !== 0) {
         const err = `Get specs failed (code ${code}): ${errorOutput}`;
@@ -4107,9 +4179,16 @@ ipcMain.handle(
     console.log("[Retranslate] Spawning:", pythonCmd, args.join(" "));
 
     return new Promise((resolve) => {
+      const normalizedGpuDeviceId = normalizeCudaVisibleDevices(
+        config?.gpuDeviceId,
+      );
+      const retranslateEnv: NodeJS.ProcessEnv = {};
+      if (normalizedGpuDeviceId) {
+        retranslateEnv.CUDA_VISIBLE_DEVICES = normalizedGpuDeviceId;
+      }
       const proc = spawnPythonProcess(pythonCmd, args, {
         cwd: middlewareDir,
-        env: { CUDA_VISIBLE_DEVICES: config?.gpuDeviceId }, // Only pass custom vars, helper merges process.env and sanitizes
+        env: retranslateEnv, // Helper merges process.env and sanitizes
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -4863,7 +4942,7 @@ const buildRemoteTranslateOptionsFromConfig = (
     fixRuby: config?.fixRuby === true,
     fixKana: config?.fixKana === true,
     fixPunctuation: config?.fixPunctuation === true,
-    gpuDeviceId: String(config?.gpuDeviceId || "").trim() || undefined,
+    gpuDeviceId: normalizeCudaVisibleDevices(config?.gpuDeviceId),
   };
 };
 
@@ -5889,12 +5968,15 @@ ipcMain.on(
 
     // Set GPU ID if specified and not in CPU mode
     const customEnv: NodeJS.ProcessEnv = {};
-    if (config?.deviceMode !== "cpu" && config?.gpuDeviceId) {
-      customEnv["CUDA_VISIBLE_DEVICES"] = config.gpuDeviceId;
-      console.log(`Setting CUDA_VISIBLE_DEVICES=${config.gpuDeviceId}`);
+    const normalizedGpuDeviceId = normalizeCudaVisibleDevices(
+      config?.gpuDeviceId,
+    );
+    if (config?.deviceMode !== "cpu" && normalizedGpuDeviceId) {
+      customEnv["CUDA_VISIBLE_DEVICES"] = normalizedGpuDeviceId;
+      console.log(`Setting CUDA_VISIBLE_DEVICES=${normalizedGpuDeviceId}`);
       replyLogUpdate(
         event,
-        `System: CUDA_VISIBLE_DEVICES=${config.gpuDeviceId}`,
+        `System: CUDA_VISIBLE_DEVICES=${normalizedGpuDeviceId}`,
         { level: "info", source: "main" },
       );
     }

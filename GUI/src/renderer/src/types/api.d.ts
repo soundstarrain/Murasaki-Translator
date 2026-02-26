@@ -26,7 +26,7 @@ export interface TranslationConfig {
   saveCot: boolean;
   saveSummary: boolean;
   deviceMode: "auto" | "cpu" | "gpu" | "rocm";
-  gpuDeviceId: number;
+  gpuDeviceId: number | string;
   repPenaltyBase: number;
   repPenaltyMax: number;
   repPenaltyStep: number;

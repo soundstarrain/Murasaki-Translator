@@ -5,6 +5,8 @@
 import sys
 import subprocess
 import time
+import re
+import json
 
 
 class HardwareMonitor:
@@ -13,10 +15,12 @@ class HardwareMonitor:
     def __init__(self, gpu_index=0):
         self.gpu_index = gpu_index
         self.enabled = False
-        self.backend = None  # 'nvidia', 'macos', 'amd', None
+        self.backend = None  # 'nvidia', 'macos', 'amd', 'generic', None
         self.name = "Unknown GPU"
         self._pynvml = None
         self._handle = None
+        self._generic_vram_total_gb = 0.0
+        self._generic_unified_memory = False
 
         self._init_backend()
     
@@ -25,9 +29,12 @@ class HardwareMonitor:
         if sys.platform == 'darwin':
             self._init_macos()
         else:
-            # Windows/Linux: 优先尝试 NVIDIA，回退 AMD
-            if not self._init_nvidia():
-                self._init_amd()
+            # Windows/Linux: 优先尝试 NVIDIA，回退 AMD，最后回退 generic（Intel/其他显卡）
+            if self._init_nvidia():
+                return
+            if self._init_amd():
+                return
+            self._init_generic()
     
     def _init_nvidia(self) -> bool:
         """初始化 NVIDIA 后端 (pynvml)"""
@@ -89,10 +96,109 @@ class HardwareMonitor:
                     self.name = data[0].get('asic', {}).get('name', 'AMD GPU')
                     self.backend = 'amd'
                     self.enabled = True
+                    return True
         except FileNotFoundError:
             pass
         except Exception as e:
             print(f"[HardwareMonitor] AMD init failed: {e}")
+        return False
+
+    @staticmethod
+    def _parse_bytes_to_gb(raw_value):
+        if raw_value is None:
+            return 0.0
+        try:
+            text = str(raw_value).strip()
+            if not text:
+                return 0.0
+            return int(float(text)) / (1024**3)
+        except (ValueError, TypeError):
+            return 0.0
+
+    def _detect_windows_generic_gpu(self):
+        try:
+            result = subprocess.run(
+                [
+                    'powershell',
+                    '-NoProfile',
+                    '-Command',
+                    'Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json -Compress'
+                ],
+                capture_output=True,
+                text=True,
+                timeout=6
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                payload = json.loads(result.stdout.strip())
+                rows = payload if isinstance(payload, list) else [payload]
+                candidates = []
+                for row in rows:
+                    name = str((row or {}).get('Name', '')).strip()
+                    if not name:
+                        continue
+                    upper = name.upper()
+                    if 'MICROSOFT' in upper and 'BASIC' in upper:
+                        continue
+                    if 'BASIC RENDER' in upper:
+                        continue
+                    vram_gb = self._parse_bytes_to_gb((row or {}).get('AdapterRAM'))
+                    is_unified = ('INTEL' in upper and vram_gb <= 0)
+                    priority = 200 if 'NVIDIA' in upper else 180 if ('AMD' in upper or 'RADEON' in upper) else 160 if 'INTEL' in upper else 100
+                    candidates.append((priority, vram_gb, name, is_unified))
+                if candidates:
+                    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+                    _, vram_gb, name, is_unified = candidates[0]
+                    return name, vram_gb, is_unified
+        except Exception:
+            pass
+        return None
+
+    def _detect_linux_generic_gpu(self):
+        try:
+            result = subprocess.run(
+                ['lspci'],
+                capture_output=True,
+                text=True,
+                timeout=4
+            )
+            if result.returncode == 0:
+                candidates = []
+                for line in result.stdout.splitlines():
+                    if 'VGA' not in line and '3D' not in line and 'Display' not in line:
+                        continue
+                    name = line.split(':')[-1].strip()
+                    if not name:
+                        continue
+                    upper = name.upper()
+                    is_unified = ('INTEL' in upper)
+                    priority = 200 if 'NVIDIA' in upper else 180 if ('AMD' in upper or 'RADEON' in upper or 'ATI' in upper) else 160 if 'INTEL' in upper else 100
+                    candidates.append((priority, name, is_unified))
+                if candidates:
+                    candidates.sort(key=lambda item: item[0], reverse=True)
+                    _, name, is_unified = candidates[0]
+                    return name, 0.0, is_unified
+        except Exception:
+            pass
+        return None
+
+    def _init_generic(self):
+        """初始化 generic 后端（Intel/其他显卡基础监控）"""
+        info = None
+        if sys.platform == 'win32':
+            info = self._detect_windows_generic_gpu()
+        elif sys.platform.startswith('linux'):
+            info = self._detect_linux_generic_gpu()
+
+        if not info:
+            return False
+
+        name, vram_total_gb, is_unified = info
+        self.name = name or "Generic GPU"
+        self.backend = 'generic'
+        self.enabled = True
+        self._generic_vram_total_gb = float(vram_total_gb or 0.0)
+        self._generic_unified_memory = bool(is_unified)
+        return True
     
     def get_status(self):
         """获取 GPU 状态"""
@@ -105,8 +211,54 @@ class HardwareMonitor:
             return self._get_macos_status()
         elif self.backend == 'amd':
             return self._get_amd_status()
+        elif self.backend == 'generic':
+            return self._get_generic_status()
         
         return None
+
+    def _get_generic_status(self):
+        """
+        Generic 后端只提供基础可视化信息，避免 Intel/其他显卡场景仪表盘长期空白。
+        """
+        total_gb = self._generic_vram_total_gb
+        if total_gb <= 0 and self._generic_unified_memory:
+            total_gb = self._get_system_ram_gb()
+
+        return {
+            "name": self.name,
+            "vram_used_gb": 0.0,
+            "vram_total_gb": round(total_gb, 2),
+            "vram_percent": 0.0,
+            "gpu_util": 0,
+            "mem_util": 0.0,
+        }
+
+    def _get_system_ram_gb(self):
+        try:
+            if sys.platform == 'win32':
+                result = subprocess.run(
+                    [
+                        'powershell',
+                        '-NoProfile',
+                        '-Command',
+                        '(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory'
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=4
+                )
+                if result.returncode == 0 and result.stdout.strip().isdigit():
+                    return int(result.stdout.strip()) / (1024**3)
+            elif sys.platform.startswith('linux'):
+                with open('/proc/meminfo', 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.startswith('MemTotal:'):
+                            parts = line.split()
+                            if len(parts) >= 2 and parts[1].isdigit():
+                                return int(parts[1]) / (1024**2)
+        except Exception:
+            pass
+        return 8.0
     
     def _get_nvidia_status(self):
         """获取 NVIDIA GPU 状态"""

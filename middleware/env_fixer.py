@@ -438,25 +438,50 @@ class VulkanChecker(ComponentChecker):
         self.platform = platform.system()
         self.devices: List[str] = []
         self.can_auto_fix = self.platform == 'Windows'  # Windows 支持自动安装
+
+    @staticmethod
+    def _extract_vulkan_version(output: str) -> Optional[str]:
+        match = re.search(r'Vulkan Instance Version:\s*(\d+\.\d+\.\d+)', output, re.IGNORECASE)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _extract_vulkan_devices(output: str) -> List[str]:
+        devices: List[str] = []
+        seen = set()
+        for line in output.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            match = re.search(r'GPU\s*\d+\s*:\s*(.+)$', stripped, re.IGNORECASE)
+            if not match:
+                continue
+            device = match.group(1).strip()
+            if not device or device in seen:
+                continue
+            seen.add(device)
+            devices.append(device)
+        return devices
     
     def check(self) -> None:
         """检查 Vulkan 环境"""
         success, output = run_command(['vulkaninfo', '--summary'], timeout=10)
+        if not success:
+            # 某些驱动下 --summary 不稳定，回退完整输出探测。
+            success, output = run_command(['vulkaninfo'], timeout=12)
         
         if success:
-            version_match = re.search(r'Vulkan Instance Version:\s*(\d+\.\d+\.\d+)', output, re.IGNORECASE)
-            if version_match:
-                self.version = version_match.group(1)
-                self.status = 'ok'
-                print_success(f"Vulkan {self.version} 可用")
+            version = self._extract_vulkan_version(output)
+            self.devices = self._extract_vulkan_devices(output)
+            self.status = 'ok'
+            self.version = version or 'Unknown'
+            if version:
+                print_success(f"Vulkan {version} 可用")
+            else:
+                print_success("Vulkan 可用（版本号解析失败）")
 
-                # 提取设备信息
-                gpu_matches = re.finditer(r'GPU\d+:\s*\w+\s*\([^)]+\)', output)
-                for match in gpu_matches:
-                    device_name = match.group(0)
-                    self.devices.append(device_name)
-                    print_info(f"  设备: {device_name}")
-                return
+            for device_name in self.devices:
+                print_info(f"  设备: {device_name}")
+            return
         
         if self.platform == 'Darwin':
             self.status = 'ok'

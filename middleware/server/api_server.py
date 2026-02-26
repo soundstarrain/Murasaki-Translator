@@ -25,6 +25,7 @@ import secrets
 import threading
 import subprocess
 import time
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -37,8 +38,13 @@ from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
 
-# 添加父目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 添加 server 目录和其父目录到 path（兼容打包后运行）
+_server_dir = Path(__file__).parent
+_middleware_dir = _server_dir.parent
+for _path in (_server_dir, _middleware_dir):
+    _path_str = str(_path)
+    if _path_str not in sys.path:
+        sys.path.insert(0, _path_str)
 
 from translation_worker import TranslationWorker, TranslationTask, TaskStatus
 
@@ -217,6 +223,39 @@ def _mask_secret(value: str) -> str:
     if len(normalized) <= 8:
         return "********"
     return f"{normalized[:4]}...{normalized[-4:]}"
+
+
+_CUDA_DEVICE_TOKEN_PATTERN = re.compile(
+    r"^(?:-1|\d+|GPU-[A-Za-z0-9-]+|MIG-[A-Za-z0-9/-]+)$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_gpu_device_id(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    tokens = [token.strip() for token in re.split(r"[,;\s，；]+", raw) if token.strip()]
+    if not tokens:
+        return None
+
+    normalized: List[str] = []
+    seen = set()
+    for token in tokens:
+        if not _CUDA_DEVICE_TOKEN_PATTERN.match(token):
+            continue
+        canonical = str(int(token)) if token.isdigit() else token
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        normalized.append(canonical)
+
+    if not normalized:
+        return None
+    return ",".join(normalized)
 
 
 async def verify_api_key(api_key: str = Security(api_key_header)):
@@ -596,6 +635,11 @@ class TranslateRequest(BaseModel):
     fix_kana: bool = False
     fix_punctuation: bool = False
     gpu_device_id: Optional[str] = None
+
+    @field_validator("gpu_device_id", mode="before")
+    @classmethod
+    def normalize_gpu_device_id(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_gpu_device_id(value)
 
 
 class TranslateResponse(BaseModel):
