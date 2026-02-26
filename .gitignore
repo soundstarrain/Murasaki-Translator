@@ -103,6 +103,7 @@ middleware/outputs
 # =============================================================================
 middleware/glossaries/
 GUI/middleware/glossaries/
+other/
 
 # =============================================================================
 # Project docs, scripts and private metadata
@@ -116,3 +117,4 @@ AGENTS.md
 .claude
 .keiyaku/
 docs/
+temp/
