@@ -1,6 +1,6 @@
 {
   "name": "murasaki-translator",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "main": "./out/main/index.js",
   "author": "soundstarrain",
   "description": "Murasaki Local AI Translator",

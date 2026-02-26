@@ -1,5 +1,32 @@
 # Murasaki Translator - Changelog
 
+## [2.1.2] - 2026-02-26
+
+### Changed
+
+#### [主进程与中间件执行层] 跨平台显卡检测与 Vulkan 稳定性
+
+- fix: Windows GPU 探测顺序调整为 `nvidia-smi -> PowerShell CIM -> WMIC(可用时)`，并统一显存/内存字节解析，降低 Intel/AMD 机型误判风险。
+- fix: Linux `lspci` 回退路径按 `NVIDIA > AMD > Intel` 进行候选选择，避免混合显卡场景误选后端。
+- fix: Vulkan 环境检查支持 `vulkaninfo --summary` 失败后回退 `vulkaninfo`，并统一提取 Vulkan 版本与设备列表。
+- fix: 硬件监控新增 `generic` 回退后端，仅在 NVIDIA/AMD 监控不可用时启用，Intel/其他显卡可返回基础监控状态。
+
+#### [主进程编排层] 硬件探测进程与诊断链路
+
+- fix: `get-hardware-specs` 增加子进程跟踪与超时进程树终止（Windows 使用 `taskkill /F /T`），修复探测卡死后残留进程导致应用难以退出的问题。
+- fix: 系统诊断中的 Vulkan 结果新增设备列表解析，提升 Intel/AMD 驱动排障信息完整度。
+
+#### [远程与执行配置链路] 多显卡编号归一化
+
+- fix: 新增 `normalizeCudaVisibleDevices` 归一化逻辑，统一清洗 `gpuDeviceId`（支持 `0`、`0,1`、`GPU-xxxx`、`MIG-xxxx`），并在本地翻译、重翻、Daemon 与 Remote payload 全链路应用。
+- fix: 服务端 `TranslateRequest` 与 `translation_worker` 对 `gpu_device_id` 执行同规则归一化，非法值自动忽略并记录告警，避免污染 `CUDA_VISIBLE_DEVICES`。
+- refactor: `TranslationConfig.gpuDeviceId` 类型由 `number` 扩展为 `number | string`，兼容多卡索引与 UUID 输入。
+
+#### [GUI界面层] 本机服务接入策略默认值
+
+- fix: “启动后自动进入远程统一链路”默认值改为关闭，同时保持已有用户本地持久化配置行为不变。
+- fix: 常驻模式说明文案明确本机监听与端口边界，降低配置误用风险。
+
 ## [2.1.1] - 2026-02-24
 
 ### Changed
