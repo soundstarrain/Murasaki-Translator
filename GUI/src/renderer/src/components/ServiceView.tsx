@@ -109,7 +109,7 @@ export function ServiceView({
     autoConnectRemoteAfterDaemonStart,
     setAutoConnectRemoteAfterDaemonStart,
   ] = useState(() =>
-    parseBooleanStorage(LOCAL_DAEMON_AUTO_REMOTE_STORAGE_KEY, true),
+    parseBooleanStorage(LOCAL_DAEMON_AUTO_REMOTE_STORAGE_KEY, false),
   );
   const [serviceGuideExpanded, setServiceGuideExpanded] = useState(
     () => localStorage.getItem(SERVICE_GUIDE_EXPANDED_STORAGE_KEY) === "true",

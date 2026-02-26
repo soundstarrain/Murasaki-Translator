@@ -2931,7 +2931,7 @@ export const translations = {
       modeAuto: "自动模式",
       modeAutoDesc: "翻译时自动启动推理服务，闲置时自动关闭以释放显存。",
       modeFixed: "常驻模式",
-      modeFixedDesc: "常驻模式下服务持续运行；适合频繁翻译或局域网共享。",
+      modeFixedDesc: "常驻模式下服务持续运行；适合需要持续运行的场景。llama默认运行在8080端口，无鉴权，仅限本机（127.0.0.1）访问。",
       switchToAutoTitle: "确认切换到自动模式？",
       switchToAutoDesc:
         "当前本机常驻服务正在运行。切换到自动模式后将立即停止本机常驻服务，并断开本机远程桥接链路。",
