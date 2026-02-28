@@ -885,6 +885,20 @@ const getScriptPythonInfo = (): { type: "python"; path: string } => ({
   path: getScriptPythonPath(),
 });
 
+const formatSystemCommandForLog = (
+  pythonInfo: { type: "python" | "bundle"; path: string },
+  args: string[],
+): string => {
+  const rawCmd = String(pythonInfo?.path ?? "").trim();
+  // Defensive cleanup: avoid leaking object stringification into logs.
+  const cleanedCmd = rawCmd.replace(/\[object Object\]/g, "").trim();
+  const cmd = cleanedCmd || "python";
+  return [cmd, ...args]
+    .map((part) => String(part ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+};
+
 const tryParseJson = <T = any>(raw: string): T | null => {
   try {
     return JSON.parse(raw) as T;
@@ -5951,8 +5965,9 @@ ipcMain.on(
       return;
     }
 
-    console.log("Spawning:", pythonCmd, args.join(" "), "in", middlewareDir);
-    replyLogUpdate(event, `System: CMD: ${pythonCmd} ${args.join(" ")}`, {
+    const systemCmdForLog = formatSystemCommandForLog(pythonCmd, args);
+    console.log("Spawning:", systemCmdForLog, "in", middlewareDir);
+    replyLogUpdate(event, `System: CMD: ${systemCmdForLog}`, {
       level: "info",
       source: "main",
     });
