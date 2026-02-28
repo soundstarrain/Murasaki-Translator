@@ -760,7 +760,7 @@ export default function ProofreadView({
   const [retryLineCheck, setRetryLineCheck] = useState(true);
   const [retryLineToleranceAbs, setRetryLineToleranceAbs] = useState(10);
   const [retryLineTolerancePct, setRetryLineTolerancePct] = useState(20);
-  const [retryAnchorCheck, setRetryAnchorCheck] = useState(true);
+  const [retryAnchorCheck, setRetryAnchorCheck] = useState(false);
   const [retryAnchorCheckRetries, setRetryAnchorCheckRetries] = useState(1);
   const [retryMaxRetries, setRetryMaxRetries] = useState(3);
   const [retryTempBoost, setRetryTempBoost] = useState(0.05);
@@ -867,7 +867,7 @@ export default function ProofreadView({
       if (Number.isFinite(val)) setRetryLineTolerancePct(val);
     }
     setRetryAnchorCheck(
-      localStorage.getItem("config_anchor_check") !== "false",
+      localStorage.getItem("config_anchor_check") === "true",
     );
     const savedAnchorRetries = localStorage.getItem(
       "config_anchor_check_retries",

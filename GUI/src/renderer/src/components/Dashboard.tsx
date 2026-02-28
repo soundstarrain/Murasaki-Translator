@@ -1006,7 +1006,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           llamaLogs: llamaLogsBufferRef.current.slice(
             -MAX_HISTORY_LLAMA_LOG_LINES,
           ),
-          triggers: triggersBufferRef.current,
+          triggers: [...triggersBufferRef.current],
         });
         if (progressDataRef.current.outputPath) {
           setLastOutputPath(progressDataRef.current.outputPath);
@@ -2307,7 +2307,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         ),
         anchorCheck: pickCustom(
           customConfig.anchorCheck,
-          localStorage.getItem("config_anchor_check") !== "false",
+          localStorage.getItem("config_anchor_check") === "true",
         ),
         anchorCheckRetries: pickCustom(
           customConfig.anchorCheckRetries,

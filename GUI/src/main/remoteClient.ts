@@ -383,7 +383,7 @@ export class RemoteClient {
       line_check: options.lineCheck ?? true,
       line_tolerance_abs: options.lineToleranceAbs ?? 10,
       line_tolerance_pct: normalizedLineTolerancePct,
-      anchor_check: options.anchorCheck ?? true,
+      anchor_check: options.anchorCheck ?? false,
       anchor_check_retries: options.anchorCheckRetries ?? 1,
       traditional: options.traditional ?? false,
       save_cot: options.saveCot ?? false,

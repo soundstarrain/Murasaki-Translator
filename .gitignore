@@ -104,6 +104,7 @@ middleware/outputs
 middleware/glossaries/
 GUI/middleware/glossaries/
 other/
+middleware/history_details/
 
 # =============================================================================
 # Project docs, scripts and private metadata

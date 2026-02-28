@@ -70,7 +70,7 @@ export function AdvancedView({ lang, remoteRuntime }: AdvancedViewProps) {
   const [enableLineCheck, setEnableLineCheck] = useState(true);
   const [lineToleranceAbs, setLineToleranceAbs] = useState(10);
   const [lineTolerancePct, setLineTolerancePct] = useState(20);
-  const [enableAnchorCheck, setEnableAnchorCheck] = useState(true);
+  const [enableAnchorCheck, setEnableAnchorCheck] = useState(false);
   const [anchorCheckRetries, setAnchorCheckRetries] = useState(1);
   const [enableRepPenaltyRetry, setEnableRepPenaltyRetry] = useState(true);
   const [repPenaltyBase, setRepPenaltyBase] = useState(1.0);
@@ -135,7 +135,7 @@ export function AdvancedView({ lang, remoteRuntime }: AdvancedViewProps) {
     const savedLinePct = localStorage.getItem("config_line_tolerance_pct");
     if (savedLinePct) setLineTolerancePct(parseInt(savedLinePct));
     setEnableAnchorCheck(
-      localStorage.getItem("config_anchor_check") !== "false",
+      localStorage.getItem("config_anchor_check") === "true",
     );
     const savedAnchorRetries = localStorage.getItem(
       "config_anchor_check_retries",

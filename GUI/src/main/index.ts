@@ -1088,6 +1088,51 @@ const ensureDirExists = async (targetPath: string) => {
   await fs.promises.mkdir(dirPath, { recursive: true });
 };
 
+const HISTORY_DETAIL_CACHE_DIR = "history_details";
+
+type HistoryDetailPayload = {
+  logs: string[];
+  triggers: Record<string, unknown>[];
+  llamaLogs: string[];
+};
+
+const normalizeHistoryDetailPayload = (raw: unknown): HistoryDetailPayload => {
+  const detail =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+  const normalizeLines = (value: unknown) =>
+    Array.isArray(value) ? value.map((line) => String(line ?? "")) : [];
+  const normalizeTriggers = (value: unknown) =>
+    Array.isArray(value)
+      ? value
+          .filter((item) => item && typeof item === "object")
+          .map((item) => item as Record<string, unknown>)
+      : [];
+  return {
+    logs: normalizeLines(detail.logs),
+    triggers: normalizeTriggers(detail.triggers),
+    llamaLogs: normalizeLines(detail.llamaLogs),
+  };
+};
+
+const sanitizeHistoryDetailId = (id: string): string => {
+  const normalized = String(id || "").trim();
+  if (!normalized) {
+    throw new Error("History detail id is required");
+  }
+  return normalized.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 160);
+};
+
+const getHistoryDetailCacheDir = (): string => {
+  return ensurePathWithinUserData(join(getUserDataPath(), HISTORY_DETAIL_CACHE_DIR));
+};
+
+const getHistoryDetailCacheFilePath = (id: string): string => {
+  const safeId = sanitizeHistoryDetailId(id);
+  return ensurePathWithinUserData(join(getHistoryDetailCacheDir(), `${safeId}.json`));
+};
+
 const normalizeWatchFileTypes = (types: string[]) =>
   (types || [])
     .map((t) => t.trim().toLowerCase().replace(/^\./, ""))
@@ -3681,6 +3726,105 @@ ipcMain.handle(
   },
 );
 
+ipcMain.handle("history-detail-load", async (_event, id: string) => {
+  try {
+    const safePath = getHistoryDetailCacheFilePath(id);
+    if (!fs.existsSync(safePath)) return null;
+    const content = await fs.promises.readFile(safePath, "utf-8");
+    return normalizeHistoryDetailPayload(JSON.parse(content));
+  } catch (e) {
+    console.error("history-detail-load error:", e);
+    return null;
+  }
+});
+
+ipcMain.handle(
+  "history-detail-save",
+  async (_event, id: string, detail: unknown) => {
+    try {
+      const safePath = getHistoryDetailCacheFilePath(id);
+      await ensureDirExists(safePath);
+      const normalized = normalizeHistoryDetailPayload(detail);
+      await fs.promises.writeFile(safePath, JSON.stringify(normalized), "utf-8");
+      return true;
+    } catch (e) {
+      console.error("history-detail-save error:", e);
+      return false;
+    }
+  },
+);
+
+ipcMain.handle("history-detail-delete", async (_event, id: string) => {
+  try {
+    const safePath = getHistoryDetailCacheFilePath(id);
+    if (fs.existsSync(safePath)) {
+      await fs.promises.unlink(safePath);
+    }
+    return true;
+  } catch (e) {
+    console.error("history-detail-delete error:", e);
+    return false;
+  }
+});
+
+ipcMain.handle(
+  "history-detail-prune",
+  async (_event, allowedIds: string[]) => {
+    try {
+      const cacheDir = getHistoryDetailCacheDir();
+      if (!fs.existsSync(cacheDir)) return true;
+      const allowedFiles = new Set<string>();
+      for (const id of Array.isArray(allowedIds) ? allowedIds : []) {
+        try {
+          allowedFiles.add(`${sanitizeHistoryDetailId(id)}.json`);
+        } catch {
+          // Ignore invalid IDs in prune list.
+        }
+      }
+      const entries = await fs.promises.readdir(cacheDir, {
+        withFileTypes: true,
+      });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        if (!entry.name.toLowerCase().endsWith(".json")) continue;
+        if (allowedFiles.has(entry.name)) continue;
+        try {
+          await fs.promises.unlink(join(cacheDir, entry.name));
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
+      return true;
+    } catch (e) {
+      console.error("history-detail-prune error:", e);
+      return false;
+    }
+  },
+);
+
+ipcMain.handle("history-detail-clear-all", async () => {
+  try {
+    const cacheDir = getHistoryDetailCacheDir();
+    if (!fs.existsSync(cacheDir)) return true;
+    const entries = await fs.promises.readdir(cacheDir, {
+      withFileTypes: true,
+    });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.toLowerCase().endsWith(".json")) continue;
+      try {
+        await fs.promises.unlink(join(cacheDir, entry.name));
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+    return true;
+  } catch (e) {
+    console.error("history-detail-clear-all error:", e);
+    return false;
+  }
+});
+
 // 重建文档（基于缓存）。
 ipcMain.handle("rebuild-doc", async (_event, { cachePath, outputPath }) => {
   let tempPatchedCachePath = "";
@@ -4906,7 +5050,7 @@ const buildRemoteTranslateOptionsFromConfig = (
     lineCheck: config?.lineCheck !== false,
     lineToleranceAbs: toInt(config?.lineToleranceAbs, 10),
     lineTolerancePct: normalizeLineTolerancePct(config?.lineTolerancePct, 0.2),
-    anchorCheck: config?.anchorCheck !== false,
+    anchorCheck: config?.anchorCheck === true,
     anchorCheckRetries: toInt(config?.anchorCheckRetries, 1),
     traditional: config?.traditional === true,
     saveCot: config?.saveCot === true,

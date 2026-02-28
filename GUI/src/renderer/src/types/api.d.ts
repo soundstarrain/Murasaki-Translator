@@ -99,6 +99,18 @@ export interface CacheData {
   blocks: CacheBlock[];
 }
 
+export interface HistoryRecordDetail {
+  logs: string[];
+  triggers: Array<{
+    time?: string;
+    type?: string;
+    block?: number;
+    line?: number;
+    message?: string;
+  }>;
+  llamaLogs: string[];
+}
+
 /** V2 行模式缓存行 */
 export interface V2CacheLine {
   index: number;
@@ -478,6 +490,14 @@ export interface ElectronAPI {
         warning?: string;
       }
   >;
+  historyDetailLoad: (id: string) => Promise<HistoryRecordDetail | null>;
+  historyDetailSave: (
+    id: string,
+    detail: HistoryRecordDetail,
+  ) => Promise<boolean>;
+  historyDetailDelete: (id: string) => Promise<boolean>;
+  historyDetailPrune: (allowedIds: string[]) => Promise<boolean>;
+  historyDetailClearAll: () => Promise<boolean>;
   rebuildDoc: (options: {
     cachePath: string;
     outputPath?: string;

@@ -183,6 +183,87 @@ export interface RecordDetail {
   llamaLogs: string[];
 }
 
+const detailMemoryCache = new Map<string, RecordDetail>();
+const detailLoadedIds = new Set<string>();
+let detailPruneRequestSeq = 0;
+let detailPruneQueue: Promise<void> = Promise.resolve();
+
+const createEmptyRecordDetail = (): RecordDetail => ({
+  logs: [],
+  triggers: [],
+  llamaLogs: [],
+});
+
+const hasDetailContent = (detail: RecordDetail): boolean =>
+  detail.logs.length > 0 ||
+  detail.triggers.length > 0 ||
+  detail.llamaLogs.length > 0;
+
+const normalizeRecordDetail = (raw: unknown): RecordDetail => {
+  const detail =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+  const normalizeLines = (value: unknown) =>
+    Array.isArray(value) ? value.map((line) => String(line ?? "")) : [];
+  const normalizeTriggers = (value: unknown) =>
+    Array.isArray(value)
+      ? value
+          .filter((item) => item && typeof item === "object")
+          .map((item) => item as TriggerEvent)
+      : [];
+  return {
+    logs: normalizeLines(detail.logs),
+    triggers: normalizeTriggers(detail.triggers),
+    llamaLogs: normalizeLines(detail.llamaLogs),
+  };
+};
+
+const getHistoryDetailApi = () => {
+  if (typeof window === "undefined") return null;
+  const api = window.api;
+  if (
+    !api ||
+    typeof api.historyDetailLoad !== "function" ||
+    typeof api.historyDetailSave !== "function" ||
+    typeof api.historyDetailDelete !== "function" ||
+    typeof api.historyDetailPrune !== "function" ||
+    typeof api.historyDetailClearAll !== "function"
+  ) {
+    return null;
+  }
+  return api;
+};
+
+const collectDetailStorageKeys = (): string[] => {
+  const keys: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(DETAIL_KEY_PREFIX)) {
+        keys.push(key);
+      }
+    }
+  } catch {
+    // Ignore storage iteration failures.
+  }
+  return keys;
+};
+
+const pruneLegacyDetailStorage = (allowedIds: Set<string>) => {
+  const keys = collectDetailStorageKeys();
+  for (const key of keys) {
+    const id = key.slice(DETAIL_KEY_PREFIX.length);
+    if (!allowedIds.has(id)) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        // Ignore cleanup failures.
+      }
+    }
+  }
+};
+
 const toLightweightRecords = (
   records: TranslationRecord[],
 ): TranslationRecord[] =>
@@ -242,12 +323,14 @@ export const getHistory = (): TranslationRecord[] => {
  * @param id - Record ID
  * @returns RecordDetail or null if not found
  */
-export const getRecordDetail = (id: string): RecordDetail | null => {
+const readLegacyRecordDetail = (id: string): RecordDetail => {
   try {
     const data = localStorage.getItem(`${DETAIL_KEY_PREFIX}${id}`);
-    if (data) return JSON.parse(data);
-
-    // Fallback: try to get from old format (migration)
+    if (data) return normalizeRecordDetail(JSON.parse(data));
+  } catch {
+    // Ignore legacy detail parse failures.
+  }
+  try {
     const historyRaw = localStorage.getItem(HISTORY_STORAGE_KEY);
     if (historyRaw) {
       const records = JSON.parse(historyRaw) as (TranslationRecord & {
@@ -262,30 +345,206 @@ export const getRecordDetail = (id: string): RecordDetail | null => {
           record.triggers?.length ||
           record.llamaLogs?.length)
       ) {
-        const detail = {
+        return normalizeRecordDetail({
           logs: record.logs || [],
           triggers: record.triggers || [],
           llamaLogs: record.llamaLogs || [],
-        };
-        // Migrate to new format
-        saveRecordDetail(id, detail);
-        return detail;
+        });
       }
     }
-    return { logs: [], triggers: [], llamaLogs: [] };
   } catch {
-    return null;
+    // Ignore legacy migration payload failures.
+  }
+  return createEmptyRecordDetail();
+};
+
+/**
+ * Lazily loads record detail (logs and triggers) by ID.
+ * @param id - Record ID
+ * @returns RecordDetail or null if not found
+ */
+export const getRecordDetail = (id: string): RecordDetail | null => {
+  const cached = detailMemoryCache.get(id);
+  if (cached) return cached;
+  const legacy = readLegacyRecordDetail(id);
+  if (hasDetailContent(legacy)) {
+    detailMemoryCache.set(id, legacy);
+    return legacy;
+  }
+  return createEmptyRecordDetail();
+};
+
+/**
+ * Async detail loader: prefer disk cache (Electron IPC), fallback to legacy localStorage.
+ */
+export const loadRecordDetail = async (id: string): Promise<RecordDetail> => {
+  const cached = detailMemoryCache.get(id);
+  if (cached) return cached;
+  if (detailLoadedIds.has(id)) return createEmptyRecordDetail();
+  const api = getHistoryDetailApi();
+  if (api) {
+    try {
+      const raw = await api.historyDetailLoad(id);
+      if (raw) {
+        const normalized = normalizeRecordDetail(raw);
+        detailLoadedIds.add(id);
+        if (hasDetailContent(normalized)) {
+          detailMemoryCache.set(id, normalized);
+        }
+        return normalized;
+      }
+    } catch (e) {
+      console.error("Failed to load record detail from disk cache:", e);
+    }
+  }
+  const legacy = readLegacyRecordDetail(id);
+  if (hasDetailContent(legacy)) {
+    detailLoadedIds.add(id);
+    detailMemoryCache.set(id, legacy);
+    if (api) {
+      void (async () => {
+        try {
+          await api.historyDetailSave(id, legacy);
+          localStorage.removeItem(`${DETAIL_KEY_PREFIX}${id}`);
+        } catch {
+          // Best-effort migration.
+        }
+      })();
+    }
+  } else if (!api) {
+    // Browser/unit-test path without disk cache API: avoid repeated legacy scans.
+    detailLoadedIds.add(id);
+  }
+  return legacy;
+};
+
+const saveLegacyRecordDetail = (id: string, detail: RecordDetail) => {
+  try {
+    localStorage.setItem(`${DETAIL_KEY_PREFIX}${id}`, JSON.stringify(detail));
+  } catch (e) {
+    console.error("Failed to save record detail:", e);
+  }
+};
+
+const deleteLegacyRecordDetail = (id: string) => {
+  try {
+    localStorage.removeItem(`${DETAIL_KEY_PREFIX}${id}`);
+  } catch {
+    // Ignore local cleanup failures.
   }
 };
 
 /**
  * Saves record detail separately from main history.
  */
-const saveRecordDetail = (id: string, detail: RecordDetail) => {
-  try {
-    localStorage.setItem(`${DETAIL_KEY_PREFIX}${id}`, JSON.stringify(detail));
-  } catch (e) {
-    console.error("Failed to save record detail:", e);
+const saveRecordDetail = async (id: string, detail: RecordDetail) => {
+  const normalized = normalizeRecordDetail(detail);
+  if (!hasDetailContent(normalized)) {
+    detailMemoryCache.delete(id);
+    detailLoadedIds.add(id);
+    const api = getHistoryDetailApi();
+    if (api) {
+      try {
+        await api.historyDetailDelete(id);
+      } catch (e) {
+        console.error("Failed to delete empty record detail from disk cache:", e);
+      }
+    }
+    deleteLegacyRecordDetail(id);
+    return;
+  }
+
+  detailMemoryCache.set(id, normalized);
+  detailLoadedIds.add(id);
+  const api = getHistoryDetailApi();
+  if (api) {
+    try {
+      const ok = await api.historyDetailSave(id, normalized);
+      if (ok) {
+        deleteLegacyRecordDetail(id);
+        return;
+      }
+    } catch (e) {
+      console.error("Failed to save record detail to disk cache:", e);
+    }
+  }
+  saveLegacyRecordDetail(id, normalized);
+};
+
+const pruneDetailStorage = async (
+  allowedIds: Set<string>,
+  isStale: () => boolean = () => false,
+) => {
+  for (const id of Array.from(detailMemoryCache.keys())) {
+    if (isStale()) return;
+    if (!allowedIds.has(id)) {
+      detailMemoryCache.delete(id);
+      detailLoadedIds.delete(id);
+    }
+  }
+  if (isStale()) return;
+  pruneLegacyDetailStorage(allowedIds);
+  if (isStale()) return;
+  const api = getHistoryDetailApi();
+  if (api) {
+    if (isStale()) return;
+    try {
+      await api.historyDetailPrune(Array.from(allowedIds));
+    } catch (e) {
+      console.error("Failed to prune disk cached record details:", e);
+    }
+  }
+};
+
+const schedulePruneDetailStorage = (allowedIds: Set<string>) => {
+  const requestSeq = ++detailPruneRequestSeq;
+  const snapshot = new Set(allowedIds);
+  detailPruneQueue = detailPruneQueue
+    .catch(() => {
+      // Keep queue alive after failures.
+    })
+    .then(async () => {
+      if (requestSeq !== detailPruneRequestSeq) return;
+      await pruneDetailStorage(
+        snapshot,
+        () => requestSeq !== detailPruneRequestSeq,
+      );
+    });
+  return detailPruneQueue;
+};
+
+const deleteRecordDetail = async (id: string) => {
+  detailMemoryCache.delete(id);
+  detailLoadedIds.add(id);
+  const api = getHistoryDetailApi();
+  if (api) {
+    try {
+      await api.historyDetailDelete(id);
+    } catch (e) {
+      console.error("Failed to delete disk cached record detail:", e);
+    }
+  }
+  deleteLegacyRecordDetail(id);
+};
+
+const clearDetailStorage = async () => {
+  detailMemoryCache.clear();
+  detailLoadedIds.clear();
+  const detailKeys = collectDetailStorageKeys();
+  detailKeys.forEach((key) => {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Ignore local cleanup failures.
+    }
+  });
+  const api = getHistoryDetailApi();
+  if (api) {
+    try {
+      await api.historyDetailClearAll();
+    } catch (e) {
+      console.error("Failed to clear disk cached record details:", e);
+    }
   }
 };
 
@@ -299,6 +558,7 @@ export const saveHistory = (records: TranslationRecord[]) => {
   const serialized = JSON.stringify(lightweight);
   localStorage.setItem(HISTORY_STORAGE_KEY, serialized);
   localStorage.setItem(HISTORY_BACKUP_STORAGE_KEY, serialized);
+  void schedulePruneDetailStorage(new Set(trimmed.map((record) => record.id)));
 };
 
 /**
@@ -313,7 +573,7 @@ export const addRecord = (record: TranslationRecord) => {
     record.triggers?.length ||
     record.llamaLogs?.length
   ) {
-    saveRecordDetail(record.id, {
+    void saveRecordDetail(record.id, {
       logs: record.logs || [],
       triggers: record.triggers || [],
       llamaLogs: record.llamaLogs || [],
@@ -338,20 +598,18 @@ export const updateRecord = (
   if (index >= 0) {
     // Handle detail data separately
     if (
-      updates.logs?.length ||
-      updates.triggers?.length ||
-      updates.llamaLogs?.length
+      "logs" in updates ||
+      "triggers" in updates ||
+      "llamaLogs" in updates
     ) {
-      const existingDetail = getRecordDetail(id) || {
-        logs: [],
-        triggers: [],
-        llamaLogs: [],
-      };
-      saveRecordDetail(id, {
-        logs: updates.logs || existingDetail.logs,
-        triggers: updates.triggers || existingDetail.triggers,
-        llamaLogs: updates.llamaLogs || existingDetail.llamaLogs,
-      });
+      void (async () => {
+        const existingDetail = await loadRecordDetail(id);
+        await saveRecordDetail(id, {
+          logs: updates.logs ?? existingDetail.logs,
+          triggers: updates.triggers ?? existingDetail.triggers,
+          llamaLogs: updates.llamaLogs ?? existingDetail.llamaLogs,
+        });
+      })();
     }
     // Update main record without heavy data
     const { logs, triggers, llamaLogs, ...lightUpdates } =
@@ -378,27 +636,14 @@ export const updateRecord = (
 export const deleteRecord = (id: string) => {
   const history = getHistory().filter((r) => r.id !== id);
   saveHistory(history);
-  // Also remove detail
-  try {
-    localStorage.removeItem(`${DETAIL_KEY_PREFIX}${id}`);
-  } catch {
-    /* ignore */
-  }
+  void deleteRecordDetail(id);
 };
 
 /**
  * Clears all translation history from localStorage.
  */
 export const clearHistory = () => {
-  // Get all record IDs first to clean up details
-  const history = getHistory();
-  history.forEach((r) => {
-    try {
-      localStorage.removeItem(`${DETAIL_KEY_PREFIX}${r.id}`);
-    } catch {
-      /* ignore */
-    }
-  });
+  void clearDetailStorage();
   localStorage.removeItem(HISTORY_STORAGE_KEY);
   localStorage.removeItem(HISTORY_BACKUP_STORAGE_KEY);
 };
@@ -411,7 +656,7 @@ interface RecordDetailContentProps {
   record: TranslationRecord;
   t: (typeof translations)["zh"];
   isLoading: boolean;
-  getRecordDetail: (id: string) => RecordDetail | null;
+  detail: RecordDetail;
   getTriggerTypeLabel: (type: TriggerEvent["type"]) => string;
   onOpenPath: (path: string) => void;
   onOpenFolder: (path: string) => void;
@@ -421,17 +666,12 @@ function RecordDetailContent({
   record,
   t,
   isLoading,
-  getRecordDetail: getDetail,
+  detail,
   getTriggerTypeLabel,
   onOpenPath,
   onOpenFolder,
 }: RecordDetailContentProps) {
   // Get full record with details
-  const detail = getDetail(record.id) || {
-    logs: [],
-    triggers: [],
-    llamaLogs: [],
-  };
   const fullRecord = {
     ...record,
     logs: detail.logs,
@@ -961,7 +1201,7 @@ export function HistoryView({ lang, onNavigate }: HistoryViewProps) {
   };
 
   // Handle card expansion - load details lazily
-  const handleExpand = (id: string) => {
+  const handleExpand = async (id: string) => {
     if (expandedId === id) {
       setExpandedId(null);
       return;
@@ -971,20 +1211,28 @@ export function HistoryView({ lang, onNavigate }: HistoryViewProps) {
     // Load details if not cached
     if (!detailsCache[id]) {
       setLoadingDetails(id);
-      // Use setTimeout to avoid blocking UI
-      setTimeout(() => {
-        const detail = getRecordDetail(id);
-        if (detail) {
-          setDetailsCache((prev) => ({ ...prev, [id]: detail }));
-        }
+      try {
+        const detail = await loadRecordDetail(id);
+        setDetailsCache((prev) => ({ ...prev, [id]: detail }));
+      } catch (e) {
+        console.error("Failed to load history detail:", e);
+      } finally {
         setLoadingDetails(null);
-      }, 0);
+      }
     }
   };
 
   const handleDelete = (id: string) => {
     deleteRecord(id);
     setRecords(records.filter((r) => r.id !== id));
+    setDetailsCache((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    if (expandedId === id) {
+      setExpandedId(null);
+    }
   };
 
   const handleClearAll = () => {
@@ -994,6 +1242,8 @@ export function HistoryView({ lang, onNavigate }: HistoryViewProps) {
   const handleConfirmClear = () => {
     clearHistory();
     setRecords([]);
+    setDetailsCache({});
+    setExpandedId(null);
   };
 
   const applyHistoryConfig = (
@@ -1143,13 +1393,11 @@ export function HistoryView({ lang, onNavigate }: HistoryViewProps) {
   /**
    * Export detailed log for a specific record as text file
    */
-  const handleExportLog = (record: TranslationRecord) => {
+  const handleExportLog = async (record: TranslationRecord) => {
     // Lazy load details for export
-    const detail = getRecordDetail(record.id) || {
-      logs: [],
-      triggers: [],
-      llamaLogs: [],
-    };
+    const detail =
+      detailsCache[record.id] || (await loadRecordDetail(record.id));
+    setDetailsCache((prev) => ({ ...prev, [record.id]: detail }));
     const fullRecord = {
       ...record,
       logs: detail.logs,
@@ -1465,7 +1713,11 @@ export function HistoryView({ lang, onNavigate }: HistoryViewProps) {
                     record={record}
                     t={t}
                     isLoading={loadingDetails === record.id}
-                    getRecordDetail={getRecordDetail}
+                    detail={
+                      detailsCache[record.id] ||
+                      getRecordDetail(record.id) ||
+                      createEmptyRecordDetail()
+                    }
                     getTriggerTypeLabel={getTriggerTypeLabel}
                     onOpenPath={handleOpenPath}
                     onOpenFolder={handleOpenFolder}

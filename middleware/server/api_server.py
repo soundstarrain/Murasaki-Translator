@@ -639,7 +639,7 @@ class TranslateRequest(BaseModel):
     line_check: bool = True
     line_tolerance_abs: int = 10
     line_tolerance_pct: float = 0.2
-    anchor_check: bool = True
+    anchor_check: bool = False
     anchor_check_retries: int = 1
     traditional: bool = False
     save_cot: bool = False

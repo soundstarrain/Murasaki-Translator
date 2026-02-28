@@ -1057,7 +1057,7 @@ if __name__ == "__main__":
             line_check = False
             line_tolerance_abs = 10
             line_tolerance_pct = 0.2
-            anchor_check = True
+            anchor_check = False
             anchor_check_retries = 1
             traditional = False
             save_cot = False

@@ -223,6 +223,15 @@ const api = {
   loadCache: (cachePath: string) => ipcRenderer.invoke("load-cache", cachePath),
   saveCache: (cachePath: string, data: any) =>
     ipcRenderer.invoke("save-cache", cachePath, data),
+  historyDetailLoad: (id: string) =>
+    ipcRenderer.invoke("history-detail-load", id),
+  historyDetailSave: (id: string, detail: any) =>
+    ipcRenderer.invoke("history-detail-save", id, detail),
+  historyDetailDelete: (id: string) =>
+    ipcRenderer.invoke("history-detail-delete", id),
+  historyDetailPrune: (allowedIds: string[]) =>
+    ipcRenderer.invoke("history-detail-prune", allowedIds),
+  historyDetailClearAll: () => ipcRenderer.invoke("history-detail-clear-all"),
   rebuildDoc: (options: { cachePath: string; outputPath?: string }) =>
     ipcRenderer.invoke("rebuild-doc", options),
   writeFile: (path: string, content: string) =>
