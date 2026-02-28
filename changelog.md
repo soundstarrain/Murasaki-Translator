@@ -1,5 +1,31 @@
 # Murasaki Translator - Changelog
 
+## [2.1.3] - 2026-02-28
+
+### Changed
+
+#### [中间件执行层] API 模型发现与路径解析
+- fix: `/api/v1/models` 返回模型列表改为聚合默认目录 `middleware/models/*.gguf`、`worker.model_path` 与 `MURASAKI_DEFAULT_MODEL`，不再仅依赖默认目录扫描。
+- fix: 模型路径解析支持相对路径多基准解析（`Path.cwd()`、`_middleware_dir`、`_server_dir`），修复 `--model` 使用相对路径时在不同启动目录下可能漏报的问题。
+- fix: 模型列表输出按真实文件路径去重并稳定排序，避免同一路径被重复返回。
+
+#### [中间件执行层] 流式协议错误快速失败
+- fix: 推理流式响应新增不可重试协议错误分类，命中 `text/html` 或无 SSE `data:` 帧时直接返回失败，不再进入重复惩罚重试链路。
+- fix: 流式数据帧解析增加首帧异常预览信息，便于定位上游返回非 SSE 负载的问题。
+
+#### [主进程编排层] 本地启动命令日志格式
+- fix: `System: CMD` 日志改为使用结构化命令格式化函数输出 `pythonCmd.path`，修复前缀出现少量乱码的显示问题。
+- fix: 命令日志新增防御性清洗，剔除对象字符串化残留，保证日志可读性与可复制性。
+
+#### [中间件执行层] 默认后处理引号规则保护
+- fix: `smart_quotes` 新增代码片段保护机制，先掩码 fenced code block、行内反引号代码与 HTML/XML 标签，再执行引号归一化，最后还原原片段。
+- fix: 标签属性中的英文引号（如 `<font color="#ff0000">`）不再被替换，避免代码/标记语义被破坏。
+
+#### [测试工程层] 回归覆盖
+- test: 新增 `test_api_server_models` 用例，覆盖默认目录外模型收集、路径去重与相对路径解析。
+- test: 新增 `test_engine` 用例，覆盖 HTML/非 SSE 响应下流式协议错误的快速失败与“无惩罚重试”行为。
+- test: 新增 `test_rule_processor` 用例，覆盖 `smart_quotes` 在 HTML 标签属性、行内代码与 fenced code block 场景下的保护行为。
+
 ## [2.1.2] - 2026-02-26
 
 ### Changed
