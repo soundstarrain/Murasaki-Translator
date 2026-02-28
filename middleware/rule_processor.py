@@ -716,23 +716,58 @@ class RuleProcessor:
             # Remove empty lines
             lines = [line for line in text.splitlines() if line.strip()]
             return "\n".join(lines)
-            
+
         elif format_name == 'smart_quotes':
-            # Convert CJK/English quotes to Corner Quotes
-            # 1. Handle explicit directional quotes
-            text = text.replace('“', '「').replace('”', '」').replace('‘', '『').replace('’', '』')
-            
-            # 2. Robust pairing for straight quotes (" and ') - Balanced check within each line
+            protected_segments: Dict[str, str] = {}
+
+            def _mask_segments(content: str, pattern: str, flags: int = 0) -> str:
+                compiled = re.compile(pattern, flags)
+
+                def _replace(match: re.Match) -> str:
+                    token = f"__SMART_QUOTES_PROTECTED_{len(protected_segments)}__"
+                    protected_segments[token] = match.group(0)
+                    return token
+
+                return compiled.sub(_replace, content)
+
+            # Protect common code fragments first to avoid quote normalization corruption:
+            # 1) fenced code blocks, 2) inline backtick code, 3) HTML/XML tags
+            masked_text = text
+            masked_text = _mask_segments(masked_text, r"```[\s\S]*?```", re.MULTILINE)
+            masked_text = _mask_segments(masked_text, r"`[^`\n]*`")
+            masked_text = _mask_segments(masked_text, r"<[^>\n]+>")
+
+            # Convert CJK/English quotes to corner quotes.
+            masked_text = (
+                masked_text
+                .replace("\u201c", "\u300c")
+                .replace("\u201d", "\u300d")
+                .replace("\u2018", "\u300e")
+                .replace("\u2019", "\u300f")
+            )
+
+            # Pair straight quotes line-by-line only when count is even.
             lines = []
-            for line in text.splitlines():
-                # Only pair if count is even to avoid misalignment in lines with odd quotes
+            for line in masked_text.splitlines():
                 if line.count('"') > 0 and line.count('"') % 2 == 0:
-                    line = re.sub(r'"([^"]*)"', r'「\1」', line)
+                    line = re.sub(
+                        r'"([^"]*)"',
+                        lambda m: "\u300c" + m.group(1) + "\u300d",
+                        line,
+                    )
                 if line.count("'") > 0 and line.count("'") % 2 == 0:
-                    line = re.sub(r"'([^']*)'", r'『\1』', line)
+                    line = re.sub(
+                        r"'([^']*)'",
+                        lambda m: "\u300e" + m.group(1) + "\u300f",
+                        line,
+                    )
                 lines.append(line)
-            return "\n".join(lines)
-            
+
+            processed = "\n".join(lines)
+            for token, original in protected_segments.items():
+                processed = processed.replace(token, original)
+            return processed
+
         elif format_name == 'ellipsis':
             # Standardize ellipsis formats to ……
             # Only handle 3 or more characters to avoid false positives with double periods

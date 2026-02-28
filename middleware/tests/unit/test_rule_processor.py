@@ -84,3 +84,41 @@ def test_rule_processor_python_transform_with_protector_restore():
     protector.replacements = {"@P1@": "Alice"}
     out = processor.process("@P1@", protector=protector)
     assert out == "Alice"
+
+
+@pytest.mark.unit
+def test_rule_processor_smart_quotes_preserves_html_attribute_quotes():
+    rules = [
+        {"type": "format", "pattern": "smart_quotes", "active": True},
+    ]
+    processor = RuleProcessor(rules)
+    text = '<font color="#ff0000">"哈哈哈"</font>'
+    out = processor.process(text)
+    assert '<font color="#ff0000">' in out
+    assert "<font color=「#ff0000」>" not in out
+    assert "「哈哈哈」" in out
+
+
+@pytest.mark.unit
+def test_rule_processor_smart_quotes_preserves_inline_code_quotes():
+    rules = [
+        {"type": "format", "pattern": "smart_quotes", "active": True},
+    ]
+    processor = RuleProcessor(rules)
+    text = '配置示例：`{"k":"v"}`；对话："你好"'
+    out = processor.process(text)
+    assert '`{"k":"v"}`' in out
+    assert "配置示例：" in out
+    assert "对话：「你好」" in out
+
+
+@pytest.mark.unit
+def test_rule_processor_smart_quotes_preserves_fenced_code_block_quotes():
+    rules = [
+        {"type": "format", "pattern": "smart_quotes", "active": True},
+    ]
+    processor = RuleProcessor(rules)
+    text = '```json\n{"k":"v"}\n```\n"外部内容"'
+    out = processor.process(text)
+    assert '```json\n{"k":"v"}\n```' in out
+    assert "「外部内容」" in out
