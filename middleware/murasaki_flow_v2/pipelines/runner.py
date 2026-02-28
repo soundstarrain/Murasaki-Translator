@@ -17,6 +17,13 @@ from murasaki_translator.documents.srt import SrtDocument
 from murasaki_translator.documents.ass import AssDocument
 from murasaki_translator.core.cache import TranslationCache
 from murasaki_translator.core.chunker import TextBlock
+from murasaki_translator.core.anchor_guard import (
+    collect_anchor_ids,
+    normalize_anchor_stream,
+    prepare_local_anchor_context,
+    repair_and_validate_anchor_output,
+    restore_output_anchors,
+)
 
 from murasaki_flow_v2.registry.profile_store import ProfileStore
 from murasaki_flow_v2.providers.registry import ProviderRegistry
@@ -79,6 +86,19 @@ class KanaResidueRetryError(RuntimeError):
                 f" effective={self.effective_chars}"
                 f" min_chars={self.min_chars}"
             )
+        )
+
+
+class AnchorIntegrityRetryError(RuntimeError):
+    """Raised when structured anchor repair/validation still fails."""
+
+    def __init__(self, *, meta: Optional[Dict[str, Any]] = None) -> None:
+        self.meta = dict(meta or {})
+        fmt = str(self.meta.get("format") or "anchor")
+        missing = int(self.meta.get("missing_count") or 0)
+        foreign = int(self.meta.get("foreign_count") or 0)
+        super().__init__(
+            f"AnchorMissing: format={fmt} missing={missing} foreign={foreign}"
         )
 
 
@@ -465,13 +485,71 @@ class PipelineRunner:
     @staticmethod
     def _resolve_protect_patterns_base(input_path: str) -> Optional[List[str]]:
         lower_input = str(input_path or "").lower()
-        if lower_input.endswith((".srt", ".ass", ".ssa")):
-            from murasaki_translator.core.text_protector import TextProtector
+        if not lower_input.endswith(".txt"):
+            return None
+        from murasaki_translator.core.text_protector import TextProtector
 
-            return list(TextProtector.SUBTITLE_PATTERNS)
+        return list(TextProtector.DEFAULT_PATTERNS)
+
+    @staticmethod
+    def _should_enable_text_protect_for_file(input_path: str) -> bool:
+        lower_input = str(input_path or "").lower()
+        return lower_input.endswith(".txt")
+
+    @staticmethod
+    def _detect_anchor_mode(input_path: str, source_text: str) -> str:
+        normalized = normalize_anchor_stream(source_text)
+        id_tokens = collect_anchor_ids(normalized)
+        if not id_tokens:
+            return ""
+
+        lower_input = str(input_path or "").lower()
         if lower_input.endswith(".epub"):
-            return [r"@id=\d+@", r"@end=\d+@", r"<[^>]+>"]
-        return None
+            return "epub"
+
+        has_end_tokens = bool(
+            re.search(r"@end=\d+@", normalized, flags=re.IGNORECASE)
+        )
+        raw_id_tokens = re.findall(r"@id=(\d+)@", normalized, flags=re.IGNORECASE)
+        has_repeated_ids = len(raw_id_tokens) != len(set(raw_id_tokens))
+        if has_end_tokens or has_repeated_ids:
+            return "alignment"
+        return ""
+
+    @staticmethod
+    def _extract_single_anchor_wrapper(source_text: str) -> Optional[Dict[str, str]]:
+        normalized = normalize_anchor_stream(source_text)
+        match = re.match(
+            r"^\s*@id=(\d+)@\s*([\s\S]*?)\s*@end=\1@\s*$",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        anchor_id = str(match.group(1))
+        inner_text = str(match.group(2) or "").strip("\r\n")
+        return {"id": anchor_id, "inner_text": inner_text}
+
+    @staticmethod
+    def _unwrap_single_anchor_wrapper_body(text: str, anchor_id: str) -> str:
+        normalized = normalize_anchor_stream(str(text or ""))
+        anchor = str(anchor_id or "").strip()
+        if anchor:
+            wrapped_re = re.compile(
+                rf"^\s*@id={re.escape(anchor)}@\s*([\s\S]*?)\s*@end={re.escape(anchor)}@\s*$",
+                flags=re.IGNORECASE,
+            )
+            wrapped_match = wrapped_re.match(normalized)
+            if wrapped_match:
+                return str(wrapped_match.group(1) or "").strip("\r\n")
+
+        # Fallback: strip marker tokens while preserving processed/protected body.
+        return re.sub(
+            r"@(?:id|end)=\d+@",
+            "",
+            normalized,
+            flags=re.IGNORECASE,
+        ).strip("\r\n ")
 
     @staticmethod
     def _should_use_double_newline_separator(
@@ -1130,6 +1208,9 @@ class PipelineRunner:
         enable_text_protect = processing_cfg.get("text_protect")
         if enable_text_protect is None:
             enable_text_protect = False
+        enable_text_protect = bool(enable_text_protect)
+        if enable_text_protect:
+            enable_text_protect = self._should_enable_text_protect_for_file(input_path)
         strict_line_count = bool(processing_cfg.get("strict_line_count"))
         (
             kana_retry_enabled,
@@ -1141,7 +1222,11 @@ class PipelineRunner:
             pre_rules = self._resolve_rules(rules_pre_spec)
             post_rules = self._resolve_rules(rules_post_spec)
             post_rules = self._sanitize_post_rules_for_input(post_rules, input_path)
-            protect_patterns_base = self._resolve_protect_patterns_base(input_path)
+            protect_patterns_base = (
+                self._resolve_protect_patterns_base(input_path)
+                if enable_text_protect
+                else None
+            )
             glossary_dict = glossary_dict_for_prompt
             if (
                 pre_rules
@@ -1455,6 +1540,7 @@ class PipelineRunner:
                 context_after = context["after"]
 
             source_text = block.prompt_text
+            raw_source_text = str(getattr(block, "prompt_text", "") or "")
             source_format = str(context_cfg.get("source_format") or "").strip().lower()
             use_jsonl = source_format == "jsonl" and chunk_type == "line"
             if not use_jsonl and processing_processor:
@@ -1501,11 +1587,40 @@ class PipelineRunner:
                 )
                 source_text = self._build_jsonl_range(protected_lines, start, end)
 
+            anchor_mode = ""
+            anchor_local_ctx = None
+            anchor_line_wrapper: Optional[Dict[str, str]] = None
+            anchor_source_for_check = normalize_anchor_stream(raw_source_text)
+            if chunk_type == "line" and not use_jsonl:
+                wrapper = self._extract_single_anchor_wrapper(raw_source_text)
+                if wrapper is not None:
+                    anchor_line_wrapper = wrapper
+                    source_text = self._unwrap_single_anchor_wrapper_body(
+                        source_text,
+                        str(wrapper.get("id") or ""),
+                    )
+            if not use_jsonl and anchor_line_wrapper is None:
+                anchor_mode = self._detect_anchor_mode(input_path, raw_source_text)
+                if anchor_mode:
+                    candidate_ctx = prepare_local_anchor_context(
+                        raw_source_text,
+                        source_text,
+                        mode=anchor_mode,
+                    )
+                    if candidate_ctx.enabled:
+                        anchor_local_ctx = candidate_ctx
+                        source_text = candidate_ctx.prompt_text_local
+                        anchor_source_for_check = candidate_ctx.source_text_local
+
             effective_glossary_text = glossary_text
             glossary_total_count = len(glossary_dict_for_prompt)
             matched_glossary_terms: List[str] = []
             if glossary_dict_for_prompt:
-                source_for_glossary = str(getattr(block, "prompt_text", "") or source_text or "")
+                source_for_glossary = (
+                    str(anchor_line_wrapper.get("inner_text") or "")
+                    if anchor_line_wrapper is not None
+                    else str(getattr(block, "prompt_text", "") or source_text or "")
+                )
                 matched_glossary = self._extract_relevant_glossary(
                     glossary_dict_for_prompt,
                     source_for_glossary,
@@ -1946,6 +2061,33 @@ class PipelineRunner:
                                 "LinePolicy: unexpected line count"
                             )
                         translated = checked[0]
+                    if anchor_mode:
+                        repaired_text, repaired_ok, anchor_meta = (
+                            repair_and_validate_anchor_output(
+                                anchor_source_for_check,
+                                translated,
+                                mode=anchor_mode,
+                            )
+                        )
+                        if not repaired_ok:
+                            raise AnchorIntegrityRetryError(meta=anchor_meta)
+                        translated = repaired_text
+                        if anchor_local_ctx and anchor_local_ctx.enabled:
+                            translated = restore_output_anchors(
+                                translated,
+                                anchor_local_ctx.local_to_global,
+                            )
+                    if anchor_line_wrapper is not None:
+                        anchor_id = str(anchor_line_wrapper.get("id") or "").strip()
+                        translated_body = re.sub(
+                            r"@(?:id|end)=\d+@",
+                            "",
+                            str(translated or ""),
+                            flags=re.IGNORECASE,
+                        ).strip("\r\n ")
+                        translated = (
+                            f"@id={anchor_id}@\n{translated_body}\n@end={anchor_id}@"
+                        )
                     kana_retry_check = self._evaluate_kana_retry(
                         translated,
                         source_lang=kana_retry_source_lang,
@@ -1975,12 +2117,14 @@ class PipelineRunner:
                     ParserError,
                     LinePolicyError,
                     KanaResidueRetryError,
+                    AnchorIntegrityRetryError,
                 ) as exc:
                     last_error = str(exc)
                     if adaptive is not None and isinstance(exc, ProviderError):
                         adaptive.note_error(last_error)
                     error_type = (
-                        "kana_residue" if isinstance(exc, KanaResidueRetryError)
+                        "anchor_missing" if isinstance(exc, AnchorIntegrityRetryError)
+                        else "kana_residue" if isinstance(exc, KanaResidueRetryError)
                         else "line_mismatch" if isinstance(exc, LinePolicyError)
                         else "empty" if isinstance(exc, ParserError)
                         else "provider_error"
@@ -1989,6 +2133,8 @@ class PipelineRunner:
                     _duration_ms: Optional[int] = None
                     _provider_error_type = error_type
                     _retry_extra_meta: Dict[str, Any] = {}
+                    if isinstance(exc, AnchorIntegrityRetryError):
+                        _retry_extra_meta = dict(exc.meta or {})
                     if isinstance(exc, KanaResidueRetryError):
                         _retry_extra_meta = {
                             "kanaRetryRatio": round(exc.ratio, 6),

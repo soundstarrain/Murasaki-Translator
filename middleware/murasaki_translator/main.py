@@ -66,6 +66,12 @@ from murasaki_translator.core.engine import InferenceEngine
 from murasaki_translator.core.parser import ResponseParser
 from murasaki_translator.core.quality_checker import QualityChecker, format_warnings_for_log, calculate_glossary_coverage
 from murasaki_translator.core.text_protector import TextProtector  # [Experimental] 占位符保护
+from murasaki_translator.core.anchor_guard import (
+    normalize_anchor_stream as _shared_normalize_anchor_stream,
+    prepare_local_anchor_context,
+    restore_output_anchors,
+    repair_and_validate_anchor_output,
+)
 from murasaki_translator.core.cache import TranslationCache  # 翻译缓存用于校对
 from rule_processor import RuleProcessor
 from murasaki_translator.utils.monitor import HardwareMonitor
@@ -312,30 +318,8 @@ def _allow_text_protect(input_path: Optional[str], args) -> bool:
 
 
 def _normalize_anchor_stream(text: str) -> str:
-    """Normalize potentially mangled @id/@end anchors (full-width, spaces, newlines)."""
-    if not text:
-        return text
-
-    def _normalize_digits(s: str) -> str:
-        return s.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
-
-    def _fix_id(m: re.Match) -> str:
-        return f"@id={_normalize_digits(m.group(1))}@"
-
-    def _fix_end(m: re.Match) -> str:
-        return f"@end={_normalize_digits(m.group(1))}@"
-
-    text = re.sub(
-        r"[@＠]\s*[iｉIＩ]\s*[dｄDＤ]\s*[=＝]\s*([0-9０-９]+)\s*[@＠]",
-        _fix_id,
-        text,
-    )
-    text = re.sub(
-        r"[@＠]\s*[eｅEＥ]\s*[nｎNＮ]\s*[dｄDＤ]\s*[=＝]\s*([0-9０-９]+)\s*[@＠]",
-        _fix_end,
-        text,
-    )
-    return text
+    """Normalize potentially mangled @id/@end anchors."""
+    return _shared_normalize_anchor_stream(text)
 
 
 def _detect_anchor_missing(original_src_text: str, output_text: str, args) -> tuple:
@@ -349,18 +333,19 @@ def _detect_anchor_missing(original_src_text: str, output_text: str, args) -> tu
     file_path = getattr(args, "file", "") or ""
     ext = os.path.splitext(file_path)[1].lower()
 
-    # Alignment mode: @id=ID@ ... @id=ID@ (same marker twice)
+    # Alignment mode: require paired @id=ID@ ... @end=ID@
     if getattr(args, "alignment_mode", False):
         src_norm = _normalize_anchor_stream(original_src_text)
         out_norm = _normalize_anchor_stream(output_text)
         src_ids = re.findall(r"@id=(\d+)@", src_norm)
         if not src_ids:
             return False, {}
-        out_ids = re.findall(r"@id=(\d+)@", out_norm)
-        counts = {}
-        for uid in out_ids:
-            counts[uid] = counts.get(uid, 0) + 1
-        missing = [uid for uid in set(src_ids) if counts.get(uid, 0) < 2]
+        out_id_set = set(re.findall(r"@id=(\d+)@", out_norm))
+        out_end_set = set(re.findall(r"@end=(\d+)@", out_norm))
+        missing = [
+            uid for uid in set(src_ids)
+            if uid not in out_id_set or uid not in out_end_set
+        ]
         if missing:
             return True, {"format": "alignment", "missing_count": len(missing)}
         return False, {}
@@ -415,9 +400,33 @@ def translate_block_with_retry(
     Unified A/B/C/D retry strategy for a single block.
     Used by both batch translation and single-block re-translation.
     """
+    raw_original_src_text = original_src_text
+    working_original_src_text = original_src_text
+    working_processed_src_text = processed_src_text
+    anchor_local_ctx = None
+
+    file_path = getattr(args, "file", "") or ""
+    file_ext = os.path.splitext(file_path)[1].lower()
+    anchor_mode = (
+        "alignment"
+        if getattr(args, "alignment_mode", False)
+        else ("epub" if file_ext == ".epub" else "")
+    )
+    if anchor_mode in {"alignment", "epub"}:
+        candidate_ctx = prepare_local_anchor_context(
+            working_original_src_text,
+            working_processed_src_text,
+            mode=anchor_mode,
+        )
+        if candidate_ctx.enabled:
+            anchor_local_ctx = candidate_ctx
+            working_original_src_text = candidate_ctx.source_text_local
+            working_processed_src_text = candidate_ctx.prompt_text_local
+    should_restore_localized_anchors = bool(anchor_local_ctx and anchor_local_ctx.enabled)
+
     # Build Initial Prompt
     messages = prompt_builder.build_messages(
-        processed_src_text, 
+        working_processed_src_text,
         enable_cot=args.debug,
         preset=args.preset
     )
@@ -511,7 +520,7 @@ def translate_block_with_retry(
                 continue
             else: break
 
-        src_line_count = len([l for l in original_src_text.splitlines() if l.strip()])
+        src_line_count = len([l for l in working_original_src_text.splitlines() if l.strip()])
         dst_line_count = len([l for l in parsed_lines if l.strip()])
         diff = abs(dst_line_count - src_line_count)
         pct_diff = diff / max(1, src_line_count)
@@ -544,11 +553,22 @@ def translate_block_with_retry(
                 anchor_check_text = protector.restore(anchor_check_text)
             except Exception:
                 pass
-        anchor_missing, anchor_meta = _detect_anchor_missing(
-            original_src_text,
-            anchor_check_text,
-            args
-        )
+        if anchor_mode in {"alignment", "epub"}:
+            repaired_text, repaired_ok, anchor_meta = repair_and_validate_anchor_output(
+                working_original_src_text,
+                anchor_check_text,
+                mode=anchor_mode,
+            )
+            anchor_missing = not repaired_ok
+            if repaired_ok:
+                anchor_check_text = repaired_text
+                parsed_lines = anchor_check_text.split("\n")
+        else:
+            anchor_missing, anchor_meta = _detect_anchor_missing(
+                raw_original_src_text,
+                anchor_check_text,
+                args
+            )
         if anchor_missing:
             if anchor_attempts < anchor_retry_budget:
                 anchor_attempts += 1
@@ -593,11 +613,11 @@ def translate_block_with_retry(
         if glossary and args.output_hit_threshold > 0 and not structural_retry_happened:
             translated_text = '\n'.join(parsed_lines)
             passed, coverage, cot_coverage, hit, total = calculate_glossary_coverage(
-                original_src_text, translated_text, glossary, cot_content,
+                raw_original_src_text, translated_text, glossary, cot_content,
                 args.output_hit_threshold, args.cot_coverage_threshold
             )
             last_coverage = coverage
-            last_missed_terms = get_missed_terms(original_src_text, translated_text, glossary)
+            last_missed_terms = get_missed_terms(raw_original_src_text, translated_text, glossary)
             
             if best_result is None or coverage > best_result[3]:
                 best_result = (parsed_lines.copy(), cot_content, raw_output, coverage, block_usage)
@@ -628,19 +648,30 @@ def translate_block_with_retry(
         if best_result:
             parsed_lines, cot_content, raw_output, _, block_usage = best_result
         else:
-            parsed_lines = ["[翻译失败]"] + original_src_text.split('\n')
+            parsed_lines = ["[翻译失败]"] + raw_original_src_text.split('\n')
             cot_content, raw_output, block_usage = "", "", {}
+            should_restore_localized_anchors = False
         final_output = {"parsed_lines": parsed_lines, "cot": cot_content, "raw": raw_output, "usage": block_usage}
 
     base_text = '\n'.join(final_output["parsed_lines"])
-    processed_text = post_processor.process(base_text, src_text=original_src_text, protector=protector, strict_line_count=strict_mode)
+    processed_text = post_processor.process(
+        base_text,
+        src_text=raw_original_src_text,
+        protector=protector,
+        strict_line_count=strict_mode,
+    )
+    if should_restore_localized_anchors:
+        processed_text = restore_output_anchors(
+            processed_text,
+            anchor_local_ctx.local_to_global,
+        )
     
     warnings = []
     try:
         qc = QualityChecker(glossary=glossary)
         qc_source_lang = "ja"
         warnings = qc.check_output(
-            [l for l in original_src_text.split('\n') if l.strip()], 
+            [l for l in raw_original_src_text.split('\n') if l.strip()],
             [l for l in processed_text.split('\n') if l.strip()], 
             source_lang=qc_source_lang
         )
@@ -650,14 +681,14 @@ def translate_block_with_retry(
     return {
         "success": True,
         "block_idx": block_idx,
-        "src_text": original_src_text,
+        "src_text": raw_original_src_text,
         "out_text": processed_text,
         "preview_text": processed_text,
         "cot": final_output["cot"],
         "raw_output": final_output["raw"],
         "warnings": warnings,
         "lines_count": len([l for l in processed_text.splitlines() if l.strip()]),
-        "chars_count": len(original_src_text),
+        "chars_count": len(raw_original_src_text),
         "cot_chars": len(final_output["cot"]),
         "usage": final_output["usage"],
         "protector_stats": protector.get_stats() if protector else None,
@@ -2315,7 +2346,13 @@ def main():
                 
                 if args.alignment_mode and input_path.lower().endswith('.txt'):
                     print(f"[Debug] Invoking save_reconstructed. MapSize={len(structure_map)}, TotalLines={source_lines}, Blocks={len(translated_blocks)}")
-                    AlignmentHandler.save_reconstructed(output_path, translated_blocks, structure_map, total_physical_lines=source_lines)
+                    AlignmentHandler.save_reconstructed(
+                        output_path,
+                        translated_blocks,
+                        structure_map,
+                        total_physical_lines=source_lines,
+                        source_blocks=blocks,
+                    )
                 else:
                     doc.save(output_path, translated_blocks)
                 print(f"[Final] Reconstruction complete: {output_path}")

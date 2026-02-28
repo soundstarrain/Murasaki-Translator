@@ -225,15 +225,44 @@ def test_flow_v2_runner_sanitize_post_rules_for_subtitle():
 
 @pytest.mark.unit
 def test_flow_v2_runner_resolve_protect_patterns_base():
+    txt_patterns = PipelineRunner._resolve_protect_patterns_base("novel.txt")
+    assert isinstance(txt_patterns, list)
+    assert txt_patterns
+
     subtitle = PipelineRunner._resolve_protect_patterns_base("episode.ass")
-    assert isinstance(subtitle, list)
-    assert r"<[^>]+>" in subtitle
+    assert subtitle is None
 
     epub = PipelineRunner._resolve_protect_patterns_base("book.epub")
-    assert epub == [r"@id=\d+@", r"@end=\d+@", r"<[^>]+>"]
+    assert epub is None
 
-    plain = PipelineRunner._resolve_protect_patterns_base("novel.txt")
-    assert plain is None
+
+@pytest.mark.unit
+def test_flow_v2_runner_should_enable_text_protect_for_file():
+    assert PipelineRunner._should_enable_text_protect_for_file("novel.txt") is True
+    assert PipelineRunner._should_enable_text_protect_for_file("episode.srt") is False
+    assert PipelineRunner._should_enable_text_protect_for_file("book.epub") is False
+
+
+@pytest.mark.unit
+def test_flow_v2_runner_detect_anchor_mode():
+    epub_text = "@id=11@\nhello\n@end=11@"
+    assert PipelineRunner._detect_anchor_mode("book.epub", epub_text) == "epub"
+
+    alignment_text = "@id=1@\nfoo\n@end=1@"
+    assert PipelineRunner._detect_anchor_mode("comic.txt", alignment_text) == "alignment"
+
+    plain_text = "just plain text"
+    assert PipelineRunner._detect_anchor_mode("novel.txt", plain_text) == ""
+
+
+@pytest.mark.unit
+def test_flow_v2_runner_extract_single_anchor_wrapper():
+    wrapped = "@id=1001@\nhello\n@end=1001@"
+    parsed = PipelineRunner._extract_single_anchor_wrapper(wrapped)
+    assert parsed == {"id": "1001", "inner_text": "hello"}
+
+    mixed = "@id=1@\na\n@end=1@\n@id=2@\nb\n@end=2@"
+    assert PipelineRunner._extract_single_anchor_wrapper(mixed) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1277,6 +1306,342 @@ def test_flow_v2_runner_block_mode_kana_residue_reads_chunk_options_source_lang(
         event for event in captured_events if event.get("phase") == "request_retry"
     ]
     assert any(event.get("errorType") == "kana_residue" for event in retry_events)
+
+
+@pytest.mark.unit
+def test_flow_v2_runner_block_mode_anchor_repair_success_without_retry(
+    tmp_path,
+    monkeypatch,
+):
+    runner = _make_runner(tmp_path)
+    runner.pipeline = {
+        "provider": "provider_stub",
+        "prompt": "prompt_stub",
+        "parser": "parser_stub",
+        "chunk_policy": "chunk_stub",
+        "settings": {"max_retries": 1, "concurrency": 1},
+    }
+
+    class _Provider:
+        profile = {"model": "stub-model"}
+
+        def __init__(self):
+            self.calls = 0
+
+        def build_request(self, _messages, _settings):
+            return object()
+
+        def send(self, _request):
+            self.calls += 1
+            # Old alignment style: @id ... @id (no @end), should be auto-repaired.
+            return ProviderResponse(text="@id=1@\n译文\n@id=1@", raw={})
+
+    class _Parser:
+        profile = {"type": "plain"}
+
+        def parse(self, text):
+            return type("Parsed", (), {"text": text})()
+
+    provider = _Provider()
+    captured_events = []
+    doc = _DummyDoc(["@id=1001@\nsource\n@end=1001@"])
+    monkeypatch.setattr(
+        "murasaki_flow_v2.pipelines.runner.DocumentFactory.get_document",
+        lambda _path: doc,
+    )
+    monkeypatch.setattr(
+        "murasaki_flow_v2.pipelines.runner.build_messages",
+        lambda *_args, **_kwargs: [{"role": "user", "content": "x"}],
+    )
+    monkeypatch.setattr(runner.providers, "get_provider", lambda _ref: provider)
+    monkeypatch.setattr(runner.parsers, "get_parser", lambda _ref: _Parser())
+    monkeypatch.setattr(
+        runner.prompts, "get_prompt", lambda _ref: {"user_template": "{{source}}"}
+    )
+    monkeypatch.setattr(
+        runner.chunk_policies,
+        "get_chunk_policy",
+        lambda _ref: _DummyBlockChunkPolicy(),
+    )
+    monkeypatch.setattr(
+        flow_v2_runner,
+        "emit_api_stats_event",
+        lambda payload: captured_events.append(payload),
+    )
+
+    output_path = str(tmp_path / "anchor_repair_ok.txt")
+    runner.run("dummy-input.txt", output_path=output_path, save_cache=False)
+
+    assert provider.calls == 1
+    assert [block.prompt_text for block in doc.saved_blocks] == [
+        "@id=1001@\n译文\n@end=1001@"
+    ]
+    retry_events = [
+        event for event in captured_events if event.get("phase") == "request_retry"
+    ]
+    assert not any(event.get("errorType") == "anchor_missing" for event in retry_events)
+
+
+@pytest.mark.unit
+def test_flow_v2_runner_block_mode_anchor_repair_fail_then_retry(
+    tmp_path,
+    monkeypatch,
+):
+    runner = _make_runner(tmp_path)
+    runner.pipeline = {
+        "provider": "provider_stub",
+        "prompt": "prompt_stub",
+        "parser": "parser_stub",
+        "chunk_policy": "chunk_stub",
+        "settings": {"max_retries": 1, "concurrency": 1},
+    }
+
+    class _Provider:
+        profile = {"model": "stub-model"}
+
+        def __init__(self):
+            self.calls = 0
+
+        def build_request(self, _messages, _settings):
+            return object()
+
+        def send(self, _request):
+            self.calls += 1
+            if self.calls == 1:
+                # Missing anchor segment for id=2, repair should fail and trigger retry.
+                return ProviderResponse(text="@id=1@\nA\n@end=1@", raw={})
+            return ProviderResponse(
+                text="@id=1@\nA\n@end=1@\n@id=2@\nB\n@end=2@",
+                raw={},
+            )
+
+    class _Parser:
+        profile = {"type": "plain"}
+
+        def parse(self, text):
+            return type("Parsed", (), {"text": text})()
+
+    provider = _Provider()
+    captured_events = []
+    doc = _DummyDoc(["@id=1001@\nsource1\n@end=1001@\n@id=1002@\nsource2\n@end=1002@"])
+    monkeypatch.setattr(
+        "murasaki_flow_v2.pipelines.runner.DocumentFactory.get_document",
+        lambda _path: doc,
+    )
+    monkeypatch.setattr(
+        "murasaki_flow_v2.pipelines.runner.build_messages",
+        lambda *_args, **_kwargs: [{"role": "user", "content": "x"}],
+    )
+    monkeypatch.setattr(runner.providers, "get_provider", lambda _ref: provider)
+    monkeypatch.setattr(runner.parsers, "get_parser", lambda _ref: _Parser())
+    monkeypatch.setattr(
+        runner.prompts, "get_prompt", lambda _ref: {"user_template": "{{source}}"}
+    )
+    monkeypatch.setattr(
+        runner.chunk_policies,
+        "get_chunk_policy",
+        lambda _ref: _DummyBlockChunkPolicy(),
+    )
+    monkeypatch.setattr(
+        flow_v2_runner,
+        "emit_api_stats_event",
+        lambda payload: captured_events.append(payload),
+    )
+
+    output_path = str(tmp_path / "anchor_repair_retry.txt")
+    runner.run("dummy-input.txt", output_path=output_path, save_cache=False)
+
+    assert provider.calls == 2
+    assert [block.prompt_text for block in doc.saved_blocks] == [
+        "@id=1001@\nA\n@end=1001@\n@id=1002@\nB\n@end=1002@"
+    ]
+    retry_events = [
+        event for event in captured_events if event.get("phase") == "request_retry"
+    ]
+    assert any(event.get("errorType") == "anchor_missing" for event in retry_events)
+    retry_meta = next(
+        event.get("meta", {})
+        for event in retry_events
+        if event.get("errorType") == "anchor_missing"
+    )
+    assert retry_meta.get("format") == "alignment"
+    assert int(retry_meta.get("missing_count") or 0) >= 1
+
+
+@pytest.mark.unit
+def test_flow_v2_runner_line_mode_single_anchor_wrapper_unwrap_and_rewrap(
+    tmp_path,
+    monkeypatch,
+):
+    runner = _make_runner(tmp_path)
+    runner.pipeline = {
+        "provider": "provider_stub",
+        "prompt": "prompt_stub",
+        "parser": "parser_stub",
+        "chunk_policy": "chunk_stub",
+        "settings": {"max_retries": 0, "concurrency": 1},
+    }
+
+    class _Provider:
+        profile = {"model": "stub-model"}
+
+        def __init__(self):
+            self.calls = 0
+
+        def build_request(self, _messages, _settings):
+            return object()
+
+        def send(self, _request):
+            self.calls += 1
+            return ProviderResponse(text="@id=9@译文@end=9@", raw={})
+
+    class _Parser:
+        profile = {"type": "plain"}
+
+        def parse(self, text):
+            return type("Parsed", (), {"text": text})()
+
+    provider = _Provider()
+    captured_sources = []
+
+    def _capture_messages(_prompt_profile, **kwargs):
+        captured_sources.append(str(kwargs.get("source_text") or ""))
+        return [{"role": "user", "content": kwargs.get("source_text", "")}]
+
+    doc = _DummyDoc(["@id=1001@\n源文\n@end=1001@"])
+    monkeypatch.setattr(
+        "murasaki_flow_v2.pipelines.runner.DocumentFactory.get_document",
+        lambda _path: doc,
+    )
+    monkeypatch.setattr(
+        "murasaki_flow_v2.pipelines.runner.build_messages",
+        _capture_messages,
+    )
+    monkeypatch.setattr(runner.providers, "get_provider", lambda _ref: provider)
+    monkeypatch.setattr(runner.parsers, "get_parser", lambda _ref: _Parser())
+    monkeypatch.setattr(
+        runner.prompts, "get_prompt", lambda _ref: {"user_template": "{{source}}"}
+    )
+    monkeypatch.setattr(
+        runner.chunk_policies,
+        "get_chunk_policy",
+        lambda _ref: _DummyLineChunkPolicy(),
+    )
+
+    output_path = str(tmp_path / "line_anchor_wrap.txt")
+    runner.run("book.epub", output_path=output_path, save_cache=False)
+
+    assert provider.calls == 1
+    assert captured_sources
+    assert "@id=" not in captured_sources[0]
+    assert captured_sources[0].strip() == "源文"
+    assert [block.prompt_text for block in doc.saved_blocks] == [
+        "@id=1001@\n译文\n@end=1001@"
+    ]
+
+
+@pytest.mark.unit
+def test_flow_v2_runner_line_mode_single_anchor_wrapper_keeps_preprocessed_body(
+    tmp_path,
+    monkeypatch,
+):
+    runner = _make_runner(tmp_path)
+    runner.pipeline = {
+        "provider": "provider_stub",
+        "prompt": "prompt_stub",
+        "parser": "parser_stub",
+        "chunk_policy": "chunk_stub",
+        "settings": {"max_retries": 0, "concurrency": 1},
+        "processing": {
+            "rules_pre": [
+                {"type": "format", "pattern": "dummy_pre", "active": True}
+            ]
+        },
+    }
+
+    class _FakeProcessingProcessor:
+        def __init__(self, options):
+            self.options = options
+
+        @property
+        def has_pre_rules(self):
+            return True
+
+        @property
+        def has_post_rules(self):
+            return False
+
+        def apply_pre(self, text: str):
+            return text.replace("source", "processed-source")
+
+        @staticmethod
+        def create_protector():
+            return None
+
+        @staticmethod
+        def apply_post(text: str, **_kwargs):
+            return text
+
+    class _Provider:
+        profile = {"model": "stub-model"}
+
+        def __init__(self):
+            self.calls = 0
+
+        def build_request(self, _messages, _settings):
+            return object()
+
+        def send(self, _request):
+            self.calls += 1
+            return ProviderResponse(text="@id=9@translated@end=9@", raw={})
+
+    class _Parser:
+        profile = {"type": "plain"}
+
+        def parse(self, text):
+            return type("Parsed", (), {"text": text})()
+
+    provider = _Provider()
+    captured_sources = []
+
+    def _capture_messages(_prompt_profile, **kwargs):
+        captured_sources.append(str(kwargs.get("source_text") or ""))
+        return [{"role": "user", "content": kwargs.get("source_text", "")}]
+
+    doc = _DummyDoc(["@id=1001@\nsource\n@end=1001@"])
+    monkeypatch.setattr(
+        "murasaki_flow_v2.pipelines.runner.DocumentFactory.get_document",
+        lambda _path: doc,
+    )
+    monkeypatch.setattr(
+        "murasaki_flow_v2.pipelines.runner.build_messages",
+        _capture_messages,
+    )
+    monkeypatch.setattr(
+        flow_v2_runner.v2_processing,
+        "ProcessingProcessor",
+        _FakeProcessingProcessor,
+    )
+    monkeypatch.setattr(runner.providers, "get_provider", lambda _ref: provider)
+    monkeypatch.setattr(runner.parsers, "get_parser", lambda _ref: _Parser())
+    monkeypatch.setattr(
+        runner.prompts, "get_prompt", lambda _ref: {"user_template": "{{source}}"}
+    )
+    monkeypatch.setattr(
+        runner.chunk_policies,
+        "get_chunk_policy",
+        lambda _ref: _DummyLineChunkPolicy(),
+    )
+
+    output_path = str(tmp_path / "line_anchor_wrap_preprocessed.txt")
+    runner.run("book.epub", output_path=output_path, save_cache=False)
+
+    assert provider.calls == 1
+    assert captured_sources
+    assert captured_sources[0].strip() == "processed-source"
+    assert [block.prompt_text for block in doc.saved_blocks] == [
+        "@id=1001@\ntranslated\n@end=1001@"
+    ]
 
 
 @pytest.mark.unit

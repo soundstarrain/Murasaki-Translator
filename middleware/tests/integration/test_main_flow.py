@@ -180,21 +180,25 @@ def test_main_flow_glossary_best_result_selected():
 
 
 @pytest.mark.integration
-def test_main_flow_anchor_retry_alignment():
+def test_main_flow_anchor_repair_alignment_no_retry():
     args = _make_args(anchor_check=True, anchor_check_retries=1, alignment_mode=True)
-    original = "@id=1@\nhello\n@id=1@"
+    original = "@id=1@\nhello\n@end=1@"
     result = _run_flow(original, ["@id=1@\nhello", original], args)
     types = [item.get("type") for item in result["retry_history"]]
-    assert "anchor_missing" in types
+    assert "anchor_missing" not in types
+    assert "@end=1@" in result["out_text"]
+    assert len(result.get("_engine_messages") or []) == 1
 
 
 @pytest.mark.integration
-def test_main_flow_anchor_retry_epub():
+def test_main_flow_anchor_repair_epub_no_retry():
     args = _make_args(anchor_check=True, anchor_check_retries=1, file="book.epub")
     original = "@id=1@\nhello\n@end=1@"
     result = _run_flow(original, ["@id=1@\nhello", original], args)
     types = [item.get("type") for item in result["retry_history"]]
-    assert "anchor_missing" in types
+    assert "anchor_missing" not in types
+    assert "@end=1@" in result["out_text"]
+    assert len(result.get("_engine_messages") or []) == 1
 
 
 @pytest.mark.integration
@@ -241,6 +245,20 @@ def test_main_flow_empty_output_no_retry_fallback():
     args = _make_args(max_retries=0)
     result = _run_flow("hello", [""], args)
     assert result["out_text"].splitlines()[0] == "[翻译失败]"
+
+
+@pytest.mark.integration
+def test_main_flow_empty_output_no_retry_fallback_keeps_epub_anchor_ids():
+    args = _make_args(max_retries=0, file="book.epub")
+    original = "@id=0@\nA\n@end=0@\n@id=1@\nB\n@end=1@"
+    result = _run_flow(original, [""], args)
+    out_text = result["out_text"]
+
+    assert out_text.splitlines()[0] == "[翻译失败]"
+    assert out_text.count("@id=0@") == 1
+    assert out_text.count("@end=0@") == 1
+    assert out_text.count("@id=1@") == 1
+    assert out_text.count("@end=1@") == 1
 
 
 @pytest.mark.integration

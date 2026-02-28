@@ -8,6 +8,9 @@ from bs4 import BeautifulSoup, NavigableString, XMLParsedAsHTMLWarning
 from typing import List, Dict, Any, Optional
 from .base import BaseDocument
 from murasaki_translator.core.chunker import TextBlock
+from murasaki_translator.core.anchor_guard import (
+    normalize_anchor_stream as _shared_normalize_anchor_stream,
+)
 
 # Silence XML warnings
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -86,32 +89,8 @@ class EpubDocument(BaseDocument):
             ruby.unwrap()
 
     def _normalize_anchor_stream(self, text: str) -> str:
-        """Normalize potentially mangled @id/@end anchors (full-width, spaces, newlines)."""
-        if not text:
-            return text
-
-        def _normalize_digits(s: str) -> str:
-            return s.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
-
-        # Normalize @id= and @end= tokens with tolerance for full-width and spaces.
-        def _fix_id(m: re.Match) -> str:
-            return f"@id={_normalize_digits(m.group(1))}@"
-
-        def _fix_end(m: re.Match) -> str:
-            return f"@end={_normalize_digits(m.group(1))}@"
-
-        # Match both half/full-width @ and =, with optional whitespace/newlines.
-        text = re.sub(
-            r"[@＠]\s*[iｉIＩ]\s*[dｄDＤ]\s*[=＝]\s*([0-9０-９]+)\s*[@＠]",
-            _fix_id,
-            text
-        )
-        text = re.sub(
-            r"[@＠]\s*[eｅEＥ]\s*[nｎNＮ]\s*[dｄDＤ]\s*[=＝]\s*([0-9０-９]+)\s*[@＠]",
-            _fix_end,
-            text
-        )
-        return text
+        """Normalize potentially mangled @id/@end anchors."""
+        return _shared_normalize_anchor_stream(text)
 
     def load(self) -> List[Dict[str, Any]]:
         """Extract topmost containers while preserving inner HTML for tag protection."""
@@ -166,51 +145,72 @@ class EpubDocument(BaseDocument):
     def save(self, output_path: str, blocks: List[TextBlock]):
         """Point-to-Point Container Mapping."""
         id_to_text = {}
-        anchor_re = re.compile(r"@id=(\d+)@([\s\S]*?)@end=\1@", re.MULTILINE)
-        # NOTE: Anchors may straddle block boundaries or be slightly mangled.
-        # Parse on the concatenated output to recover split @id/@end pairs.
-        combined = "".join((getattr(block, 'prompt_text', '') or '') for block in blocks)
-        if combined:
-            normalized = self._normalize_anchor_stream(combined)
-            for uid_str, tag_content in anchor_re.findall(normalized):
-                try:
-                    id_to_text[int(uid_str)] = tag_content.strip()
-                except:
-                    pass
 
-            # Fallback: tolerate missing @end or spacing issues by segmenting on @id= markers.
-            # Only fill IDs that were not captured by strict pairing.
-            expected_uids = []
-            for block in blocks:
-                meta_list = getattr(block, 'metadata', None) or []
-                if isinstance(meta_list, list):
-                    for meta in meta_list:
-                        if isinstance(meta, dict) and 'uid' in meta:
-                            expected_uids.append(meta['uid'])
+        def _extract_expected_uids(block: TextBlock) -> List[int]:
+            expected: List[int] = []
+            meta_list = getattr(block, "metadata", None) or []
+            if not isinstance(meta_list, list):
+                return expected
+            for meta in meta_list:
+                if not isinstance(meta, dict) or "uid" not in meta:
+                    continue
+                try:
+                    expected.append(int(meta.get("uid")))
+                except Exception:
+                    continue
+            return expected
+
+        def _parse_stream_to_map(
+            stream_text: str,
+            expected_uids: Optional[List[int]] = None,
+        ) -> Dict[int, str]:
+            local_map: Dict[int, str] = {}
+            if not stream_text:
+                return local_map
+
+            normalized = self._normalize_anchor_stream(stream_text)
+            expected_uid_set = set(expected_uids) if expected_uids else None
             expected_last_uid = expected_uids[-1] if expected_uids else None
+
+            strict_re = re.compile(
+                r"@id=(\d+)@([\s\S]*?)@end=\1@",
+                re.MULTILINE,
+            )
+            for uid_str, tag_content in strict_re.findall(normalized):
+                try:
+                    uid = int(uid_str)
+                except Exception:
+                    continue
+                if expected_uid_set is not None and uid not in expected_uid_set:
+                    continue
+                local_map[uid] = tag_content.strip()
 
             loose_re = re.compile(
                 r"@id=(\d+)@([\s\S]*?)(@end=\1@|(?=@id=\d+@)|\Z)",
-                re.MULTILINE
+                re.MULTILINE,
             )
             for match in loose_re.finditer(normalized):
                 try:
                     uid = int(match.group(1))
-                except:
+                except Exception:
                     continue
-                if uid in id_to_text:
+                if expected_uid_set is not None and uid not in expected_uid_set:
+                    continue
+                if uid in local_map:
                     continue
                 terminator = match.group(3) or ""
                 is_end_tag = terminator.startswith("@end=")
                 is_end_of_stream = (match.end() >= len(normalized))
-                if is_end_of_stream and not is_end_tag and expected_last_uid is not None and uid != expected_last_uid:
-                    # Avoid swallowing the tail if this isn't the final expected UID.
+                if (
+                    is_end_of_stream
+                    and not is_end_tag
+                    and expected_last_uid is not None
+                    and uid != expected_last_uid
+                ):
                     continue
-                id_to_text[uid] = (match.group(2) or "").strip()
+                local_map[uid] = (match.group(2) or "").strip()
 
-            # Final fallback: handle cases where @id is missing but @end=UID@ exists.
-            if expected_uids:
-                expected_uid_set = set(expected_uids)
+            if expected_uid_set:
                 marker_re = re.compile(r"@(?:id|end)=(\d+)@")
                 current_uid = None
                 current_start = None
@@ -218,7 +218,7 @@ class EpubDocument(BaseDocument):
                 for m in marker_re.finditer(normalized):
                     try:
                         uid = int(m.group(1))
-                    except:
+                    except Exception:
                         cursor = m.end()
                         continue
                     if uid not in expected_uid_set:
@@ -227,31 +227,68 @@ class EpubDocument(BaseDocument):
 
                     marker = normalized[m.start():m.end()]
                     if marker.startswith("@id="):
-                        if current_uid is not None and current_uid not in id_to_text and current_start is not None:
+                        if (
+                            current_uid is not None
+                            and current_uid not in local_map
+                            and current_start is not None
+                        ):
                             seg = normalized[current_start:m.start()].strip()
                             if seg:
-                                id_to_text[current_uid] = seg
+                                local_map[current_uid] = seg
                         current_uid = uid
                         current_start = m.end()
                     else:
                         if current_uid == uid and current_start is not None:
-                            if uid not in id_to_text:
+                            if uid not in local_map:
                                 seg = normalized[current_start:m.start()].strip()
                                 if seg:
-                                    id_to_text[uid] = seg
+                                    local_map[uid] = seg
                             current_uid = None
                             current_start = None
                         else:
-                            if uid not in id_to_text:
+                            if uid not in local_map:
                                 seg = normalized[cursor:m.start()].strip()
                                 if seg:
-                                    id_to_text[uid] = seg
+                                    local_map[uid] = seg
                     cursor = m.end()
 
-                if current_uid is not None and current_uid not in id_to_text and current_start is not None:
+                if (
+                    current_uid is not None
+                    and current_uid not in local_map
+                    and current_start is not None
+                ):
                     seg = normalized[current_start:].strip()
                     if seg:
-                        id_to_text[current_uid] = seg
+                        local_map[current_uid] = seg
+
+            return local_map
+
+        expected_uid_order: List[int] = []
+        expected_uid_seen = set()
+        for block in blocks:
+            expected_uids = _extract_expected_uids(block)
+            if expected_uids:
+                for uid in expected_uids:
+                    if uid in expected_uid_seen:
+                        continue
+                    expected_uid_seen.add(uid)
+                    expected_uid_order.append(uid)
+            parsed_block = _parse_stream_to_map(
+                getattr(block, "prompt_text", "") or "",
+                expected_uids if expected_uids else None,
+            )
+            id_to_text.update(parsed_block)
+
+        if expected_uid_order:
+            missing = [uid for uid in expected_uid_order if uid not in id_to_text]
+            if missing:
+                combined = "".join(
+                    (getattr(block, "prompt_text", "") or "") for block in blocks
+                )
+                fallback_map = _parse_stream_to_map(combined, missing)
+                for uid in missing:
+                    if uid in fallback_map:
+                        id_to_text[uid] = fallback_map[uid]
 
         try:
             with zipfile.ZipFile(self.path, 'r') as in_zip, \

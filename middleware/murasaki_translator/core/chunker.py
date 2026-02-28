@@ -89,10 +89,9 @@ class Chunker:
             # Prevent splitting immediately after a line containing generic numbers (risk of hallucination/header break)
             is_numeric_risky = False
             
-            # For Alignment Mode, we must strip the @id=x@ tags to check actual content
+            # For Alignment Mode, strip both @id/@end tags before digit checks.
             if meta == 'alignment_structural':
-                 # Remove tags: @id=1@ content @id=1@
-                 inner_content = re.sub(r'(@id=\d+@)', '', text).strip()
+                 inner_content = re.sub(r'@(?:id|end)=\d+@', '', text).strip()
                  if re.search(r'\d', inner_content):
                      is_numeric_risky = True
             elif re.search(r'\d', text):

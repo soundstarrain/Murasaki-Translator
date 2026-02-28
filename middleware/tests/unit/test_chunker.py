@@ -39,3 +39,14 @@ def test_chunker_skips_balance_when_metadata_present():
     blocks = chunker.process(items)
     assert len(blocks) == 1
     assert blocks[0].metadata == [{"id": 1}, {"id": 2}]
+
+
+@pytest.mark.unit
+def test_chunker_alignment_numeric_check_ignores_end_anchor_digits():
+    chunker = Chunker(target_chars=40, max_chars=200, mode="chunk", enable_balance=False)
+    items = [
+        {"text": "@id=1@ 内容A。 @end=1@。\n", "meta": "alignment_structural"},
+        {"text": "@id=2@ 内容B。 @end=2@。\n", "meta": "alignment_structural"},
+    ]
+    blocks = chunker.process(items)
+    assert len(blocks) == 2
