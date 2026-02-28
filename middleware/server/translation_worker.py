@@ -262,6 +262,17 @@ class TranslationWorker:
         except ValueError:
             return False
 
+    @staticmethod
+    def _is_valid_models_response(resp: Any) -> bool:
+        """Validate /v1/models payload to avoid false-positive HTTP 200 pages."""
+        if resp is None or getattr(resp, "status_code", None) != 200:
+            return False
+        try:
+            payload = resp.json()
+        except Exception:
+            return False
+        return isinstance(payload, dict) and isinstance(payload.get("data"), list)
+
     def _cleanup_stale_temp_artifacts(self):
         """清理上次异常退出残留的临时规则/保护文件"""
         middleware_dir = Path(__file__).parent.parent
@@ -510,7 +521,7 @@ class TranslationWorker:
 
             try:
                 resp = await asyncio.to_thread(requests.get, url, timeout=2)
-                if resp.status_code == 200:
+                if self._is_valid_models_response(resp):
                     return
             except requests.RequestException:
                 pass

@@ -552,6 +552,10 @@ async def test_wait_for_server_ready_success(monkeypatch):
     class DummyResp:
         status_code = 200
 
+        @staticmethod
+        def json():
+            return {"object": "list", "data": []}
+
     monkeypatch.setattr(worker_module.requests, "get", lambda *args, **kwargs: DummyResp())
     await worker._wait_for_server_ready(timeout=1)
 
@@ -572,6 +576,10 @@ async def test_wait_for_server_ready_uses_to_thread(monkeypatch):
         class DummyResp:
             status_code = 200
 
+            @staticmethod
+            def json():
+                return {"object": "list", "data": []}
+
         return DummyResp()
 
     monkeypatch.setattr(worker_module.asyncio, "to_thread", fake_to_thread)
@@ -580,6 +588,37 @@ async def test_wait_for_server_ready_uses_to_thread(monkeypatch):
     assert called["func"] is worker_module.requests.get
     assert called["args"][0].endswith("/v1/models")
     assert called["kwargs"]["timeout"] == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_wait_for_server_ready_rejects_non_json_200(monkeypatch):
+    worker = TranslationWorker(model_path="model.gguf")
+    worker.server_process = DummyServerProcess(returncode=None)
+
+    class HtmlResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            raise ValueError("html body")
+
+    monkeypatch.setattr(worker_module.requests, "get", lambda *args, **kwargs: HtmlResp())
+
+    async def fake_sleep(_seconds):
+        return None
+
+    clock = {"t": 0.0}
+
+    def fake_time():
+        clock["t"] += 0.3
+        return clock["t"]
+
+    monkeypatch.setattr(worker_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(worker_module.time, "time", fake_time)
+
+    with pytest.raises(TimeoutError):
+        await worker._wait_for_server_ready(timeout=0.5)
 
 
 @pytest.mark.unit

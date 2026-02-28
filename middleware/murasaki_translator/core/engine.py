@@ -13,6 +13,10 @@ from typing import List, Dict, Optional, Callable
 logger = logging.getLogger(__name__)
 
 
+class NonRetryableStreamProtocolError(RuntimeError):
+    """Streaming endpoint returned a protocol-level invalid payload."""
+
+
 class InferenceEngine:
     """
     Inference Engine wrapping llama-server.exe.
@@ -52,6 +56,20 @@ class InferenceEngine:
         # Real-time stats counters (Atomic-like usage in GIL)
         self.generated_chars_count = 0
         self.generated_tokens_count = 0
+
+    @staticmethod
+    def _is_valid_models_response(resp) -> bool:
+        """
+        Validate /v1/models payload.
+        Treat non-JSON/HTML 200 responses as not ready.
+        """
+        if resp is None or getattr(resp, "status_code", None) != 200:
+            return False
+        try:
+            payload = resp.json()
+        except Exception:
+            return False
+        return isinstance(payload, dict) and isinstance(payload.get("data"), list)
 
 
     def start_server(self):
@@ -132,7 +150,7 @@ class InferenceEngine:
             try:
                 # 使用标准健康检查接口
                 resp = self.session.get(f"{self.base_url}/v1/models", timeout=5)
-                if resp.status_code == 200:
+                if self._is_valid_models_response(resp):
                     logger.info("Server is ready!")
                     return
             except Exception:
@@ -293,17 +311,29 @@ class InferenceEngine:
                     timeout=(10, 600) # (Connect timeout, Read timeout)
                 )
                 response.raise_for_status()
+                if stream:
+                    content_type = str(response.headers.get("content-type", "")).lower()
+                    if "text/html" in content_type:
+                        raise NonRetryableStreamProtocolError(
+                            f"Invalid stream response content-type: {content_type or '<unknown>'}"
+                        )
                 
                 full_reasoning = ""
                 full_text = ""
                 loop_detected = False
                 
                 if stream:
+                    saw_data_chunk = False
+                    unexpected_preview = ""
                     
                     for line in response.iter_lines():
                         if not line: continue
-                        line = line.decode('utf-8')
-                        if not line.startswith('data: '): continue
+                        line = line.decode('utf-8', errors='ignore')
+                        if not line.startswith('data: '):
+                            if not unexpected_preview:
+                                unexpected_preview = line[:160]
+                            continue
+                        saw_data_chunk = True
                         data = line[6:]
                         if data == '[DONE]': break
                         try:
@@ -390,6 +420,11 @@ class InferenceEngine:
                                         
                         except Exception as e:
                             logger.debug(f"Failed to parse usage data from streaming response: {e}")
+
+                    if not saw_data_chunk and unexpected_preview:
+                        raise NonRetryableStreamProtocolError(
+                            f"Invalid streaming payload (no SSE data frames): {unexpected_preview}"
+                        )
                     
                     # Fallback Usage Construction
                     if local_last_usage is None:
@@ -447,6 +482,10 @@ class InferenceEngine:
                     msg = resp_json['choices'][0]['message']
                     return msg.get('content', ''), usage
                     
+            except NonRetryableStreamProtocolError as e:
+                logger.error(f"Inference Error: {e}")
+                logger.warning(f"API call failed (non-retryable protocol error): {e}")
+                return "", None
             except Exception as e:
                 logger.error(f"Inference Error: {e}")
                 logger.warning(f"API call failed: {e}")

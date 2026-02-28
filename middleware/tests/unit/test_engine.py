@@ -98,3 +98,119 @@ def test_start_server_large_batch_uses_ctx_cap(monkeypatch, tmp_path):
     cmd = captured["cmd"]
     assert "-b" in cmd and "512" in cmd
     assert "-ub" in cmd and "512" in cmd
+
+
+@pytest.mark.unit
+def test_is_valid_models_response_requires_json_payload():
+    class ValidResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"object": "list", "data": []}
+
+    class HtmlResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            raise ValueError("not json")
+
+    assert InferenceEngine._is_valid_models_response(ValidResp()) is True
+    assert InferenceEngine._is_valid_models_response(HtmlResp()) is False
+
+
+@pytest.mark.unit
+def test_chat_completion_rejects_html_stream(monkeypatch):
+    engine = InferenceEngine(server_path="dummy", model_path="dummy")
+
+    class HtmlStreamResp:
+        headers = {"content-type": "text/html; charset=utf-8"}
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def iter_lines():
+            yield b"<!doctype html>"
+
+    monkeypatch.setattr(engine.session, "post", lambda *args, **kwargs: HtmlStreamResp())
+
+    out, usage = engine.chat_completion(
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        rep_base=1.0,
+        rep_max=1.0,
+        rep_step=0.1,
+    )
+    assert out == ""
+    assert usage is None
+
+
+@pytest.mark.unit
+def test_chat_completion_rejects_html_stream_without_penalty_retry(monkeypatch):
+    engine = InferenceEngine(server_path="dummy", model_path="dummy")
+    calls = {"count": 0}
+
+    class HtmlStreamResp:
+        headers = {"content-type": "text/html; charset=utf-8"}
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def iter_lines():
+            yield b"<!doctype html>"
+
+    def fake_post(*args, **kwargs):
+        calls["count"] += 1
+        return HtmlStreamResp()
+
+    monkeypatch.setattr(engine.session, "post", fake_post)
+
+    out, usage = engine.chat_completion(
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        rep_base=1.0,
+        rep_max=1.4,
+        rep_step=0.2,
+    )
+    assert out == ""
+    assert usage is None
+    assert calls["count"] == 1
+
+
+@pytest.mark.unit
+def test_chat_completion_rejects_non_sse_stream_without_penalty_retry(monkeypatch):
+    engine = InferenceEngine(server_path="dummy", model_path="dummy")
+    calls = {"count": 0}
+
+    class InvalidSseResp:
+        headers = {"content-type": "text/event-stream"}
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def iter_lines():
+            yield b"<html>not-sse</html>"
+
+    def fake_post(*args, **kwargs):
+        calls["count"] += 1
+        return InvalidSseResp()
+
+    monkeypatch.setattr(engine.session, "post", fake_post)
+
+    out, usage = engine.chat_completion(
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        rep_base=1.0,
+        rep_max=1.4,
+        rep_step=0.2,
+    )
+    assert out == ""
+    assert usage is None
+    assert calls["count"] == 1
