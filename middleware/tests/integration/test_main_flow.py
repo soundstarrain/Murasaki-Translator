@@ -294,3 +294,108 @@ def test_main_flow_text_protect_restore():
         protector=protector,
     )
     assert result["out_text"] == "你好 [[Alice]]"
+
+
+@pytest.mark.integration
+def test_translate_single_block_structured_ignores_user_custom_protect(monkeypatch, tmp_path):
+    import murasaki_translator.main as main_mod
+
+    protect_file = tmp_path / "protect_patterns.txt"
+    protect_file.write_text("+USER_FILE_PATTERN\n!@id=\\d+@\n", encoding="utf-8")
+
+    pre_rules = [
+        {
+            "type": "protect",
+            "pattern": "text_protect",
+            "active": True,
+            "options": {"patterns": ["+USER_PRE_RULE"]},
+        }
+    ]
+    post_rules = [
+        {
+            "type": "format",
+            "pattern": "restore_protection",
+            "active": True,
+            "options": {"customPattern": "+USER_POST_RULE"},
+        }
+    ]
+
+    class FakeEngineSingle:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start_server(self):
+            return None
+
+        def stop_server(self):
+            return None
+
+    class FakeProtector:
+        last_patterns = None
+
+        def __init__(self, patterns=None, **kwargs):
+            FakeProtector.last_patterns = list(patterns) if isinstance(patterns, list) else patterns
+
+        def protect(self, text):
+            return text
+
+        def restore(self, text):
+            return text
+
+    captured = {}
+
+    def fake_load_rules(path):
+        if path == "pre_rules.json":
+            return pre_rules
+        if path == "post_rules.json":
+            return post_rules
+        return []
+
+    def fake_translate_block_with_retry(**kwargs):
+        captured["protector"] = kwargs.get("protector")
+        return {
+            "success": True,
+            "out_text": "ok",
+            "cot": "",
+        }
+
+    monkeypatch.setattr(main_mod, "InferenceEngine", FakeEngineSingle)
+    monkeypatch.setattr(main_mod, "TextProtector", FakeProtector)
+    monkeypatch.setattr(main_mod, "load_glossary", lambda _path: {})
+    monkeypatch.setattr(main_mod, "load_rules", fake_load_rules)
+    monkeypatch.setattr(main_mod, "translate_block_with_retry", fake_translate_block_with_retry)
+
+    args = SimpleNamespace(
+        server="dummy-server",
+        model="dummy-model",
+        gpu_layers=0,
+        ctx=1024,
+        no_server_spawn=True,
+        flash_attn=False,
+        kv_cache_type="f16",
+        use_large_batch=False,
+        batch_size=None,
+        seed=None,
+        glossary=None,
+        rules_pre="pre_rules.json",
+        rules_post="post_rules.json",
+        file="book.epub",
+        alignment_mode=False,
+        text_protect=True,
+        protect_patterns=str(protect_file),
+        strict_mode="subs",
+        single_block="@id=1@\nhello\n@end=1@",
+        json_output=True,
+        debug=False,
+        preset="novel",
+        balance_enable=True,
+    )
+
+    main_mod.translate_single_block(args)
+
+    assert captured.get("protector") is not None
+    assert FakeProtector.last_patterns == [r"@id=\d+@", r"@end=\d+@", r"<[^>]+>"]
+    assert "USER_PRE_RULE" not in "".join(FakeProtector.last_patterns or [])
+    assert "USER_POST_RULE" not in "".join(FakeProtector.last_patterns or [])
+    assert "USER_FILE_PATTERN" not in "".join(FakeProtector.last_patterns or [])
+    assert args.protect_patterns is None

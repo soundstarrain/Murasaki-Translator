@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Sequence, Set, Tuple
 import re
+import unicodedata
 
 
 _ID_TOKEN_RE = re.compile(r"@id=(\d+)@", re.IGNORECASE)
@@ -14,6 +15,61 @@ _STRICT_PAIR_RE = re.compile(
     r"@id=(\d+)@((?:(?!@id=\d+@)[\s\S])*?)@end=\1@",
     re.IGNORECASE,
 )
+_REASONABLE_ANCHOR_ID_MAX = 1_000_000_000
+
+
+def _normalize_digits(raw: str) -> str:
+    return str(raw or "").translate(
+        str.maketrans(
+            "\uff10\uff11\uff12\uff13\uff14\uff15\uff16\uff17\uff18\uff19",
+            "0123456789",
+        )
+    )
+
+
+def _is_reasonable_anchor_id(anchor_id: str) -> bool:
+    if not anchor_id or not str(anchor_id).isdigit():
+        return False
+    try:
+        value = int(anchor_id)
+    except Exception:
+        return False
+    return 0 <= value <= _REASONABLE_ANCHOR_ID_MAX
+
+
+def _normalize_anchor_token_candidate(raw_token: str) -> str | None:
+    token = unicodedata.normalize("NFKC", str(raw_token or ""))
+    compact = re.sub(r"\s+", "", token).lower()
+    if not compact:
+        return None
+
+    strict = re.fullmatch(r"(id|end)=([0-9]+)", compact)
+    if strict:
+        kind, anchor_id = strict.groups()
+        if _is_reasonable_anchor_id(anchor_id):
+            return f"@{kind}={anchor_id}@"
+        return None
+
+    if "id" not in compact and "end" not in compact:
+        return None
+
+    numbers = re.findall(r"[0-9]+", compact)
+    if len(numbers) != 1:
+        return None
+
+    anchor_id = numbers[0]
+    if not _is_reasonable_anchor_id(anchor_id):
+        return None
+
+    id_pos = compact.find("id")
+    end_pos = compact.find("end")
+    if id_pos >= 0 and (end_pos < 0 or id_pos < end_pos):
+        kind = "id"
+    elif end_pos >= 0:
+        kind = "end"
+    else:
+        return None
+    return f"@{kind}={anchor_id}@"
 
 
 @dataclass
@@ -32,9 +88,6 @@ def normalize_anchor_stream(text: str) -> str:
     if not text:
         return text
 
-    def _normalize_digits(raw: str) -> str:
-        return raw.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
-
     def _fix_id(m: re.Match) -> str:
         return f"@id={_normalize_digits(m.group(1))}@"
 
@@ -51,6 +104,24 @@ def normalize_anchor_stream(text: str) -> str:
         _fix_end,
         text,
     )
+    # Recover tokens missing trailing '@', e.g. "@end=16" at line end.
+    text = re.sub(
+        r"[@＠]\s*[iｉIＩ]\s*[dｄDＤ]\s*[=＝]\s*([0-9０-９]+)(?=(?:\s|$|[^0-9０-９@＠]))",
+        _fix_id,
+        text,
+    )
+    text = re.sub(
+        r"[@＠]\s*[eｅEＥ]\s*[nｎNＮ]\s*[dｄDＤ]\s*[=＝]\s*([0-9０-９]+)(?=(?:\s|$|[^0-9０-９@＠]))",
+        _fix_end,
+        text,
+    )
+
+    # Last-pass fallback for malformed wrapped anchors, e.g. @<end=1>@ / @{id:1}@.
+    def _fix_wrapped_candidate(m: re.Match) -> str:
+        normalized = _normalize_anchor_token_candidate(m.group(1))
+        return normalized if normalized else m.group(0)
+
+    text = re.sub(r"[@＠]([^@＠\r\n]{1,64})[@＠]", _fix_wrapped_candidate, text)
     return text
 
 
@@ -167,6 +238,10 @@ def repair_and_validate_anchor_output(
     if removed > 0:
         repaired_steps.append("strip_foreign_anchor")
 
+    out_norm, salvaged = _salvage_single_number_anchor_tokens(out_norm, expected_set)
+    if salvaged > 0:
+        repaired_steps.append("salvage_single_number_anchor")
+
     missing_ids, foreign_ids = _diff_anchor_state(out_norm, expected_ids, expected_set)
     missing_strict_pair_ids = _missing_strict_pair_ids(out_norm, expected_ids)
     if missing_ids or missing_strict_pair_ids:
@@ -246,6 +321,54 @@ def _strip_foreign_anchor_tokens(
     return _ANCHOR_TOKEN_RE.sub(_replace, text), removed_count
 
 
+def _salvage_single_number_anchor_tokens(
+    text: str,
+    expected_ids: Set[str],
+) -> Tuple[str, int]:
+    if not text or not expected_ids:
+        return text, 0
+
+    out_id_set = set(_ID_TOKEN_RE.findall(text))
+    out_end_set = set(_END_TOKEN_RE.findall(text))
+    recovered_count = 0
+
+    def _replace(m: re.Match) -> str:
+        nonlocal recovered_count
+        full_token = m.group(0)
+        full_norm = unicodedata.normalize("NFKC", full_token)
+        if _ANCHOR_TOKEN_RE.fullmatch(full_norm):
+            return full_norm
+
+        compact = re.sub(r"\s+", "", unicodedata.normalize("NFKC", m.group(1))).lower()
+        if "id" in compact or "end" in compact:
+            # Tokens with explicit kind should have been handled by normalize_anchor_stream.
+            return full_token
+
+        numbers = re.findall(r"[0-9]+", compact)
+        if len(numbers) != 1:
+            return full_token
+
+        anchor_id = numbers[0]
+        if anchor_id not in expected_ids or not _is_reasonable_anchor_id(anchor_id):
+            return full_token
+
+        missing_id = anchor_id not in out_id_set
+        missing_end = anchor_id not in out_end_set
+        if missing_id == missing_end:
+            return full_token
+
+        kind = "id" if missing_id else "end"
+        if kind == "id":
+            out_id_set.add(anchor_id)
+        else:
+            out_end_set.add(anchor_id)
+        recovered_count += 1
+        return f"@{kind}={anchor_id}@"
+
+    fixed = re.sub(r"[@＠]([^@＠\r\n]{1,64})[@＠]", _replace, text)
+    return fixed, recovered_count
+
+
 def _diff_anchor_state(
     text: str,
     expected_ids: Sequence[str],
@@ -291,6 +414,19 @@ def _rebuild_anchor_pairs_from_loose_stream(
             if anchor_id not in expected_set or anchor_id in id_to_text:
                 continue
             cleaned = _ANCHOR_TOKEN_RE.sub("", (m.group(2) or "")).strip()
+            id_to_text[anchor_id] = cleaned
+
+    if len(id_to_text) < len(expected_ids):
+        # Fallback: recover missing ids from text immediately preceding each @end=ID@.
+        prev_end = 0
+        for m in _ANCHOR_TOKEN_RE.finditer(text):
+            kind = m.group(1).lower()
+            anchor_id = m.group(2)
+            segment = text[prev_end:m.start()]
+            prev_end = m.end()
+            if kind != "end" or anchor_id not in expected_set or anchor_id in id_to_text:
+                continue
+            cleaned = _ANCHOR_TOKEN_RE.sub("", (segment or "")).strip()
             id_to_text[anchor_id] = cleaned
 
     if any(anchor_id not in id_to_text for anchor_id in expected_ids):

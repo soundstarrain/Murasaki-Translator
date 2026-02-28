@@ -34,6 +34,20 @@ def test_anchor_guard_normalize_full_width_tokens():
 
 
 @pytest.mark.unit
+def test_anchor_guard_normalize_malformed_wrapped_end_token():
+    text = "@id=1@\nhello\n@<end=1>@"
+    normalized = normalize_anchor_stream(text)
+    assert normalized == "@id=1@\nhello\n@end=1@"
+
+
+@pytest.mark.unit
+def test_anchor_guard_normalize_missing_trailing_at():
+    text = "@id=1\nhello\n@end=1"
+    normalized = normalize_anchor_stream(text)
+    assert normalized == "@id=1@\nhello\n@end=1@"
+
+
+@pytest.mark.unit
 def test_anchor_guard_repair_alignment_double_id_success():
     source = "@id=1@\nfoo\n@end=1@\n@id=2@\nbar\n@end=2@"
     output_old_style = "@id=1@\n译1\n@id=1@\n@id=2@\n译2\n@id=2@"
@@ -79,6 +93,19 @@ def test_anchor_guard_repair_rebuild_from_loose_segments():
 
 
 @pytest.mark.unit
+def test_anchor_guard_repair_rebuild_from_end_segments_when_leading_id_missing():
+    source = "@id=1@\nfoo\n@end=1@\n@id=2@\nbar\n@end=2@"
+    output = "A\n@end=1@\n@id=2@\nB\n@end=2"
+
+    repaired, ok, meta = repair_and_validate_anchor_output(source, output, mode="epub")
+
+    assert ok is True
+    assert "@id=1@\nA\n@end=1@" in repaired
+    assert "@id=2@\nB\n@end=2@" in repaired
+    assert "rebuild_anchor_pairs" in (meta.get("repair_steps") or [])
+
+
+@pytest.mark.unit
 def test_anchor_guard_repair_mismatched_end_pairs_rebuilds_strictly():
     source = "@id=1@\nfoo\n@end=1@\n@id=2@\nbar\n@end=2@"
     output = "@id=1@\nX\n@end=2@\n@id=2@\nY\n@end=1@"
@@ -102,3 +129,27 @@ def test_anchor_guard_repair_fail_when_missing_segment():
     assert ok is False
     assert "@id=1@" in repaired
     assert int(meta.get("missing_count") or 0) >= 1
+
+
+@pytest.mark.unit
+def test_anchor_guard_repair_salvage_single_number_token_when_one_side_missing():
+    source = "@id=1@\nfoo\n@end=1@"
+    output = "@id=1@\nok\n@<1>@"
+
+    repaired, ok, meta = repair_and_validate_anchor_output(source, output, mode="epub")
+
+    assert ok is True
+    assert "@end=1@" in repaired
+    assert "salvage_single_number_anchor" in (meta.get("repair_steps") or [])
+
+
+@pytest.mark.unit
+def test_anchor_guard_repair_does_not_salvage_ambiguous_single_number_token():
+    source = "@id=1@\nfoo\n@end=1@"
+    output = "@<1>@\nbar"
+
+    repaired, ok, meta = repair_and_validate_anchor_output(source, output, mode="epub")
+
+    assert ok is False
+    assert "@id=1@" not in repaired or "@end=1@" not in repaired
+    assert "salvage_single_number_anchor" not in (meta.get("repair_steps") or [])

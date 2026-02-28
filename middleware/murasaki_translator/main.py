@@ -304,17 +304,36 @@ def _merge_protect_patterns(base: Optional[List[str]], additions: List[str], rem
     return merged
 
 
-def _allow_text_protect(input_path: Optional[str], args) -> bool:
-    if getattr(args, "single_block", None) and not input_path:
-        return True
-    if getattr(args, "alignment_mode", False):
-        if not input_path:
-            return True
-        return os.path.splitext(input_path)[1].lower() == ".txt"
+_STRUCTURED_TEXT_PROTECT_EXTS = (".epub", ".srt", ".ass", ".ssa")
+
+
+def _is_structured_text_protect_input(input_path: Optional[str]) -> bool:
     if not input_path:
         return False
     ext = os.path.splitext(input_path)[1].lower()
-    return ext == ".txt"
+    return ext in _STRUCTURED_TEXT_PROTECT_EXTS
+
+
+def _normalize_alignment_mode_for_input(input_path: Optional[str], args) -> bool:
+    if not getattr(args, "alignment_mode", False):
+        return False
+    if not input_path:
+        return True
+    ext = os.path.splitext(input_path)[1].lower()
+    if ext == ".txt":
+        return True
+    print(f"[Alignment] Ignoring alignment mode for non-txt input: {ext or '<unknown>'}")
+    args.alignment_mode = False
+    return False
+
+
+def _allow_text_protect(input_path: Optional[str], args) -> bool:
+    if getattr(args, "single_block", None) and not input_path:
+        return True
+    if not input_path:
+        return False
+    ext = os.path.splitext(input_path)[1].lower()
+    return ext == ".txt" or ext in _STRUCTURED_TEXT_PROTECT_EXTS
 
 
 def _normalize_anchor_stream(text: str) -> str:
@@ -874,23 +893,33 @@ def translate_single_block(args):
     protect_rule_enabled, protect_rule_lines = _collect_protect_rule_lines(pre_rules)
     legacy_protect_lines = _collect_legacy_protect_lines(post_rules)
     input_path = getattr(args, 'file', '') or ""
+    _normalize_alignment_mode_for_input(input_path, args)
     text_protect_allowed = _allow_text_protect(input_path, args)
+    is_structured_protect_input = _is_structured_text_protect_input(input_path)
+    allow_user_protect_customization = text_protect_allowed and not is_structured_protect_input
+
     if text_protect_allowed:
-        if protect_rule_enabled and not args.text_protect:
+        if allow_user_protect_customization and protect_rule_enabled and not args.text_protect:
             print("[Auto-Config] Pre-rules text protection enabled.")
             args.text_protect = True
-        if legacy_protect_lines and not args.text_protect:
+        if allow_user_protect_customization and legacy_protect_lines and not args.text_protect:
             print("[Auto-Config] Legacy protection rule detected. Enabling TextProtector.")
             args.text_protect = True
-        if args.protect_patterns and not args.text_protect:
+        if allow_user_protect_customization and args.protect_patterns and not args.text_protect:
             print("[Auto-Config] protect_patterns provided. Enabling TextProtector.")
             args.text_protect = True
+        if is_structured_protect_input and (protect_rule_enabled or legacy_protect_lines or args.protect_patterns):
+            print("[TextProtect] Structured input detected. Ignoring user custom protect rules; built-in patterns only.")
     else:
         if args.text_protect or protect_rule_enabled or legacy_protect_lines or args.protect_patterns:
-            print("[TextProtect] Disabled for non-txt input.")
+            print("[TextProtect] Disabled for unsupported input type.")
         args.text_protect = False
+
+    if not allow_user_protect_customization:
         protect_rule_lines = []
         legacy_protect_lines = []
+        if is_structured_protect_input:
+            args.protect_patterns = None
 
     post_rules = [r for r in post_rules if r.get('pattern') != 'restore_protection']
     if text_protect_allowed and args.text_protect:
@@ -912,15 +941,15 @@ def translate_single_block(args):
 
         additions: List[str] = []
         removals: List[str] = []
-        if protect_rule_lines:
+        if allow_user_protect_customization and protect_rule_lines:
             add, rem = _parse_protect_pattern_lines(protect_rule_lines)
             additions.extend(add)
             removals.extend(rem)
-        if legacy_protect_lines:
+        if allow_user_protect_customization and legacy_protect_lines:
             add, rem = _parse_protect_pattern_lines(legacy_protect_lines)
             additions.extend(add)
             removals.extend(rem)
-        if args.protect_patterns and os.path.exists(args.protect_patterns):
+        if allow_user_protect_customization and args.protect_patterns and os.path.exists(args.protect_patterns):
             try:
                 raw_text = ""
                 with open(args.protect_patterns, 'r', encoding='utf-8') as f:
@@ -1333,6 +1362,7 @@ def main():
     if not os.path.exists(input_path):
         print(f"Error: File not found {input_path}")
         return
+    _normalize_alignment_mode_for_input(input_path, args)
 
     # Resolve glossary path before loading
     glossary_path = args.glossary
@@ -1517,19 +1547,30 @@ def main():
     protect_rule_enabled, protect_rule_lines = _collect_protect_rule_lines(pre_rules)
     legacy_protect_lines = _collect_legacy_protect_lines(post_rules)
     text_protect_allowed = _allow_text_protect(input_path, args)
+    is_structured_protect_input = _is_structured_text_protect_input(input_path)
+    allow_user_protect_customization = text_protect_allowed and not is_structured_protect_input
     if text_protect_allowed:
-        if protect_rule_enabled and not args.text_protect:
+        if allow_user_protect_customization and protect_rule_enabled and not args.text_protect:
             print("[Auto-Config] Pre-rules text protection enabled.")
             args.text_protect = True
-        if legacy_protect_lines and not args.text_protect:
+        if allow_user_protect_customization and legacy_protect_lines and not args.text_protect:
             print("[Auto-Config] Legacy protection rule detected. Enabling TextProtector.")
             args.text_protect = True
+        if allow_user_protect_customization and args.protect_patterns and not args.text_protect:
+            print("[Auto-Config] protect_patterns provided. Enabling TextProtector.")
+            args.text_protect = True
+        if is_structured_protect_input and (protect_rule_enabled or legacy_protect_lines or args.protect_patterns):
+            print("[TextProtect] Structured input detected. Ignoring user custom protect rules; built-in patterns only.")
     else:
         if args.text_protect or protect_rule_enabled or legacy_protect_lines or args.protect_patterns:
-            print("[TextProtect] Disabled for non-txt input.")
+            print("[TextProtect] Disabled for unsupported input type.")
         args.text_protect = False
+
+    if not allow_user_protect_customization:
         protect_rule_lines = []
         legacy_protect_lines = []
+        if is_structured_protect_input:
+            args.protect_patterns = None
 
     # [Formula Factory] Structured engineering
     if is_structured:
@@ -1542,10 +1583,6 @@ def main():
             post_rules = [r for r in post_rules if r.get('pattern') not in melt_patterns]
             if len(post_rules) < original_count:
                 print(f"[Auto-Config] Subtitle/Alignment detected. Disabled {original_count - len(post_rules)} formatting rules to preserve structure.")
-
-    if text_protect_allowed and args.protect_patterns and not args.text_protect:
-        print("[Auto-Config] protect_patterns provided. Enabling TextProtector.")
-        args.text_protect = True
 
     # [Critical Fix] 强制将样式还原逻辑置于所有后处理规则的最末端，确保还原后不会再次被误伤
     # 先移除已有的（如果有），再追加到最后
@@ -1576,7 +1613,7 @@ def main():
 
     additions: List[str] = []
     removals: List[str] = []
-    if text_protect_allowed:
+    if allow_user_protect_customization:
         if protect_rule_lines:
             add, rem = _parse_protect_pattern_lines(protect_rule_lines)
             additions.extend(add)
@@ -1673,7 +1710,7 @@ def main():
                     translation_cache.clear()
         
         # Load legacy/custom protection patterns file if provided via CLI
-        if text_protect_allowed and args.protect_patterns and os.path.exists(args.protect_patterns):
+        if allow_user_protect_customization and args.protect_patterns and os.path.exists(args.protect_patterns):
              try:
                  with open(args.protect_patterns, 'r', encoding='utf-8') as f:
                      raw_text = f.read()

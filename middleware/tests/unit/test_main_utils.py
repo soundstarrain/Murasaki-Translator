@@ -16,6 +16,7 @@ from murasaki_translator.main import (
     _parse_protect_pattern_payload,
     _merge_protect_patterns,
     _allow_text_protect,
+    _normalize_alignment_mode_for_input,
 )
 from murasaki_translator.core.chunker import TextBlock
 
@@ -139,13 +140,31 @@ def test_merge_protect_patterns():
 def test_allow_text_protect_alignment_mode_txt():
     args = type("Args", (), {"alignment_mode": True, "single_block": None})()
     assert _allow_text_protect("story.txt", args) is True
-    assert _allow_text_protect("story.srt", args) is False
+    assert _allow_text_protect("story.srt", args) is True
+    assert _allow_text_protect("story.epub", args) is True
+    assert _allow_text_protect("story.ass", args) is True
+    assert _allow_text_protect("story.ssa", args) is True
+    assert _allow_text_protect("story.docx", args) is False
 
 
 @pytest.mark.unit
 def test_allow_text_protect_alignment_mode_single_block():
     args = type("Args", (), {"alignment_mode": True, "single_block": "hello"})()
     assert _allow_text_protect(None, args) is True
+
+
+@pytest.mark.unit
+def test_normalize_alignment_mode_for_non_txt_input():
+    args = type("Args", (), {"alignment_mode": True})()
+    assert _normalize_alignment_mode_for_input("story.epub", args) is False
+    assert args.alignment_mode is False
+
+
+@pytest.mark.unit
+def test_normalize_alignment_mode_for_txt_input():
+    args = type("Args", (), {"alignment_mode": True})()
+    assert _normalize_alignment_mode_for_input("story.txt", args) is True
+    assert args.alignment_mode is True
 
 
 @pytest.mark.unit
