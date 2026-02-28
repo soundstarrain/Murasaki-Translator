@@ -225,6 +225,79 @@ def _mask_secret(value: str) -> str:
     return f"{normalized[:4]}...{normalized[-4:]}"
 
 
+def _default_models_dir() -> Path:
+    return Path(__file__).parent.parent / "models"
+
+
+def _resolve_model_path(raw_path: Optional[str]) -> Optional[Path]:
+    normalized = str(raw_path or "").strip()
+    if not normalized:
+        return None
+
+    try:
+        raw_candidate = Path(normalized).expanduser()
+    except Exception:
+        return None
+
+    candidates: List[Path] = []
+    if raw_candidate.is_absolute():
+        candidates.append(raw_candidate.resolve(strict=False))
+    else:
+        for base in (Path.cwd(), _middleware_dir, _server_dir):
+            try:
+                candidates.append((base / raw_candidate).resolve(strict=False))
+            except Exception:
+                continue
+
+    seen = set()
+    for candidate in candidates:
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.suffix.lower() != ".gguf":
+            continue
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        return candidate
+
+    return None
+
+
+def _collect_model_paths() -> List[Path]:
+    candidates: List[Path] = []
+    models_dir = _default_models_dir()
+    if models_dir.exists():
+        candidates.extend(models_dir.glob("*.gguf"))
+
+    configured_paths: List[str] = []
+    if worker is not None and getattr(worker, "model_path", None):
+        configured_paths.append(str(worker.model_path))
+
+    env_model = os.environ.get("MURASAKI_DEFAULT_MODEL", "").strip()
+    if env_model:
+        configured_paths.append(env_model)
+
+    for raw_path in configured_paths:
+        resolved = _resolve_model_path(raw_path)
+        if resolved is not None:
+            candidates.append(resolved)
+
+    deduped: List[Path] = []
+    seen = set()
+    for path in candidates:
+        resolved = _resolve_model_path(str(path))
+        if resolved is None:
+            continue
+        key = str(resolved).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(resolved)
+    deduped.sort(key=lambda value: str(value).lower())
+    return deduped
+
+
 _CUDA_DEVICE_TOKEN_PATTERN = re.compile(
     r"^(?:-1|\d+|GPU-[A-Za-z0-9-]+|MIG-[A-Za-z0-9/-]+)$",
     re.IGNORECASE,
@@ -731,18 +804,20 @@ async def get_status():
 )
 async def list_models():
     """列出服务器上可用的模型"""
-    models_dir = Path(__file__).parent.parent / "models"
-    models = []
-    
-    if models_dir.exists():
-        for f in models_dir.glob("*.gguf"):
-            size_gb = f.stat().st_size / (1024**3)
-            models.append(ModelInfo(
-                name=f.stem,
-                path=str(f),
-                size_gb=round(size_gb, 2)
-            ))
-    
+    models: List[ModelInfo] = []
+    for model_path in _collect_model_paths():
+        try:
+            size_gb = model_path.stat().st_size / (1024**3)
+        except OSError:
+            continue
+        models.append(
+            ModelInfo(
+                name=model_path.stem,
+                path=str(model_path),
+                size_gb=round(size_gb, 2),
+            )
+        )
+
     return models
 
 

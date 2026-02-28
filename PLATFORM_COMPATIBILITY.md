@@ -238,6 +238,11 @@ curl -fsS -H "Authorization: Bearer $API_KEY" http://127.0.0.1:8000/api/v1/statu
 curl -fsS -H "Authorization: Bearer $API_KEY" http://127.0.0.1:8000/api/v1/models
 ```
 
+`/api/v1/models` 返回口径说明：
+- 默认会扫描 `middleware/models/*.gguf`。
+- 若通过 `--model`（环境变量 `MURASAKI_DEFAULT_MODEL`）指定了有效 `.gguf` 文件，即使不在默认目录，也会出现在列表中。
+- 同一路径会自动去重（避免默认目录与 `--model` 重复返回）。
+
 ### 3.14 服务端文件域限制
 
 为安全起见，`/api/v1/translate` 仅允许访问服务端 `uploads/` 或 `outputs/` 目录中的文件，下载接口也只会返回 `outputs/` 目录下的产物。
