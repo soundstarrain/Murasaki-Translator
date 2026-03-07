@@ -2,6 +2,10 @@
  * Remote Translation Client
  * Connects to a remote translation service and exposes an API compatible with local workflow.
  */
+import { createWriteStream, openAsBlob } from "node:fs";
+import { rename, unlink, writeFile } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { pipeline as streamPipeline } from "node:stream/promises";
 import { normalizeCudaVisibleDevices } from "./gpuDeviceId";
 
 interface RemoteServerConfig {
@@ -9,6 +13,20 @@ interface RemoteServerConfig {
   apiKey?: string;
   timeout?: number;
 }
+
+type RemoteRequestPolicy = {
+  retry?: boolean;
+  maxAttempts?: number;
+  timeoutMs?: number;
+};
+
+type TaskStatusRequestOptions = {
+  timeoutMs?: number;
+  maxAttempts?: number;
+};
+
+const REMOTE_STATUS_TIMEOUT_MS = 30_000;
+const REMOTE_TRANSFER_TIMEOUT_MS = 30 * 60 * 1000;
 
 export interface TranslateOptions {
   text?: string;
@@ -441,18 +459,9 @@ export class RemoteClient {
    * 下载缓存文件（用于校对）
    */
   async downloadCache(taskId: string, savePath: string): Promise<void> {
-    const url = this.config.url + `/api/v1/download/${taskId}/cache`;
-    const headers: Record<string, string> = {};
-    if (this.config.apiKey) {
-      headers["Authorization"] = `Bearer ${this.config.apiKey}`;
-    }
-    const response = await fetch(url, { headers });
-    if (!response.ok) {
-      throw new Error(`Cache download failed: ${response.status}`);
-    }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const fs = await import("fs/promises");
-    await fs.writeFile(savePath, buffer);
+    await this.downloadToFile(`/api/v1/download/${taskId}/cache`, savePath, {
+      timeoutMs: REMOTE_TRANSFER_TIMEOUT_MS,
+    });
   }
 
   /**
@@ -468,6 +477,7 @@ export class RemoteClient {
   async getTaskStatus(
     taskId: string,
     query?: TaskStatusQuery,
+    options?: TaskStatusRequestOptions,
   ): Promise<TranslateTask> {
     let path = `/api/v1/translate/${taskId}`;
     if (query) {
@@ -484,7 +494,10 @@ export class RemoteClient {
       }
     }
 
-    const response = (await this.fetch(path)) as RemoteTaskStatusRaw;
+    const response = (await this.fetch(path, {}, {
+      maxAttempts: options?.maxAttempts ?? 1,
+      timeoutMs: options?.timeoutMs ?? REMOTE_STATUS_TIMEOUT_MS,
+    })) as RemoteTaskStatusRaw;
     return {
       taskId: response.task_id,
       status: response.status,
@@ -513,26 +526,17 @@ export class RemoteClient {
   async uploadFile(
     filePath: string,
   ): Promise<{ fileId: string; serverPath: string }> {
-    const fs = await import("fs/promises");
     const path = await import("path");
 
-    // 使用全局 FormData（Chromium 实现）而非 npm form-data 包，
-    // 因为 Electron 的 fetch 无法正确序列化 npm form-data 的 stream body
-    const fileBuffer = await fs.readFile(filePath);
     const fileName = path.basename(filePath);
-    const fileArrayBuffer = fileBuffer.buffer.slice(
-      fileBuffer.byteOffset,
-      fileBuffer.byteOffset + fileBuffer.byteLength,
-    ) as ArrayBuffer;
-    const blob = new Blob([fileArrayBuffer]);
+    const blob = await openAsBlob(filePath);
 
     const form = new FormData();
     form.append("file", blob, fileName);
 
-    const response = (await this.fetchFormData(
-      "/api/v1/upload/file",
-      form,
-    )) as { file_id: string; file_path: string };
+    const response = (await this.fetchFormData("/api/v1/upload/file", form, {
+      timeoutMs: REMOTE_TRANSFER_TIMEOUT_MS,
+    })) as { file_id: string; file_path: string };
     return {
       fileId: response.file_id,
       serverPath: response.file_path,
@@ -543,9 +547,9 @@ export class RemoteClient {
    * 下载翻译结果
    */
   async downloadResult(taskId: string, savePath: string): Promise<void> {
-    const fs = require("fs");
-    const response = await this.fetchRaw(`/api/v1/download/${taskId}`);
-    await fs.promises.writeFile(savePath, response);
+    await this.downloadToFile(`/api/v1/download/${taskId}`, savePath, {
+      timeoutMs: REMOTE_TRANSFER_TIMEOUT_MS,
+    });
   }
 
   /**
@@ -703,7 +707,7 @@ export class RemoteClient {
   private async fetch(
     path: string,
     options: RequestInit = {},
-    policy?: { retry?: boolean; maxAttempts?: number },
+    policy?: RemoteRequestPolicy,
   ): Promise<any> {
     const url = this.config.url + path;
     const method = (options.method || "GET").toUpperCase();
@@ -728,11 +732,15 @@ export class RemoteClient {
         attempt,
       });
       try {
-        const response = await this.fetchWithTimeout(url, {
-          ...options,
-          method,
-          headers,
-        });
+        const response = await this.fetchWithTimeout(
+          url,
+          {
+            ...options,
+            method,
+            headers,
+          },
+          policy?.timeoutMs,
+        );
 
         const durationMs = Date.now() - startedAt;
 
@@ -819,9 +827,10 @@ export class RemoteClient {
   private async fetchWithTimeout(
     url: string,
     options: RequestInit,
+    timeoutOverrideMs?: number,
   ): Promise<Response> {
     const controller = new AbortController();
-    const timeoutMs = this.config.timeout || 300000;
+    const timeoutMs = timeoutOverrideMs ?? this.config.timeout ?? 300000;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
@@ -839,7 +848,11 @@ export class RemoteClient {
     }
   }
 
-  private async fetchFormData(path: string, form: FormData): Promise<unknown> {
+  private async fetchFormData(
+    path: string,
+    form: FormData,
+    policy?: RemoteRequestPolicy,
+  ): Promise<unknown> {
     const url = this.config.url + path;
     const headers: Record<string, string> = {
       ...(typeof (form as any).getHeaders === "function"
@@ -862,11 +875,15 @@ export class RemoteClient {
         attempt,
       });
       try {
-        const response = await this.fetchWithTimeout(url, {
-          method: "POST",
-          headers,
-          body: form,
-        });
+        const response = await this.fetchWithTimeout(
+          url,
+          {
+            method: "POST",
+            headers,
+            body: form,
+          },
+          policy?.timeoutMs,
+        );
 
         const durationMs = Date.now() - startedAt;
 
@@ -931,7 +948,35 @@ export class RemoteClient {
     throw new Error(`Upload failed after ${maxAttempts} attempts`);
   }
 
-  private async fetchRaw(path: string): Promise<Buffer> {
+  private async writeResponseToFile(
+    response: Response,
+    targetPath: string,
+  ): Promise<number> {
+    if (!response.body) {
+      const buffer = Buffer.from(await response.arrayBuffer());
+      await writeFile(targetPath, buffer);
+      return buffer.byteLength;
+    }
+
+    const body = Readable.fromWeb(response.body as any);
+    await streamPipeline(body, createWriteStream(targetPath));
+    const contentLength = response.headers.get("content-length");
+    const parsedLength = contentLength ? Number(contentLength) : NaN;
+    return Number.isFinite(parsedLength) ? parsedLength : 0;
+  }
+
+  private createTempDownloadPath(savePath: string): string {
+    const token = `${process.pid}-${Date.now()}-${Math.random()
+      .toString(16)
+      .slice(2)}`;
+    return `${savePath}.part-${token}`;
+  }
+
+  private async downloadToFile(
+    path: string,
+    savePath: string,
+    policy?: RemoteRequestPolicy,
+  ): Promise<void> {
     const url = this.config.url + path;
     const headers: Record<string, string> = {};
 
@@ -939,9 +984,10 @@ export class RemoteClient {
       headers["Authorization"] = `Bearer ${this.config.apiKey}`;
     }
 
-    const maxAttempts = 3;
+    const maxAttempts = policy?.maxAttempts ?? 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const startedAt = Date.now();
+      const tempPath = this.createTempDownloadPath(savePath);
       this.emitNetworkEvent({
         kind: "download",
         phase: "start",
@@ -950,10 +996,14 @@ export class RemoteClient {
         attempt,
       });
       try {
-        const response = await this.fetchWithTimeout(url, {
-          method: "GET",
-          headers,
-        });
+        const response = await this.fetchWithTimeout(
+          url,
+          {
+            method: "GET",
+            headers,
+          },
+          policy?.timeoutMs,
+        );
 
         const durationMs = Date.now() - startedAt;
 
@@ -989,7 +1039,13 @@ export class RemoteClient {
           throw new Error(`HTTP ${response.status}: ${text}`);
         }
 
-        const arrayBuffer = await response.arrayBuffer();
+        const byteLength = await this.writeResponseToFile(response, tempPath);
+        try {
+          await rename(tempPath, savePath);
+        } catch {
+          await unlink(savePath).catch(() => undefined);
+          await rename(tempPath, savePath);
+        }
         this.emitNetworkEvent({
           kind: "download",
           phase: "success",
@@ -998,10 +1054,11 @@ export class RemoteClient {
           attempt,
           statusCode: response.status,
           durationMs,
-          message: `bytes=${arrayBuffer.byteLength}`,
+          message: byteLength > 0 ? `bytes=${byteLength}` : "bytes=unknown",
         });
-        return Buffer.from(arrayBuffer);
+        return;
       } catch (error: unknown) {
+        await unlink(tempPath).catch(() => undefined);
         const durationMs = Date.now() - startedAt;
         const canRetry =
           attempt < maxAttempts && this.shouldRetryByError(error);

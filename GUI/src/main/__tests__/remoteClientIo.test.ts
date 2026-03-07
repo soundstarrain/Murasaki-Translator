@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { Readable } from "node:stream";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +11,7 @@ describe("RemoteClient async file io", () => {
     vi.unstubAllGlobals();
   });
 
-  it("downloadCache 使用异步 writeFile 落盘", async () => {
+  it("downloadCache writes binary payload asynchronously", async () => {
     const client = new RemoteClient({ url: "http://127.0.0.1:8000" });
 
     const bytes = new Uint8Array([1, 2, 3]);
@@ -19,6 +20,8 @@ describe("RemoteClient async file io", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
+        headers: new Headers({ "content-length": String(bytes.byteLength) }),
+        body: Readable.toWeb(Readable.from(Buffer.from(bytes))) as unknown as Response["body"],
         arrayBuffer: async () => bytes.buffer,
       } satisfies Partial<Response>),
     );
@@ -33,7 +36,7 @@ describe("RemoteClient async file io", () => {
     }
   });
 
-  it("uploadFile 使用异步 readFile 读取并上传", async () => {
+  it("uploadFile uses blob-backed async file input", async () => {
     const client = new RemoteClient({ url: "http://127.0.0.1:8000" });
     const fetchFormDataSpy = vi
       .spyOn(client as any, "fetchFormData")
@@ -56,6 +59,7 @@ describe("RemoteClient async file io", () => {
     expect(fetchFormDataSpy).toHaveBeenCalledWith(
       "/api/v1/upload/file",
       expect.any(FormData),
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     const form = fetchFormDataSpy.mock.calls[0]?.[1] as FormData;
     const fileBlob = form.get("file");
@@ -67,7 +71,35 @@ describe("RemoteClient async file io", () => {
     });
   });
 
-  it("remoteClient 不再使用同步读写 API", () => {
+  it("downloadResult streams binary payload to disk", async () => {
+    const client = new RemoteClient({ url: "http://127.0.0.1:8000" });
+    const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-length": String(bytes.length) }),
+        body: Readable.toWeb(Readable.from(bytes)) as unknown as Response["body"],
+        arrayBuffer: async () =>
+          bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength,
+          ),
+      } satisfies Partial<Response>),
+    );
+
+    const root = mkdtempSync(join(tmpdir(), "remote-client-download-"));
+    const output = join(root, "result.epub");
+    try {
+      await client.downloadResult("task-2", output);
+      expect(readFileSync(output).equals(bytes)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("remoteClient no longer uses sync file io in runtime paths", () => {
     const source = readFileSync("src/main/remoteClient.ts", "utf-8");
     expect(source).not.toContain("writeFileSync(");
     expect(source).not.toContain("readFileSync(");

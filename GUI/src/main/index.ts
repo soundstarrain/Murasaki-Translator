@@ -5158,6 +5158,22 @@ const runTranslationViaRemoteApi = async (
   let wsClient: WebSocket | null = null;
   let lastProgressSeenAt = 0;
   let lastWsLogAt = 0;
+  let consecutiveStatusFailures = 0;
+  let completionPhase = false;
+
+  const isRecoverableRemoteTransportError = (error: unknown) => {
+    const message =
+      error instanceof Error
+        ? error.message.toLowerCase()
+        : String(error).toLowerCase();
+    return (
+      message.includes("timeout") ||
+      message.includes("network") ||
+      message.includes("fetch failed") ||
+      message.includes("econnreset") ||
+      message.includes("etimedout")
+    );
+  };
 
   const emitRemoteLog = (message: string, level: LogLevel = "info") => {
     replyLogUpdate(event, message, {
@@ -5212,29 +5228,6 @@ const runTranslationViaRemoteApi = async (
       model: effectiveModelPath,
       message: hint,
     });
-  };
-
-  const tryCancelRemoteTaskInBackground = () => {
-    if (!taskId) return;
-    let attempt = 0;
-    const maxAttempts = 3;
-    const tryOnce = async () => {
-      attempt += 1;
-      try {
-        await client.cancelTask(taskId);
-        emitRemoteLog(
-          `System: Remote task ${taskId} cancel request sent after recovery (attempt ${attempt}/${maxAttempts}).`,
-          "warn",
-        );
-      } catch (error) {
-        if (attempt >= maxAttempts) return;
-        const delayMs = 1200 * attempt;
-        setTimeout(() => {
-          void tryOnce();
-        }, delayMs);
-      }
-    };
-    void tryOnce();
   };
 
   try {
@@ -5380,10 +5373,40 @@ const runTranslationViaRemoteApi = async (
     for (;;) {
       if (!remoteTranslationBridge || remoteTranslationBridge.taskId !== taskId)
         return;
-      const status = await client.getTaskStatus(taskId, {
-        logFrom: nextLogIndex,
-        logLimit: wsActive ? 80 : 200,
-      });
+      let status;
+      try {
+        status = await client.getTaskStatus(
+          taskId,
+          {
+            logFrom: nextLogIndex,
+            logLimit: wsActive ? 80 : 200,
+          },
+          {
+            maxAttempts: 1,
+            timeoutMs: 30000,
+          },
+        );
+        consecutiveStatusFailures = 0;
+      } catch (statusError) {
+        if (
+          !completionPhase &&
+          !translationStopRequested &&
+          isRecoverableRemoteTransportError(statusError)
+        ) {
+          consecutiveStatusFailures += 1;
+          emitRemoteLog(
+            `System: Remote status check failed (${consecutiveStatusFailures}). Retrying...`,
+            "warn",
+          );
+          if (consecutiveStatusFailures <= 20) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, Math.min(5000, 1000 * consecutiveStatusFailures)),
+            );
+            continue;
+          }
+        }
+        throw statusError;
+      }
       if (!remoteTranslationBridge || remoteTranslationBridge.taskId !== taskId)
         return;
 
@@ -5436,23 +5459,38 @@ const runTranslationViaRemoteApi = async (
       }
 
       if (status.status === "completed") {
+        completionPhase = true;
         // [Fix Bug 6/7] 获取剩余日志，确保 JSON_FINAL/PREVIEW_BLOCK 不被 200 行分页截断。
         if (
           typeof status.logTotal === "number" &&
           nextLogIndex < status.logTotal
         ) {
-          const finalStatus = await client.getTaskStatus(taskId, {
-            logFrom: nextLogIndex,
-            logLimit: 1000,
-          });
-          const finalLogs = Array.isArray(finalStatus.logs)
-            ? finalStatus.logs
-            : [];
-          if (finalLogs.length > 0) {
-            finalLogs.forEach((logLine) => {
-              if (!logLine) return;
-              handleRemoteLogLine(logLine, "poll");
-            });
+          try {
+            const finalStatus = await client.getTaskStatus(
+              taskId,
+              {
+                logFrom: nextLogIndex,
+                logLimit: 1000,
+              },
+              {
+                maxAttempts: 1,
+                timeoutMs: 30000,
+              },
+            );
+            const finalLogs = Array.isArray(finalStatus.logs)
+              ? finalStatus.logs
+              : [];
+            if (finalLogs.length > 0) {
+              finalLogs.forEach((logLine) => {
+                if (!logLine) return;
+                handleRemoteLogLine(logLine, "poll");
+              });
+            }
+          } catch (finalStatusError) {
+            emitRemoteLog(
+              "System: Failed to fetch trailing remote logs after completion. Continuing with result download.",
+              "warn",
+            );
           }
         }
         await client.downloadResult(taskId, outputPath);
@@ -5540,12 +5578,11 @@ const runTranslationViaRemoteApi = async (
       level: "error",
       message: `Remote translation failed. ${message}`,
     });
-    if (taskId && !stopRequested) {
+    if (taskId && !stopRequested && !completionPhase) {
       emitRemoteLog(
-        `System: Polling failed while task is active, trying best-effort cancellation (${taskId}).`,
+        `System: Remote status polling failed while task is active. The task will keep running on the server and the client will stop local tracking after this error (${taskId}).`,
         "warn",
       );
-      tryCancelRemoteTaskInBackground();
     }
     event.reply("process-exit", {
       code: 1,
