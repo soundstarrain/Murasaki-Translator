@@ -720,7 +720,9 @@ class TranslationWorker:
             # 准备输出路径
             output_dir = middleware_dir / "outputs"
             output_dir.mkdir(exist_ok=True)
-            output_path = output_dir / f"{task.task_id}_output.txt"
+            input_suffix = Path(input_path).suffix if input_path else ""
+            output_suffix = input_suffix or ".txt"
+            output_path = output_dir / f"{task.task_id}_output{output_suffix}"
             task.set_output_path(str(output_path))
 
             def _write_temp_json(prefix: str, payload: Any) -> str:

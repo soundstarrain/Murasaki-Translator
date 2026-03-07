@@ -282,10 +282,22 @@ class EpubDocument(BaseDocument):
         if expected_uid_order:
             missing = [uid for uid in expected_uid_order if uid not in id_to_text]
             if missing:
-                combined = "".join(
-                    (getattr(block, "prompt_text", "") or "") for block in blocks
-                )
-                fallback_map = _parse_stream_to_map(combined, missing)
+                remaining = set(missing)
+                fallback_map: Dict[int, str] = {}
+                for block in blocks:
+                    if not remaining:
+                        break
+                    parsed_block = _parse_stream_to_map(
+                        getattr(block, "prompt_text", "") or "",
+                        remaining,
+                    )
+                    if not parsed_block:
+                        continue
+                    for uid in list(remaining):
+                        if uid not in parsed_block:
+                            continue
+                        fallback_map[uid] = parsed_block[uid]
+                        remaining.discard(uid)
                 for uid in missing:
                     if uid in fallback_map:
                         id_to_text[uid] = fallback_map[uid]

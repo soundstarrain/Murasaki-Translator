@@ -202,6 +202,47 @@ def test_normalize_cuda_visible_devices_rejects_invalid_tokens():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_translate_preserves_structured_output_extension(monkeypatch, tmp_path):
+    worker = TranslationWorker(model_path="model.gguf")
+
+    worker.server_process = DummyServerProcess(returncode=None)
+    monkeypatch.setattr(worker, "is_ready", lambda: True)
+
+    captured = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        output_index = captured["cmd"].index("--output") + 1
+        Path(captured["cmd"][output_index]).write_bytes(b"\xff\xfePK")
+        return DummyProcess([])
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    uploads_dir = Path(__file__).resolve().parents[2] / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    input_path = uploads_dir / "book.epub"
+    input_path.write_bytes(b"PK")
+
+    task = TranslationTask(
+        task_id="epub1",
+        request=DummyRequest(text=None, file_path=str(input_path)),
+    )
+    outputs_dir = Path(__file__).resolve().parents[2] / "outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    output_path = outputs_dir / f"{task.task_id}_output.epub"
+
+    result = await worker.translate(task)
+
+    assert task.get_output_path() == str(output_path)
+    assert result == f"[Binary output: {output_path}]"
+    cmd = captured["cmd"]
+    assert "--output" in cmd
+    output_index = cmd.index("--output") + 1
+    assert cmd[output_index].endswith("_output.epub")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_translate_rejects_config_change_when_running(monkeypatch, tmp_path):
     worker = TranslationWorker(model_path="model.gguf")
     worker._current_config["ctx"] = 1024

@@ -2362,24 +2362,25 @@ def main():
                     raise ValueError(error_msg)
                 
                 print(f"[Final] Reconstructing structured document: {output_path}...")
-                from murasaki_translator.core.chunker import TextBlock
-                translated_blocks = []
-                for i in range(len(blocks)):
+                if args.alignment_mode and input_path.lower().endswith('.txt'):
+                    from murasaki_translator.core.chunker import TextBlock
+                    translated_blocks = [
+                        TextBlock(
+                            id=block.id,
+                            prompt_text=block.prompt_text,
+                            metadata=list(getattr(block, 'metadata', []) or []),
+                        )
+                        for block in blocks
+                    ]
+                else:
+                    translated_blocks = blocks
+                for i in range(len(translated_blocks)):
                     res = all_results[i]
                     if res and res.get('success'):
-                        # 构造 TextBlock 对象以满足 doc.save 的签名
-                        tb = TextBlock(id=i, prompt_text=res['out_text'])
-                        # 注入元数据以便 EPUB 精确回填
-                        if hasattr(blocks[i], 'metadata') and blocks[i].metadata:
-                            tb.metadata = blocks[i].metadata
-                        translated_blocks.append(tb)
+                        translated_blocks[i].prompt_text = res['out_text']
                     else:
                         # Fallback: keep original text to maintain the sequence for structural injection
                         print(f"[Warning] Block {i+1} missing or failed. Using source text.")
-                        tb = TextBlock(id=i, prompt_text=blocks[i].prompt_text)
-                        if hasattr(blocks[i], 'metadata') and blocks[i].metadata:
-                            tb.metadata = blocks[i].metadata
-                        translated_blocks.append(tb)
                 
                 if args.alignment_mode and input_path.lower().endswith('.txt'):
                     print(f"[Debug] Invoking save_reconstructed. MapSize={len(structure_map)}, TotalLines={source_lines}, Blocks={len(translated_blocks)}")
