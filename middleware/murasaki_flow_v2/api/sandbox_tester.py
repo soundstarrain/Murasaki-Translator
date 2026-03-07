@@ -103,8 +103,6 @@ class SandboxTester:
     @staticmethod
     def _normalize_chunk_type(value: Any) -> str:
         raw = str(value or "").strip().lower()
-        if raw == "legacy":
-            return "block"
         if raw in {"line", "block"}:
             return raw
         return ""
@@ -121,7 +119,7 @@ class SandboxTester:
             try:
                 chunk_profile = self.store.load_profile("chunk", chunk_ref)
                 from_profile = self._normalize_chunk_type(
-                    chunk_profile.get("chunk_type") or chunk_profile.get("type")
+                    chunk_profile.get("chunk_type")
                 )
                 if from_profile:
                     return from_profile

@@ -6,9 +6,11 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Force UTF-8 for stdin/stdout/stderr (Windows console fix)
-if hasattr(sys.stdout, 'reconfigure'):
+if hasattr(sys.stdin, 'reconfigure'):
     sys.stdin.reconfigure(encoding='utf-8')
+if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 
 try:
@@ -30,11 +32,24 @@ def main():
         src_text_overlay = payload.get('source_text') # Try to get real source text from sandbox
         rules = payload.get('rules', [])
         
-        protection_rules = [r for r in rules if r.get('pattern') == 'restore_protection']
+        protection_rules = [
+            r
+            for r in rules
+            if r.get('type') == 'protect' or r.get('pattern') == 'text_protect'
+        ]
         protector = None
         if protection_rules:
-            # Collect all custom patterns from all protection rules
-            patterns = [r.get('options', {}).get('customPattern') for r in protection_rules if r.get('options', {}).get('customPattern')]
+            patterns = []
+            for rule in protection_rules:
+                raw_patterns = (rule.get('options') or {}).get('patterns')
+                if isinstance(raw_patterns, list):
+                    patterns.extend(
+                        str(item).strip() for item in raw_patterns if str(item).strip()
+                    )
+                elif isinstance(raw_patterns, str):
+                    patterns.extend(
+                        line.strip() for line in raw_patterns.splitlines() if line.strip()
+                    )
             protector = TextProtector(patterns=patterns if patterns else None)
 
         steps = []

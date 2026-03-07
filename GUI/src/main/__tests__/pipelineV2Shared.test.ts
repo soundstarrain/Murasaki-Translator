@@ -1,51 +1,43 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  normalizeChunkType,
   normalizeProfileCompatibility,
   parseBooleanFlag,
 } from "../pipelineV2Shared";
 
-describe("pipelineV2Shared compatibility normalization", () => {
-  it("normalizes api serial_requests to strict_concurrency", () => {
+describe("pipelineV2Shared normalization", () => {
+  it("normalizes strict_concurrency to boolean", () => {
     const payload: Record<string, any> = {
-      id: "api_legacy",
-      serial_requests: "true",
+      id: "api_current",
+      strict_concurrency: "true",
     };
 
     const changed = normalizeProfileCompatibility("api", payload);
 
     expect(changed).toBe(true);
     expect(payload.strict_concurrency).toBe(true);
-    expect(payload).not.toHaveProperty("serial_requests");
   });
 
-  it("normalizes api strictConcurrency camelCase to snake_case", () => {
+  it("does not change payload without current compatibility fields", () => {
     const payload: Record<string, any> = {
-      id: "api_camel",
-      strictConcurrency: 1,
-    };
-
-    const changed = normalizeProfileCompatibility("api", payload);
-
-    expect(changed).toBe(true);
-    expect(payload.strict_concurrency).toBe(true);
-    expect(payload).not.toHaveProperty("strictConcurrency");
-  });
-
-  it("normalizes chunk type alias", () => {
-    const payload: Record<string, any> = {
-      id: "chunk_legacy",
-      type: "legacy",
+      id: "chunk_current",
+      chunk_type: "block",
     };
 
     const changed = normalizeProfileCompatibility("chunk", payload);
 
-    expect(changed).toBe(true);
+    expect(changed).toBe(false);
     expect(payload.chunk_type).toBe("block");
-    expect(payload).not.toHaveProperty("type");
   });
 
-  it("parseBooleanFlag handles common legacy values", () => {
+  it("normalizes current chunk types only", () => {
+    expect(normalizeChunkType("block")).toBe("block");
+    expect(normalizeChunkType("line")).toBe("line");
+    expect(normalizeChunkType(" legacy ")).toBe("");
+  });
+
+  it("parseBooleanFlag handles common boolean values", () => {
     expect(parseBooleanFlag("true")).toBe(true);
     expect(parseBooleanFlag("1")).toBe(true);
     expect(parseBooleanFlag("false")).toBe(false);

@@ -57,8 +57,6 @@ class ProfileStore:
     @staticmethod
     def _normalize_chunk_type(value: Any) -> str:
         raw = str(value or "").strip().lower()
-        if raw == "legacy":
-            return "block"
         if raw in {"block", "line"}:
             return raw
         return ""
@@ -79,35 +77,17 @@ class ProfileStore:
     def _normalize_profile_data(self, kind: str, data: Dict[str, Any]) -> bool:
         changed = False
 
-        if kind == "api":
-            if "strictConcurrency" in data:
-                if "strict_concurrency" not in data:
-                    data["strict_concurrency"] = self._parse_bool_flag(
-                        data.get("strictConcurrency")
-                    )
-                del data["strictConcurrency"]
+        if kind == "api" and "strict_concurrency" in data:
+            strict_value = self._parse_bool_flag(data.get("strict_concurrency"))
+            if data.get("strict_concurrency") != strict_value:
+                data["strict_concurrency"] = strict_value
                 changed = True
-            if "serial_requests" in data:
-                if "strict_concurrency" not in data:
-                    data["strict_concurrency"] = self._parse_bool_flag(
-                        data.get("serial_requests")
-                    )
-                del data["serial_requests"]
-                changed = True
-            if "strict_concurrency" in data:
-                strict_value = self._parse_bool_flag(data.get("strict_concurrency"))
-                if data.get("strict_concurrency") != strict_value:
-                    data["strict_concurrency"] = strict_value
-                    changed = True
 
         if kind == "chunk":
-            raw_chunk_type = data.get("chunk_type") or data.get("type") or ""
+            raw_chunk_type = data.get("chunk_type") or ""
             normalized = self._normalize_chunk_type(raw_chunk_type)
             if normalized and data.get("chunk_type") != normalized:
                 data["chunk_type"] = normalized
-                changed = True
-            if "type" in data:
-                del data["type"]
                 changed = True
 
         return changed
@@ -132,7 +112,7 @@ class ProfileStore:
             display_name = str(data.get("name") or profile_id)
             chunk_type = None
             if kind == "chunk":
-                raw_chunk_type = data.get("chunk_type") or data.get("type") or ""
+                raw_chunk_type = data.get("chunk_type") or ""
                 normalized = self._normalize_chunk_type(raw_chunk_type)
                 if normalized:
                     chunk_type = normalized

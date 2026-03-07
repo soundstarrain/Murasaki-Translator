@@ -143,20 +143,6 @@ def _collect_protect_rule_lines(
     return enabled, lines
 
 
-def _collect_legacy_protect_lines(post_rules: List[Dict[str, Any]]) -> List[str]:
-    lines: List[str] = []
-    for rule in post_rules or []:
-        if not rule or not rule.get("active", True):
-            continue
-        if rule.get("pattern") == "restore_protection":
-            options = (
-                rule.get("options") if isinstance(rule.get("options"), dict) else {}
-            )
-            raw = options.get("customPattern")
-            lines.extend(_parse_protect_pattern_payload(raw))
-    return lines
-
-
 def _merge_protect_patterns(
     base: Optional[List[str]], additions: List[str], removals: List[str]
 ) -> List[str]:
@@ -175,12 +161,12 @@ def build_protect_patterns(
     enable: bool = True,
     base_patterns: Optional[List[str]] = None,
 ) -> List[str]:
+    del post_rules
     if not enable:
         return []
     protect_enabled, protect_lines = _collect_protect_rule_lines(pre_rules)
-    legacy_lines = _collect_legacy_protect_lines(post_rules)
     # 即使没有显式配置保护规则，enable=True 时也使用默认 patterns
-    additions, removals = _parse_protect_pattern_lines(protect_lines + legacy_lines)
+    additions, removals = _parse_protect_pattern_lines(protect_lines)
     baseline_patterns = (
         list(base_patterns) if isinstance(base_patterns, list) else TextProtector.DEFAULT_PATTERNS
     )

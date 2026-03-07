@@ -52,7 +52,7 @@ export const normalizeChunkType = (value: unknown): "" | "line" | "block" => {
   if (typeof value !== "string") return "";
   const normalized = value.trim().toLowerCase();
   if (normalized === "line") return "line";
-  if (normalized === "block" || normalized === "legacy") return "block";
+  if (normalized === "block") return "block";
   return "";
 };
 
@@ -75,43 +75,10 @@ export const normalizeProfileCompatibility = (
   if (!data || typeof data !== "object" || Array.isArray(data)) return false;
   let changed = false;
 
-  if (kind === "api") {
-    if ("strictConcurrency" in data) {
-      if (!("strict_concurrency" in data)) {
-        data.strict_concurrency = parseBooleanFlag(data.strictConcurrency);
-      }
-      delete data.strictConcurrency;
-      changed = true;
-    }
-    if ("serial_requests" in data) {
-      if (!("strict_concurrency" in data)) {
-        data.strict_concurrency = parseBooleanFlag(data.serial_requests);
-      }
-      delete data.serial_requests;
-      changed = true;
-    }
-    if ("strict_concurrency" in data) {
-      const normalizedStrict = parseBooleanFlag(data.strict_concurrency);
-      if (data.strict_concurrency !== normalizedStrict) {
-        data.strict_concurrency = normalizedStrict;
-        changed = true;
-      }
-    }
-  }
-
-  if (kind === "chunk") {
-    const rawChunkType = String(data.chunk_type ?? data.type ?? "")
-      .trim()
-      .toLowerCase();
-    const normalizedChunkType = rawChunkType === "legacy" ? "block" : rawChunkType;
-    if (normalizedChunkType === "line" || normalizedChunkType === "block") {
-      if (data.chunk_type !== normalizedChunkType) {
-        data.chunk_type = normalizedChunkType;
-        changed = true;
-      }
-    }
-    if ("type" in data) {
-      delete data.type;
+  if (kind === "api" && "strict_concurrency" in data) {
+    const normalizedStrict = parseBooleanFlag(data.strict_concurrency);
+    if (data.strict_concurrency !== normalizedStrict) {
+      data.strict_concurrency = normalizedStrict;
       changed = true;
     }
   }

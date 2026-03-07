@@ -63,11 +63,6 @@ import {
   resolvePipelineTranslationMode,
 } from "../lib/pipelineProfile";
 import {
-  buildPromptLegacyParts,
-  shouldPreserveLegacyPromptParts,
-  type PromptLegacyParts,
-} from "../lib/promptProfile";
-import {
   parseJsonlPreviewLines,
   parseJsonPreviewValue,
   parseTaggedLinePreviewLines,
@@ -864,7 +859,7 @@ const GrokFaviconIcon = ({ className }: { className?: string }) => (
 
 const TEMPLATE_CUSTOM_KEY = "murasaki.v2.custom_templates";
 const TEMPLATE_HIDDEN_KEY = "murasaki.v2.hidden_templates";
-const ACTIVE_PIPELINE_KEY = "murasaki.v2.active_pipeline_id";
+const ACTIVE_PIPELINE_KEY = "config_v2_pipeline_id";
 const PARSER_RECOMMEND_KEY = "murasaki.v2.parser_recommend_visible";
 const PROFILE_ORDER_KEY = "murasaki.v2.profile_order";
 const SHOW_ID_FIELDS_KEY = "murasaki.v2.show_id_fields";
@@ -1533,7 +1528,7 @@ const validateProfile = (
   }
 
   if (kind === "chunk") {
-    const rawChunkType = String(data.chunk_type || data.type || "");
+    const rawChunkType = String(data.chunk_type || "");
     const normalizedChunkType = normalizeChunkType(rawChunkType);
     if (!rawChunkType.trim()) errors.push(missingField("chunk_type"));
     if (rawChunkType.trim() && !normalizedChunkType) {
@@ -2161,8 +2156,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     useState<PipelineComposerState>(DEFAULT_PIPELINE_COMPOSER);
   const [promptForm, setPromptForm] =
     useState<PromptFormState>(DEFAULT_PROMPT_FORM);
-  const [promptLegacyParts, setPromptLegacyParts] =
-    useState<PromptLegacyParts | null>(null);
   const [promptPreview, setPromptPreview] = useState<PromptPreviewState>(
     DEFAULT_PROMPT_PREVIEW,
   );
@@ -2301,9 +2294,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const [parserPreview, setParserPreview] =
     useState<ParserPreviewResult | null>(null);
   const [editorTab, setEditorTab] = useState<"visual" | "yaml">("visual");
-  const [activePipelineId, setActivePipelineId] = useState<string>(() =>
-    loadJson(ACTIVE_PIPELINE_KEY, ""),
-  );
+  const [activePipelineId, setActivePipelineId] = useState<string>(() => {
+    try {
+      return window.localStorage.getItem(ACTIVE_PIPELINE_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
   const [pendingPipelineLink, setPendingPipelineLink] = useState(false);
   const loadProfilesSeq = useRef(0);
   const pipelineIndexSeq = useRef(0);
@@ -2335,7 +2332,11 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   ]);
 
   useEffect(() => {
-    persistJson(ACTIVE_PIPELINE_KEY, activePipelineId);
+    try {
+      window.localStorage.setItem(ACTIVE_PIPELINE_KEY, activePipelineId);
+    } catch {
+      // ignore
+    }
   }, [activePipelineId]);
 
   useEffect(() => {
@@ -2669,7 +2670,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const loadChunkTypeIndex = async (
     chunkIds: string[],
     requestId?: number,
-    preloadList?: Array<{ id?: string; chunk_type?: string; type?: string }>,
+    preloadList?: Array<{ id?: string; chunk_type?: string }>,
   ) => {
     if (!chunkIds.length) {
       if (!requestId || requestId === loadProfilesSeq.current) {
@@ -2682,7 +2683,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       preloadList.forEach((item) => {
         const rawId = item?.id ? String(item.id) : "";
         if (!rawId) return;
-        const rawType = String(item.chunk_type || item.type || "");
+        const rawType = String(item.chunk_type || "");
         const normalized = normalizeChunkType(rawType);
         if (normalized) preloaded.set(rawId, normalized);
       });
@@ -2731,7 +2732,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           const data =
             result?.data ??
             (result?.yaml ? (safeLoadYaml(result.yaml) as any) : null);
-          const raw = String(data?.chunk_type || data?.type || "");
+          const raw = String(data?.chunk_type || "");
           const normalized = normalizeChunkType(raw);
           return [id, normalized] as [string, "" | "line" | "block"];
         } catch {
@@ -3994,7 +3995,6 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     }
     if (targetKind === "prompt") {
       setPromptForm(DEFAULT_PROMPT_FORM);
-      setPromptLegacyParts(null);
       setPromptPreview(DEFAULT_PROMPT_PREVIEW);
       return;
     }
@@ -4497,11 +4497,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
           data.concurrency !== undefined && data.concurrency !== null
             ? String(data.concurrency)
             : "",
-        strictConcurrency: parseBooleanFlag(
-          data.strict_concurrency ??
-            data.strictConcurrency,
-          false,
-        ),
+        strictConcurrency: parseBooleanFlag(data.strict_concurrency, false),
         maxRetries:
           data.max_retries !== undefined && data.max_retries !== null
             ? String(data.max_retries)
@@ -4644,12 +4640,10 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     }
     if (targetKind === "prompt") {
       const context = data.context || {};
-      const { combined, legacy } = buildPromptLegacyParts(data);
-      setPromptLegacyParts(legacy);
       setPromptForm({
         id: data.id || "",
         name: data.name || "",
-        systemTemplate: combined,
+        systemTemplate: data.system_template || "",
         userTemplate: data.user_template || "",
         beforeLines: String(context.before_lines ?? "0"),
         afterLines: String(context.after_lines ?? "0"),
@@ -5362,27 +5356,13 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
       id: newForm.id,
       name: newForm.name,
       user_template: newForm.userTemplate,
+      system_template: newForm.systemTemplate,
       context: {
         before_lines: toNumber(newForm.beforeLines, 0),
         after_lines: toNumber(newForm.afterLines, 0),
         joiner: resolvedJoiner || "\n",
       },
     };
-    const preserveLegacy = shouldPreserveLegacyPromptParts(
-      promptLegacyParts,
-      newForm.systemTemplate,
-    );
-    if (preserveLegacy && promptLegacyParts) {
-      if (promptLegacyParts.persona)
-        payload.persona = promptLegacyParts.persona;
-      if (promptLegacyParts.styleRules)
-        payload.style_rules = promptLegacyParts.styleRules;
-      if (promptLegacyParts.outputRules)
-        payload.output_rules = promptLegacyParts.outputRules;
-      payload.system_template = promptLegacyParts.systemTemplate;
-    } else {
-      payload.system_template = newForm.systemTemplate;
-    }
     if (resolvedSourceFormat) {
       payload.context.source_format = resolvedSourceFormat;
     }
@@ -5438,8 +5418,7 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
     setChunkForm(nextForm);
     try {
       const previousChunkTypeRaw =
-        lastProfileDataRef.current.chunk?.chunk_type ??
-        lastProfileDataRef.current.chunk?.type;
+        lastProfileDataRef.current.chunk?.chunk_type;
       const resolvedChunkType =
         normalizeChunkType(previousChunkTypeRaw) || "block";
       const payload: any = {
@@ -7912,10 +7891,8 @@ export function ApiManagerView({ lang }: ApiManagerViewProps) {
   const renderChunkForm = () => {
     const showChunkId = showIdField.chunk;
     const currentChunkType =
-      normalizeChunkType(
-        lastProfileDataRef.current.chunk?.chunk_type ??
-          lastProfileDataRef.current.chunk?.type,
-      ) || "block";
+      normalizeChunkType(lastProfileDataRef.current.chunk?.chunk_type) ||
+      "block";
     const isBlockChunk = currentChunkType === "block";
     const kanaRetrySourceLang =
       normalizeSourceLang(chunkForm.kanaRetrySourceLang) || "ja";

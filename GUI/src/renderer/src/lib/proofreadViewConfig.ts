@@ -33,34 +33,12 @@ export const normalizeProofreadEngineMode = (
   value: unknown,
 ): ProofreadEngineMode => (trimString(value) === "v2" ? "v2" : "v1");
 
-export const parseLegacyActivePipelineId = (raw: unknown): string => {
-  const payload = trimString(raw);
-  if (!payload) return "";
-  try {
-    const parsed = JSON.parse(payload);
-    return typeof parsed === "string" ? parsed.trim() : "";
-  } catch {
-    return "";
-  }
-};
-
-export const resolveProofreadPipelineId = (
-  primaryPipelineId: unknown,
-  legacyPipelineRaw?: unknown,
-): string => {
-  const direct = trimString(primaryPipelineId);
-  if (direct) return direct;
-  return parseLegacyActivePipelineId(legacyPipelineRaw);
-};
-
 export const resolveProofreadRetranslateOptions = ({
   engineMode,
   pipelineId,
-  legacyPipelineRaw,
 }: {
   engineMode: unknown;
   pipelineId: unknown;
-  legacyPipelineRaw?: unknown;
 }): ProofreadRetranslateOptions => {
   const mode = normalizeProofreadEngineMode(engineMode);
   if (mode !== "v2") {
@@ -68,7 +46,7 @@ export const resolveProofreadRetranslateOptions = ({
   }
   return {
     useV2: true,
-    pipelineId: resolveProofreadPipelineId(pipelineId, legacyPipelineRaw),
+    pipelineId: trimString(pipelineId),
   };
 };
 
@@ -76,7 +54,6 @@ export const normalizeProofreadChunkType = (
   value: unknown,
 ): "line" | "chunk" | "block" | "" => {
   const normalized = trimString(value).toLowerCase();
-  if (normalized === "legacy") return "block";
   if (
     normalized === "line" ||
     normalized === "chunk" ||

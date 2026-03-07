@@ -820,7 +820,6 @@ export default function ProofreadView({
     const resolvedRetryOptions = resolveProofreadRetranslateOptions({
       engineMode: resolvedRetryMode,
       pipelineId: localStorage.getItem("config_v2_pipeline_id"),
-      legacyPipelineRaw: localStorage.getItem("murasaki.v2.active_pipeline_id"),
     });
     setRetryV2PipelineId(resolvedRetryOptions.pipelineId);
 
@@ -1595,7 +1594,6 @@ export default function ProofreadView({
     return resolveProofreadRetranslateOptions({
       engineMode: retryEngineMode,
       pipelineId: retryV2PipelineId,
-      legacyPipelineRaw: localStorage.getItem("murasaki.v2.active_pipeline_id"),
     });
   }, [retryEngineMode, retryV2PipelineId]);
 

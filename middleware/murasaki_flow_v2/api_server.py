@@ -85,8 +85,6 @@ def _is_loopback(host: str) -> bool:
 
 def _normalize_chunk_type(value: Any) -> str:
     raw = str(value or "").strip().lower()
-    if raw == "legacy":
-        return "block"
     if raw in {"block", "line"}:
         return raw
     return ""
@@ -196,9 +194,7 @@ def create_app(store: ProfileStore, base_dir: Path) -> FastAPI:
         else:
             data["id"] = profile_id
         if kind == "chunk":
-            normalized = _normalize_chunk_type(
-                data.get("chunk_type") or data.get("type") or ""
-            )
+            normalized = _normalize_chunk_type(data.get("chunk_type") or "")
             if normalized:
                 data["chunk_type"] = normalized
 

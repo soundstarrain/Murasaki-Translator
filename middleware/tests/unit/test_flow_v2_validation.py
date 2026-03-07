@@ -67,8 +67,8 @@ def test_flow_v2_validation_pipeline_line_policy_required():
 def test_flow_v2_validation_pipeline_line_policy_requires_line_chunk(tmp_path):
     store = ProfileStore(str(tmp_path))
     store.ensure_dirs(["api", "prompt", "parser", "policy", "chunk", "pipeline"])
-    (tmp_path / "chunk" / "legacy_chunk.yaml").write_text(
-        "id: legacy_chunk\nchunk_type: legacy\noptions: {}\n",
+    (tmp_path / "chunk" / "block_chunk.yaml").write_text(
+        "id: block_chunk\nchunk_type: block\noptions: {}\n",
         encoding="utf-8",
     )
     data = {
@@ -76,7 +76,7 @@ def test_flow_v2_validation_pipeline_line_policy_requires_line_chunk(tmp_path):
         "provider": "api1",
         "prompt": "prompt1",
         "parser": "parser1",
-        "chunk_policy": "legacy_chunk",
+        "chunk_policy": "block_chunk",
         "apply_line_policy": True,
         "line_policy": "line_policy_1",
     }

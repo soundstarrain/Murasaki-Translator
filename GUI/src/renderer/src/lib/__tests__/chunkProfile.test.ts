@@ -2,8 +2,7 @@ import { describe, it, expect } from "vitest";
 import { normalizeChunkType } from "../chunkProfile";
 
 describe("chunkProfile helpers", () => {
-  it("normalizes block/line types (legacy maps to block)", () => {
-    expect(normalizeChunkType("legacy")).toBe("block");
+  it("normalizes current block/line types", () => {
     expect(normalizeChunkType("block")).toBe("block");
     expect(normalizeChunkType("line")).toBe("line");
     expect(normalizeChunkType(" LINE ")).toBe("line");
@@ -13,6 +12,7 @@ describe("chunkProfile helpers", () => {
     expect(normalizeChunkType("")).toBe("");
     expect(normalizeChunkType(null)).toBe("");
     expect(normalizeChunkType(undefined)).toBe("");
+    expect(normalizeChunkType("legacy")).toBe("");
     expect(normalizeChunkType("doc")).toBe("");
   });
 });

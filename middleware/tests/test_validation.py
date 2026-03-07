@@ -165,7 +165,7 @@ def test_invalid_chunk_options(tmp_path: Path) -> None:
     store = ProfileStore(str(tmp_path))
     profile = {
         "id": "chunk_bad",
-        "chunk_type": "legacy",
+        "chunk_type": "block",
         "options": {
             "target_chars": 0,
             "max_chars": -1,

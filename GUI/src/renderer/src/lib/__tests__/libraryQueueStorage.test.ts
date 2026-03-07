@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { QueueItem } from "../../types/common";
 import {
-  LEGACY_FILE_QUEUE_KEY,
   LIBRARY_QUEUE_KEY,
   loadLibraryQueueFromStorage,
   persistLibraryQueueToStorage,
@@ -36,69 +35,43 @@ const buildQueueItem = (path: string): QueueItem => ({
 });
 
 describe("libraryQueueStorage", () => {
-  it("migrates legacy file_queue to library_queue and removes legacy key", () => {
-    const storage = createMemoryStorage({
-      [LEGACY_FILE_QUEUE_KEY]: JSON.stringify([
-        "C:/a.txt",
-        "C:/a.txt",
-        "C:/b.txt",
-      ]),
-    });
-
-    const queue = loadLibraryQueueFromStorage(storage, buildQueueItem);
-
-    expect(queue.map((item) => item.path)).toEqual(["C:/a.txt", "C:/b.txt"]);
-    expect(storage.getItem(LEGACY_FILE_QUEUE_KEY)).toBeNull();
-    expect(storage.getItem(LIBRARY_QUEUE_KEY)).not.toBeNull();
-  });
-
-  it("prefers library_queue and clears stale legacy key", () => {
+  it("loads current library_queue payload", () => {
     const existingQueue: QueueItem[] = [buildQueueItem("D:/new.txt")];
     const storage = createMemoryStorage({
       [LIBRARY_QUEUE_KEY]: JSON.stringify(existingQueue),
-      [LEGACY_FILE_QUEUE_KEY]: JSON.stringify(["D:/old.txt"]),
     });
 
     const queue = loadLibraryQueueFromStorage(storage, buildQueueItem);
 
     expect(queue).toEqual(existingQueue);
-    expect(storage.getItem(LEGACY_FILE_QUEUE_KEY)).toBeNull();
   });
 
-  it("accepts legacy string-array payload in library_queue and normalizes it", () => {
+  it("returns empty array for unsupported payload shapes", () => {
     const storage = createMemoryStorage({
       [LIBRARY_QUEUE_KEY]: JSON.stringify(["E:/legacy.txt"]),
     });
 
     const queue = loadLibraryQueueFromStorage(storage, buildQueueItem);
 
-    expect(queue.map((item) => item.path)).toEqual(["E:/legacy.txt"]);
-    const persisted = JSON.parse(storage.getItem(LIBRARY_QUEUE_KEY) || "[]");
-    expect(Array.isArray(persisted)).toBe(true);
-    expect(persisted[0].path).toBe("E:/legacy.txt");
+    expect(queue).toEqual([]);
   });
 
-  it("falls back to legacy key when library_queue payload is malformed", () => {
+  it("returns empty array for malformed payload", () => {
     const storage = createMemoryStorage({
       [LIBRARY_QUEUE_KEY]: "{",
-      [LEGACY_FILE_QUEUE_KEY]: JSON.stringify(["F:/from-legacy.txt"]),
     });
 
     const queue = loadLibraryQueueFromStorage(storage, buildQueueItem);
 
-    expect(queue.map((item) => item.path)).toEqual(["F:/from-legacy.txt"]);
-    expect(storage.getItem(LEGACY_FILE_QUEUE_KEY)).toBeNull();
+    expect(queue).toEqual([]);
   });
 
-  it("persists queue to library_queue only and drops legacy key", () => {
-    const storage = createMemoryStorage({
-      [LEGACY_FILE_QUEUE_KEY]: JSON.stringify(["G:/legacy.txt"]),
-    });
+  it("persists queue to library_queue only", () => {
+    const storage = createMemoryStorage();
     const queue = [buildQueueItem("G:/new.txt")];
 
     persistLibraryQueueToStorage(storage, queue);
 
-    expect(storage.getItem(LEGACY_FILE_QUEUE_KEY)).toBeNull();
     expect(JSON.parse(storage.getItem(LIBRARY_QUEUE_KEY) || "[]")).toEqual(
       queue,
     );

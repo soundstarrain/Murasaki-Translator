@@ -891,7 +891,6 @@ export function SettingsView({ lang }: { lang: Language }) {
           "last_output_dir",
           "translation_history",
           "library_queue",
-          "file_queue",
           "last_preview_blocks",
           "config_rules_pre",
           "config_rules_post",

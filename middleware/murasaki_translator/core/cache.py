@@ -164,8 +164,6 @@ class TranslationCache:
                     data['engineMode'] = normalized_engine_mode
 
                 normalized_chunk_type = str(chunk_type or '').strip().lower()
-                if normalized_chunk_type == 'legacy':
-                    normalized_chunk_type = 'block'
                 if normalized_chunk_type in {'line', 'chunk', 'block'}:
                     data['chunkType'] = normalized_chunk_type
 

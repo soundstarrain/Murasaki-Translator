@@ -21,11 +21,8 @@ def test_flow_v2_prompt_line_number():
 
 
 @pytest.mark.unit
-def test_flow_v2_prompt_persona_rules_order():
+def test_flow_v2_prompt_uses_current_system_template_only():
     profile = {
-        "persona": "Persona A",
-        "style_rules": "Style B",
-        "output_rules": "Output C",
         "system_template": "System D",
         "user_template": "{{source}}",
     }
@@ -38,7 +35,7 @@ def test_flow_v2_prompt_persona_rules_order():
         line_index=None,
     )
     assert messages[0]["role"] == "system"
-    assert messages[0]["content"] == "Persona A\n\nStyle B\n\nOutput C\n\nSystem D"
+    assert messages[0]["content"] == "System D"
 
 
 @pytest.mark.unit

@@ -44,8 +44,6 @@ def _exists(store: Optional[ProfileStore], kind: str, ref: str) -> bool:
 
 def _normalize_chunk_type(value: Any) -> str:
     raw = str(value or "").strip().lower()
-    if raw == "legacy":
-        return "block"
     if raw in {"block", "line"}:
         return raw
     return raw
@@ -58,17 +56,11 @@ def _get_chunk_type(store: Optional[ProfileStore], ref: str) -> str:
         profile = store.load_profile("chunk", ref)
     except Exception:
         return ""
-    return _normalize_chunk_type(profile.get("chunk_type") or profile.get("type") or "")
+    return _normalize_chunk_type(profile.get("chunk_type") or "")
 
 
 def _collect_prompt_text(prompt: Dict[str, Any]) -> str:
-    parts = [
-        prompt.get("persona"),
-        prompt.get("style_rules"),
-        prompt.get("output_rules"),
-        prompt.get("system_template"),
-        prompt.get("user_template"),
-    ]
+    parts = [prompt.get("system_template"), prompt.get("user_template")]
     return "\n".join([str(p) for p in parts if isinstance(p, str)]).lower()
 
 
@@ -225,7 +217,7 @@ def validate_profile(
                 result.errors.append("invalid_similarity_threshold")
 
     if kind == "chunk":
-        raw_chunk_type = data.get("chunk_type") or data.get("type") or ""
+        raw_chunk_type = data.get("chunk_type") or ""
         chunk_type = _normalize_chunk_type(raw_chunk_type)
         if not chunk_type:
             result.errors.append("missing_field:chunk_type")

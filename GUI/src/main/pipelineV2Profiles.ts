@@ -821,7 +821,7 @@ const listProfileRefsLocal = async (
 
         if (data?.name) name = String(data.name);
         if (kind === "chunk") {
-          const rawChunkType = String(data?.chunk_type || data?.type || "");
+          const rawChunkType = String(data?.chunk_type || "");
           const normalized = normalizeChunkType(rawChunkType);
           if (normalized) chunkType = normalized;
         }
@@ -971,9 +971,7 @@ const saveProfileLocal = async (
   parsed.id = rawId;
   normalizeProfileCompatibility(kind, parsed);
   if (kind === "chunk") {
-    const normalized = normalizeChunkType(
-      parsed.chunk_type ?? parsed.type ?? "",
-    );
+    const normalized = normalizeChunkType(parsed.chunk_type ?? "");
     if (normalized) parsed.chunk_type = normalized;
   }
 

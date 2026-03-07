@@ -79,13 +79,7 @@ const loadProfile = async (
 };
 
 const collectPromptText = (prompt: Record<string, any>) => {
-  const parts = [
-    prompt.persona,
-    prompt.style_rules,
-    prompt.output_rules,
-    prompt.system_template,
-    prompt.user_template,
-  ];
+  const parts = [prompt.system_template, prompt.user_template];
   return parts
     .filter((item) => typeof item === "string")
     .join("\n")
@@ -278,7 +272,7 @@ export const validateProfileLocal = async (
   }
 
   if (kind === "chunk") {
-    const rawChunkType = String(data.chunk_type || data.type || "");
+    const rawChunkType = String(data.chunk_type || "");
     const chunkType = normalizeChunkType(rawChunkType);
     if (!rawChunkType.trim()) result.errors.push("missing_field:chunk_type");
     if (rawChunkType.trim() && !chunkType) {
@@ -366,7 +360,7 @@ export const validateProfileLocal = async (
     if (chunkRef) {
       const chunkProfile = await loadProfile(profilesDir, "chunk", chunkRef);
       const chunkType = normalizeChunkType(
-        chunkProfile?.data?.chunk_type || chunkProfile?.data?.type || "",
+        chunkProfile?.data?.chunk_type || "",
       );
       if (data.apply_line_policy && chunkType && chunkType !== "line") {
         result.errors.push("line_policy_requires_line_chunk");

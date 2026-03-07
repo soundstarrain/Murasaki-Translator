@@ -62,7 +62,7 @@ class TestFlowV2RunnerHelpers(unittest.TestCase):
                 f.write(
                     "id: chunk1\n"
                     "name: chunk1\n"
-                    "chunk_type: legacy\n"
+                    "chunk_type: block\n"
                 )
 
             store = ProfileStore(temp_dir)
