@@ -1,5 +1,22 @@
 # Murasaki Translator - Changelog
 
+## [2.2.0] - 2026-03-07
+
+### Changed
+
+#### [配置与存储层] 旧版本兼容支持收窄
+- breaking: Pipeline V2 profile、localStorage 与文本保护规则的历史兼容字段已收窄到当前 schema，旧字段不再继续回退读取。
+- refactor: GUI 与 Middleware 的相关读取/校验链路统一到当前配置语义，减少新旧字段混用带来的分叉行为。
+
+#### [V1 执行层] TXT 对齐模式结构重试策略
+- fix: V1 的 `.txt` + 对齐模式现在优先处理结构问题：先校验锚点，再校验严格行数，结构重试统一纳入 `max_retries`。
+- fix: 本地与远程 V1 共用同一条修复链路；重试耗尽后仍允许按原文兜底回填，保证结构化重建可完成。
+
+#### [XLSX 文档层] 结构化记录接入
+- feat: 新增共享 `XlsxDocument` 文档适配层，统一承接 `xlsx` 的解析、记录抽取与按单元格回填。
+- feat: V1 的 `xlsx` 输入按 `txt` 对齐模式同构接入；V2 的 `xlsx` 输入按现有 `line` / `block` 能力接入，并复用现有文本保护、规则、quality 与 resume 链路。
+- fix: GUI 的文件选择、拖拽提示、队列页、Dashboard 队列入口、文件夹导入与目录扫描链路现已统一识别 `.xlsx`。
+- fix: 运行时依赖入口、关键异常退出码与 GitHub Actions / Release 打包校验已补齐，避免 `xlsx` 依赖缺失或失败误报成功。
 ## [2.1.5] - 2026-03-07
 
 ### Changed
