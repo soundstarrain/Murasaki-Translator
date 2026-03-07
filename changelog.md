@@ -1,5 +1,29 @@
 # Murasaki Translator - Changelog
 
+## [2.1.5] - 2026-03-07
+
+### Changed
+
+#### [远程 V1 链路] 大文件 EPUB 结果传输与完成阶段稳定性
+- fix: `RemoteClient` 的大文件上传改为基于 `openAsBlob` 的异步文件输入，不再先整文件读入主进程内存，降低远程上传大 EPUB 时的峰值内存占用。
+- fix: 远程结果与缓存下载改为流式写入临时文件后原子替换目标文件，不再使用整包 `arrayBuffer()` 落盘，降低大文件下载阶段的内存压力与半截文件风险。
+- fix: 远程状态轮询改为独立短超时 + 可恢复重试，不再因单次轮询超时就立即对仍在服务端执行的任务发起 best-effort cancel。
+- fix: 远程任务进入 `completed` 后，尾日志补拉失败不再中断结果下载，避免“日志补尾失败”误判为整次远程翻译失败。
+
+#### [远程 V1 服务端] 结构化输出文件命名与二进制结果语义
+- fix: `translation_worker` 的服务端输出路径不再固定为 `_output.txt`，改为跟随输入扩展名生成输出文件，修复 EPUB 等结构化文档在远程模式下被错误命名为 `.txt` 的问题。
+- fix: 远程 V1 完成后的下载产物与服务端输出路径语义重新对齐，减少 EPUB 二进制结果被误当作文本输出处理的链路歧义。
+
+#### [V1 结构化文档重组] EPUB 收尾阶段内存放大优化
+- fix: 结构化文档最终重组阶段不再为非 alignment 场景额外复制整份 `translated_blocks`，降低大文件 EPUB 在 `Reconstructing` 阶段的额外内存占用。
+- fix: `EpubDocument.save()` 的缺失锚点 fallback 改为按 block 增量补齐，不再将全部 block 文本拼成单个超大字符串再解析，降低大 EPUB 收尾阶段的瞬时内存压力。
+- fix: alignment 模式保留独立 `translated_blocks` 副本，避免上述内存优化误伤本地 V1 的 `source_blocks` 语义与重建逻辑。
+
+#### [测试工程层] 回归覆盖
+- test: 新增远程文件 I/O 回归，覆盖远程结果流式下载落盘与 upload blob 输入链路（`GUI/src/main/__tests__/remoteClientIo.test.ts`）。
+- test: 新增远程 EPUB 输出扩展名回归，覆盖 `translation_worker` 在结构化输入场景下保持输出后缀与输入一致的行为（`middleware/tests/unit/test_translation_worker.py`）。
+- test: 补跑并通过远程输出预检、V2 主进程单测、alignment / EPUB / api server 相关 Python 回归，确认修复范围未误伤 V2 与本地 V1 主链。
+
 ## [2.1.4] - 2026-03-01
 
 ### Changed
