@@ -1,6 +1,6 @@
 # Murasaki Translator - Changelog
 
-## [2.2.0] - 2026-03-07
+## [2.2.0] - 2026-03-08
 
 ### Changed
 
