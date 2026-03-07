@@ -88,7 +88,7 @@ interface QueueImportPreview {
 // ============ Constants ============
 
 const WATCH_FOLDERS_KEY = "watch_folders";
-const SUPPORTED_EXTENSIONS = [".txt", ".epub", ".srt", ".ass", ".ssa"];
+const SUPPORTED_EXTENSIONS = [".txt", ".epub", ".srt", ".ass", ".ssa", ".xlsx"];
 const WATCH_FILE_TYPES = SUPPORTED_EXTENSIONS.map((ext) =>
   ext.replace(".", ""),
 );
@@ -218,7 +218,7 @@ const texts = {
     confirmRemoveDesc: "确定要从队列中移除此文件吗？",
     confirmRemoveSelectedTitle: "确认移除已选",
     confirmRemoveSelectedDesc: "确定要移除选中的 {count} 个文件吗？",
-    supportedTypes: "支持 .txt .epub .srt .ass .ssa",
+    supportedTypes: "支持 .txt .epub .srt .ass .ssa .xlsx",
     queueTitle: "翻译队列",
     emptyQueue: "队列为空",
     emptyHint: "拖放文件到上方区域，或点击按钮选择",
@@ -396,7 +396,7 @@ const texts = {
     confirmRemoveSelectedTitle: "Confirm Remove Selected",
     confirmRemoveSelectedDesc:
       "Are you sure you want to remove the {count} selected files?",
-    supportedTypes: "Supports .txt .epub .srt .ass .ssa",
+    supportedTypes: "Supports .txt .epub .srt .ass .ssa .xlsx",
     queueTitle: "Translation Queue",
     emptyQueue: "Queue is empty",
     emptyHint: "Drop files above, or click buttons to select",
@@ -570,7 +570,7 @@ const texts = {
     confirmRemoveDesc: "このファイルをキューから削除しますか？",
     confirmRemoveSelectedTitle: "選択削除の確認",
     confirmRemoveSelectedDesc: "選択した {count} 件のファイルを削除しますか？",
-    supportedTypes: ".txt .epub .srt .ass .ssa に対応",
+    supportedTypes: ".txt .epub .srt .ass .ssa .xlsx に対応",
     queueTitle: "翻訳キュー",
     emptyQueue: "キューが空です",
     emptyHint: "上にファイルをドロップ、またはボタンで選択",
@@ -776,9 +776,7 @@ export function FileConfigModal({
   const globalPostProfileId =
     localStorage.getItem("config_rules_post_active_profile") || "";
   const globalV2PipelineId =
-    localStorage.getItem("config_v2_pipeline_id") ||
-    localStorage.getItem("murasaki.v2.active_pipeline_id") ||
-    "";
+    localStorage.getItem("config_v2_pipeline_id") || "";
   const globalV2PipelineName =
     v2Profiles.find((profile) => profile.id === globalV2PipelineId)?.name ||
     globalV2PipelineId ||
@@ -3341,7 +3339,7 @@ export function LibraryView({
                   </div>
 
                   <div className="flex flex-wrap justify-center gap-2 mt-2 px-12 relative z-10">
-                    {[".txt", ".epub", ".srt", ".ass"].map((ext) => (
+                    {[".txt", ".epub", ".srt", ".ass", ".ssa", ".xlsx"].map((ext) => (
                       <span
                         key={ext}
                         className="text-[10px] font-bold px-2 py-1 rounded-full bg-background border border-primary/10 text-muted-foreground/60 shadow-sm group-hover:border-primary/30 group-hover:text-primary/70 transition-all duration-500"

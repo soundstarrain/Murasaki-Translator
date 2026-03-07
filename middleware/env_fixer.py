@@ -202,6 +202,7 @@ class PythonChecker(ComponentChecker):
             'bs4',           # beautifulsoup4
             'tqdm',          # 进度条
             'opencc',        # 繁简转换 (opencc-python-reimplemented)
+            'openpyxl',      # XLSX 读写
         ]
         # 可选依赖（检测但不强制）
         self.optional_packages = [

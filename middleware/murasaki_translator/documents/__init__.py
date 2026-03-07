@@ -4,3 +4,4 @@ from .txt import TxtDocument
 from .srt import SrtDocument
 from .ass import AssDocument
 from .epub import EpubDocument
+from .xlsx import XlsxDocument

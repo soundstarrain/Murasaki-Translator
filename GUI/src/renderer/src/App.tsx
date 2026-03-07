@@ -36,21 +36,21 @@ export type View =
   | "history"
   | "proofread";
 
-const WATCH_FALLBACK_EXTENSIONS = [".txt", ".epub", ".srt", ".ass", ".ssa"];
+const WATCH_FALLBACK_EXTENSIONS = [".txt", ".epub", ".srt", ".ass", ".ssa", ".xlsx"];
 
 const detectFileType = (
   path: string,
-): "txt" | "epub" | "srt" | "ass" | "ssa" | "unknown" => {
+): "txt" | "epub" | "srt" | "ass" | "ssa" | "xlsx" | "unknown" => {
   const ext = "." + path.split(".").pop()?.toLowerCase();
   if (WATCH_FALLBACK_EXTENSIONS.includes(ext)) {
-    return ext.slice(1) as "txt" | "epub" | "srt" | "ass" | "ssa";
+    return ext.slice(1) as "txt" | "epub" | "srt" | "ass" | "ssa" | "xlsx";
   }
   return "unknown";
 };
 
 const buildFallbackQueueItem = (
   path: string,
-  fileType: "txt" | "epub" | "srt" | "ass" | "ssa",
+  fileType: "txt" | "epub" | "srt" | "ass" | "ssa" | "xlsx",
 ): QueueItem => ({
   id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
   path,

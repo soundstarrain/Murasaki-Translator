@@ -21,6 +21,14 @@ class Chunker:
         self.balance_threshold = balance_threshold
         self.balance_range = balance_range
 
+    @staticmethod
+    def _is_alignment_structural_meta(meta: Any) -> bool:
+        if meta == 'alignment_structural':
+            return True
+        if isinstance(meta, dict) and meta.get('kind') == 'alignment_structural':
+            return True
+        return False
+
     def process(self, items: List[Union[str, Dict[str, Any]]]) -> List[TextBlock]:
         """
         Process a list of strings or dicts into chunks.
@@ -90,7 +98,7 @@ class Chunker:
             is_numeric_risky = False
             
             # For Alignment Mode, strip both @id/@end tags before digit checks.
-            if meta == 'alignment_structural':
+            if self._is_alignment_structural_meta(meta):
                  inner_content = re.sub(r'@(?:id|end)=\d+@', '', text).strip()
                  if re.search(r'\d', inner_content):
                      is_numeric_risky = True

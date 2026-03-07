@@ -6,6 +6,7 @@ from .txt import TxtDocument
 from .srt import SrtDocument
 from .ass import AssDocument
 from .epub import EpubDocument
+from .xlsx import XlsxDocument
 
 class DocumentFactory:
     @staticmethod
@@ -18,6 +19,8 @@ class DocumentFactory:
             return AssDocument(path)
         elif ext == '.epub':
             return EpubDocument(path)
+        elif ext == '.xlsx':
+            return XlsxDocument(path)
         else:
             # Default to TXT (supports .txt, .md, etc.)
             return TxtDocument(path)

@@ -219,18 +219,8 @@ export const Dashboard = forwardRef<any, DashboardProps>(
       () => (localStorage.getItem("config_engine_mode") as "v1" | "v2") || "v1",
     );
     const [v2PipelineId, setV2PipelineId] = useState<string>(() => {
-      // 优先读 Dashboard 自己的存储，再 fallback 到 ApiManager 的选择
       const dashboardVal = localStorage.getItem("config_v2_pipeline_id");
-      if (dashboardVal) return dashboardVal;
-      try {
-        const apiMgrVal = localStorage.getItem(
-          "murasaki.v2.active_pipeline_id",
-        );
-        if (apiMgrVal) return JSON.parse(apiMgrVal) as string;
-      } catch {
-        /* ignore */
-      }
-      return "";
+      return dashboardVal || "";
     });
     const [v2Profiles, setV2Profiles] = useState<
       Array<{
@@ -266,20 +256,10 @@ export const Dashboard = forwardRef<any, DashboardProps>(
                 chunkType: normalizeChunkType(p.chunk_type ?? p.chunkType),
               })),
             );
-            // 如果当前没选择但ApiManager有选择，自动同步
             if (!v2PipelineId && profiles.length > 0) {
-              try {
-                const apiMgrVal = localStorage.getItem(
-                  "murasaki.v2.active_pipeline_id",
-                );
-                if (apiMgrVal) {
-                  const parsed = JSON.parse(apiMgrVal) as string;
-                  if (profiles.some((p: any) => p.id === parsed)) {
-                    setV2PipelineId(parsed);
-                  }
-                }
-              } catch {
-                /* ignore */
+              const currentId = localStorage.getItem("config_v2_pipeline_id");
+              if (currentId && profiles.some((p: any) => p.id === currentId)) {
+                setV2PipelineId(currentId);
               }
             }
           }
@@ -1849,6 +1829,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
           ".srt",
           ".ass",
           ".ssa",
+          ".xlsx",
         ]);
 
         for (const path of paths) {
@@ -2650,8 +2631,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
             "chunk",
             String(pipelineData.chunk_policy),
           );
-          const rawChunkType =
-            chunkProfile?.data?.chunk_type ?? chunkProfile?.data?.type;
+          const rawChunkType = chunkProfile?.data?.chunk_type;
           const normalizedChunkType = normalizeChunkType(rawChunkType);
           if (normalizedChunkType) chunkType = normalizedChunkType;
         }

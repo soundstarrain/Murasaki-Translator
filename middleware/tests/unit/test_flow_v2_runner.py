@@ -229,6 +229,10 @@ def test_flow_v2_runner_resolve_protect_patterns_base():
     assert isinstance(txt_patterns, list)
     assert txt_patterns
 
+    xlsx_patterns = PipelineRunner._resolve_protect_patterns_base("sheet.xlsx")
+    assert isinstance(xlsx_patterns, list)
+    assert xlsx_patterns == txt_patterns
+
     subtitle = PipelineRunner._resolve_protect_patterns_base("episode.ass")
     assert subtitle is None
 
@@ -239,6 +243,7 @@ def test_flow_v2_runner_resolve_protect_patterns_base():
 @pytest.mark.unit
 def test_flow_v2_runner_should_enable_text_protect_for_file():
     assert PipelineRunner._should_enable_text_protect_for_file("novel.txt") is True
+    assert PipelineRunner._should_enable_text_protect_for_file("sheet.xlsx") is True
     assert PipelineRunner._should_enable_text_protect_for_file("episode.srt") is False
     assert PipelineRunner._should_enable_text_protect_for_file("book.epub") is False
 
@@ -511,7 +516,7 @@ def test_flow_v2_runner_should_apply_line_policy_disabled():
 
 @pytest.mark.unit
 def test_flow_v2_runner_should_apply_line_policy_non_line_chunk():
-    assert PipelineRunner._should_apply_line_policy({}, object(), "legacy") is False
+    assert PipelineRunner._should_apply_line_policy({}, object(), "block") is False
 
 
 # ---------------------------------------------------------------------------
@@ -821,7 +826,7 @@ class _DummyDoc:
 
 
 class _DummyLineChunkPolicy:
-    profile = {"chunk_type": "line", "type": "line"}
+    profile = {"chunk_type": "line"}
 
     def chunk(self, items):
         return [
@@ -831,7 +836,7 @@ class _DummyLineChunkPolicy:
 
 
 class _DummyBlockChunkPolicy:
-    profile = {"chunk_type": "block", "type": "block"}
+    profile = {"chunk_type": "block"}
 
     def chunk(self, items):
         return [

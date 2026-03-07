@@ -23,7 +23,7 @@ jobs:
 
       - name: Verify Python runtime dependencies
         run: |
-          python -c "import fastapi, uvicorn, httpx, multipart, pydantic; print('python deps ok')"
+          python -c "import fastapi, uvicorn, httpx, multipart, pydantic, openpyxl; print('python deps ok')"
 
       - name: Run Python tests
         working-directory: middleware

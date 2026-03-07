@@ -140,6 +140,7 @@ def test_merge_protect_patterns():
 def test_allow_text_protect_alignment_mode_txt():
     args = type("Args", (), {"alignment_mode": True, "single_block": None})()
     assert _allow_text_protect("story.txt", args) is True
+    assert _allow_text_protect("story.xlsx", args) is True
     assert _allow_text_protect("story.srt", args) is True
     assert _allow_text_protect("story.epub", args) is True
     assert _allow_text_protect("story.ass", args) is True

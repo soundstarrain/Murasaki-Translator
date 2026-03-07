@@ -282,17 +282,6 @@ def _collect_protect_rule_lines(rules: List[Dict]) -> tuple:
     return enabled, lines
 
 
-def _collect_legacy_protect_lines(post_rules: List[Dict]) -> List[str]:
-    lines: List[str] = []
-    for rule in post_rules or []:
-        if not rule or not rule.get("active", True):
-            continue
-        if rule.get("pattern") == "restore_protection":
-            options = rule.get("options") if isinstance(rule.get("options"), dict) else {}
-            raw = options.get("customPattern")
-            lines.extend(_parse_protect_pattern_payload(raw))
-    return lines
-
 
 def _merge_protect_patterns(base: Optional[List[str]], additions: List[str], removals: List[str]) -> List[str]:
     merged = list(base) if base else []
@@ -327,13 +316,32 @@ def _normalize_alignment_mode_for_input(input_path: Optional[str], args) -> bool
     return False
 
 
+def _is_xlsx_input(input_path: Optional[str]) -> bool:
+    if not input_path:
+        return False
+    return os.path.splitext(input_path)[1].lower() == ".xlsx"
+
+
+def _uses_alignment_reconstruction(input_path: Optional[str], args) -> bool:
+    return _is_xlsx_input(input_path) or bool(getattr(args, "alignment_mode", False))
+
+
+def _get_v1_anchor_mode(input_path: Optional[str], args) -> str:
+    ext = os.path.splitext(input_path or "")[1].lower()
+    if _uses_alignment_reconstruction(input_path, args):
+        return "alignment"
+    if ext == ".epub":
+        return "epub"
+    return ""
+
+
 def _allow_text_protect(input_path: Optional[str], args) -> bool:
     if getattr(args, "single_block", None) and not input_path:
         return True
     if not input_path:
         return False
     ext = os.path.splitext(input_path)[1].lower()
-    return ext == ".txt" or ext in _STRUCTURED_TEXT_PROTECT_EXTS
+    return ext in {".txt", ".xlsx"} or ext in _STRUCTURED_TEXT_PROTECT_EXTS
 
 
 def _normalize_anchor_stream(text: str) -> str:
@@ -426,11 +434,8 @@ def translate_block_with_retry(
 
     file_path = getattr(args, "file", "") or ""
     file_ext = os.path.splitext(file_path)[1].lower()
-    anchor_mode = (
-        "alignment"
-        if getattr(args, "alignment_mode", False)
-        else ("epub" if file_ext == ".epub" else "")
-    )
+    anchor_mode = _get_v1_anchor_mode(file_path, args)
+    structured_alignment_mode = anchor_mode == "alignment" and file_ext in {".txt", ".xlsx"}
     if anchor_mode in {"alignment", "epub"}:
         candidate_ctx = prepare_local_anchor_context(
             working_original_src_text,
@@ -461,9 +466,12 @@ def translate_block_with_retry(
     kana_retry_attempts = 0
     kana_retry_budget = 1
     anchor_retry_budget = 0
-    if getattr(args, "anchor_check", False):
+    if getattr(args, "anchor_check", False) or structured_alignment_mode:
         try:
-            anchor_retry_budget = max(0, int(getattr(args, "anchor_check_retries", 0)))
+            if structured_alignment_mode:
+                anchor_retry_budget = max(0, int(getattr(args, "max_retries", 0)))
+            else:
+                anchor_retry_budget = max(0, int(getattr(args, "anchor_check_retries", 0)))
         except Exception:
             anchor_retry_budget = 0
     
@@ -539,72 +547,123 @@ def translate_block_with_retry(
                 continue
             else: break
 
-        src_line_count = len([l for l in working_original_src_text.splitlines() if l.strip()])
-        dst_line_count = len([l for l in parsed_lines if l.strip()])
-        diff = abs(dst_line_count - src_line_count)
-        pct_diff = diff / max(1, src_line_count)
-        
-        is_invalid_lines = False
-        error_type = 'line_check'
-        if strict_mode and diff > 0:
-            is_invalid_lines = True
-            error_type = 'strict_line_check'
-        elif args.line_check and (diff > args.line_tolerance_abs or pct_diff > args.line_tolerance_pct):
-            is_invalid_lines = True
-            error_type = 'line_check'
-
-        if is_invalid_lines:
-            if global_attempts < args.max_retries:
-                global_attempts += 1
-                retry_reason = error_type
-                structural_retry_happened = True
-                retry_history.append({'attempt': global_attempts, 'type': error_type, 'src_lines': src_line_count, 'dst_lines': dst_line_count, 'raw_output': raw_output or ''})
-                safe_print_json("JSON_RETRY", {'block': block_idx + 1, 'attempt': global_attempts, 'type': error_type, 'src_lines': src_line_count, 'dst_lines': dst_line_count, 'temp': round(current_temp, 2)})
-                continue
-            else:
-                # No retry budget left: keep current output and skip lower-priority retries
-                structural_retry_happened = True
-        
-        # Core Anchor Check (EPUB / Subtitle / Alignment)
         anchor_check_text = "\n".join(parsed_lines)
         if protector:
             try:
                 anchor_check_text = protector.restore(anchor_check_text)
             except Exception:
                 pass
-        if anchor_mode in {"alignment", "epub"}:
+
+        if structured_alignment_mode:
             repaired_text, repaired_ok, anchor_meta = repair_and_validate_anchor_output(
                 working_original_src_text,
                 anchor_check_text,
-                mode=anchor_mode,
+                mode="alignment",
             )
             anchor_missing = not repaired_ok
             if repaired_ok:
                 anchor_check_text = repaired_text
                 parsed_lines = anchor_check_text.split("\n")
-        else:
-            anchor_missing, anchor_meta = _detect_anchor_missing(
-                raw_original_src_text,
-                anchor_check_text,
-                args
-            )
-        if anchor_missing:
-            if anchor_attempts < anchor_retry_budget:
-                anchor_attempts += 1
-                retry_reason = 'anchor_missing'
+
+            if anchor_missing:
+                if global_attempts < args.max_retries:
+                    global_attempts += 1
+                    retry_reason = 'anchor_missing'
+                    structural_retry_happened = True
+                    retry_payload = {
+                        'block': block_idx + 1,
+                        'attempt': global_attempts,
+                        'type': 'anchor_missing',
+                        'temp': round(current_temp, 2),
+                    }
+                    retry_payload.update(anchor_meta or {})
+                    retry_history.append({**retry_payload, 'raw_output': raw_output or ''})
+                    safe_print_json("JSON_RETRY", retry_payload)
+                    continue
                 structural_retry_happened = True
-                retry_payload = {
-                    'block': block_idx + 1,
-                    'attempt': anchor_attempts,
-                    'type': 'anchor_missing',
-                    'temp': round(current_temp, 2),
-                }
-                retry_payload.update(anchor_meta or {})
-                retry_history.append({**retry_payload, 'raw_output': raw_output or ''})
-                safe_print_json("JSON_RETRY", retry_payload)
-                continue
-            # No retry budget left: keep current output and skip lower-priority retries
-            structural_retry_happened = True
+
+            if not anchor_missing:
+                src_line_count = len([l for l in working_original_src_text.splitlines() if l.strip()])
+                dst_line_count = len([l for l in parsed_lines if l.strip()])
+                diff = abs(dst_line_count - src_line_count)
+                if diff > 0:
+                    if global_attempts < args.max_retries:
+                        global_attempts += 1
+                        retry_reason = 'strict_line_check'
+                        structural_retry_happened = True
+                        retry_payload = {
+                            'block': block_idx + 1,
+                            'attempt': global_attempts,
+                            'type': 'strict_line_check',
+                            'src_lines': src_line_count,
+                            'dst_lines': dst_line_count,
+                            'temp': round(current_temp, 2),
+                        }
+                        retry_history.append({**retry_payload, 'raw_output': raw_output or ''})
+                        safe_print_json("JSON_RETRY", retry_payload)
+                        continue
+                    structural_retry_happened = True
+        else:
+            src_line_count = len([l for l in working_original_src_text.splitlines() if l.strip()])
+            dst_line_count = len([l for l in parsed_lines if l.strip()])
+            diff = abs(dst_line_count - src_line_count)
+            pct_diff = diff / max(1, src_line_count)
+            
+            is_invalid_lines = False
+            error_type = 'line_check'
+            if strict_mode and diff > 0:
+                is_invalid_lines = True
+                error_type = 'strict_line_check'
+            elif args.line_check and (diff > args.line_tolerance_abs or pct_diff > args.line_tolerance_pct):
+                is_invalid_lines = True
+                error_type = 'line_check'
+
+            if is_invalid_lines:
+                if global_attempts < args.max_retries:
+                    global_attempts += 1
+                    retry_reason = error_type
+                    structural_retry_happened = True
+                    retry_history.append({'attempt': global_attempts, 'type': error_type, 'src_lines': src_line_count, 'dst_lines': dst_line_count, 'raw_output': raw_output or ''})
+                    safe_print_json("JSON_RETRY", {'block': block_idx + 1, 'attempt': global_attempts, 'type': error_type, 'src_lines': src_line_count, 'dst_lines': dst_line_count, 'temp': round(current_temp, 2)})
+                    continue
+                else:
+                    # No retry budget left: keep current output and skip lower-priority retries
+                    structural_retry_happened = True
+            
+            # Core Anchor Check (EPUB / Subtitle / Alignment)
+            if anchor_mode in {"alignment", "epub"}:
+                repaired_text, repaired_ok, anchor_meta = repair_and_validate_anchor_output(
+                    working_original_src_text,
+                    anchor_check_text,
+                    mode=anchor_mode,
+                )
+                anchor_missing = not repaired_ok
+                if repaired_ok:
+                    anchor_check_text = repaired_text
+                    parsed_lines = anchor_check_text.split("\n")
+            else:
+                anchor_missing, anchor_meta = _detect_anchor_missing(
+                    raw_original_src_text,
+                    anchor_check_text,
+                    args
+                )
+            if anchor_missing:
+                if anchor_attempts < anchor_retry_budget:
+                    anchor_attempts += 1
+                    retry_reason = 'anchor_missing'
+                    structural_retry_happened = True
+                    retry_payload = {
+                        'block': block_idx + 1,
+                        'attempt': anchor_attempts,
+                        'type': 'anchor_missing',
+                        'temp': round(current_temp, 2),
+                    }
+                    retry_payload.update(anchor_meta or {})
+                    retry_history.append({**retry_payload, 'raw_output': raw_output or ''})
+                    safe_print_json("JSON_RETRY", retry_payload)
+                    continue
+                # No retry budget left: keep current output and skip lower-priority retries
+                structural_retry_happened = True
 
         if not structural_retry_happened:
             translated_text_for_kana = '\n'.join(parsed_lines)
@@ -891,7 +950,6 @@ def translate_single_block(args):
     post_rules = load_rules(args.rules_post) if hasattr(args, 'rules_post') and args.rules_post else []
 
     protect_rule_enabled, protect_rule_lines = _collect_protect_rule_lines(pre_rules)
-    legacy_protect_lines = _collect_legacy_protect_lines(post_rules)
     input_path = getattr(args, 'file', '') or ""
     _normalize_alignment_mode_for_input(input_path, args)
     text_protect_allowed = _allow_text_protect(input_path, args)
@@ -902,22 +960,18 @@ def translate_single_block(args):
         if allow_user_protect_customization and protect_rule_enabled and not args.text_protect:
             print("[Auto-Config] Pre-rules text protection enabled.")
             args.text_protect = True
-        if allow_user_protect_customization and legacy_protect_lines and not args.text_protect:
-            print("[Auto-Config] Legacy protection rule detected. Enabling TextProtector.")
-            args.text_protect = True
         if allow_user_protect_customization and args.protect_patterns and not args.text_protect:
             print("[Auto-Config] protect_patterns provided. Enabling TextProtector.")
             args.text_protect = True
-        if is_structured_protect_input and (protect_rule_enabled or legacy_protect_lines or args.protect_patterns):
+        if is_structured_protect_input and (protect_rule_enabled or args.protect_patterns):
             print("[TextProtect] Structured input detected. Ignoring user custom protect rules; built-in patterns only.")
     else:
-        if args.text_protect or protect_rule_enabled or legacy_protect_lines or args.protect_patterns:
+        if args.text_protect or protect_rule_enabled or args.protect_patterns:
             print("[TextProtect] Disabled for unsupported input type.")
         args.text_protect = False
 
     if not allow_user_protect_customization:
         protect_rule_lines = []
-        legacy_protect_lines = []
         if is_structured_protect_input:
             args.protect_patterns = None
 
@@ -931,7 +985,7 @@ def translate_single_block(args):
             custom_protector_patterns = TextProtector.SUBTITLE_PATTERNS
         elif getattr(args, 'file', '').lower().endswith('.epub'):
             custom_protector_patterns = [r'@id=\d+@', r'@end=\d+@', r'<[^>]+>']
-        elif args.alignment_mode:
+        elif _uses_alignment_reconstruction(getattr(args, 'file', ''), args):
             anchor_patterns = [r'@id=\d+@', r'@end=\d+@']
             custom_protector_patterns = _merge_protect_patterns(
                 TextProtector.DEFAULT_PATTERNS,
@@ -943,10 +997,6 @@ def translate_single_block(args):
         removals: List[str] = []
         if allow_user_protect_customization and protect_rule_lines:
             add, rem = _parse_protect_pattern_lines(protect_rule_lines)
-            additions.extend(add)
-            removals.extend(rem)
-        if allow_user_protect_customization and legacy_protect_lines:
-            add, rem = _parse_protect_pattern_lines(legacy_protect_lines)
             additions.extend(add)
             removals.extend(rem)
         if allow_user_protect_customization and args.protect_patterns and os.path.exists(args.protect_patterns):
@@ -1333,6 +1383,12 @@ def main():
             # Use DocumentFactory
             if source_path and os.path.exists(source_path):
                 doc = DocumentFactory.get_document(source_path)
+                if hasattr(doc, "set_runtime_context"):
+                    doc.set_runtime_context(
+                        engine_mode="v1",
+                        chunk_type="block",
+                        document_role="input",
+                    )
                 doc.load()
                 print(f"[Rebuild] Loaded document structure from: {source_path}")
                 doc.save(output_path, blocks)
@@ -1392,10 +1448,11 @@ def main():
 
     # Determine Output Paths
     _, file_ext = os.path.splitext(input_path)
+    alignment_reconstruction = _uses_alignment_reconstruction(input_path, args)
     # Determine Architecture (Novel vs Structured vs Alignment)
-    # is_structured: True for subtitle formats and alignment mode (which uses pseudo-SRT tags)
+    # is_structured: True for subtitle formats and alignment-style structured reconstruction.
     # 注意：普通 .txt 文件无论使用何种模式都不需要额外的 .txt 后缀
-    is_structured = file_ext.lower() in ['.epub', '.srt', '.ass', '.ssa'] or args.alignment_mode
+    is_structured = file_ext.lower() in ['.epub', '.srt', '.ass', '.ssa', '.xlsx'] or alignment_reconstruction
     # is_structured_doc: 决定是否需要写入临时 .txt 文件（仅对二进制/结构化格式需要）
     is_structured_doc = is_structured  # 只有真正的结构化文档才需要临时 txt
 
@@ -1498,9 +1555,9 @@ def main():
     #   - For short manga lines (~10 chars content), anchors add ~40% token overhead
     #   - Model must reproduce anchors in output, doubling effective overhead
     # Use 40% reduction (0.6x) to compensate, similar to ASS handling
-    if args.alignment_mode:
+    if alignment_reconstruction:
         effective_chunk_size = int(args.chunk_size * 0.6)
-        print(f"[Auto-Config] Alignment mode: chunk_size {args.chunk_size} -> {effective_chunk_size} (anchor overhead compensation)")
+        print(f"[Auto-Config] Alignment-style mode: chunk_size {args.chunk_size} -> {effective_chunk_size} (anchor overhead compensation)")
     
     # 2. ASS/SSA: Pseudo-SRT format with timestamps, indices
     # ~60-70% structural overhead, use 50% reduction
@@ -1545,7 +1602,6 @@ def main():
 
     add_unique_rule(post_rules, "number_fixer")
     protect_rule_enabled, protect_rule_lines = _collect_protect_rule_lines(pre_rules)
-    legacy_protect_lines = _collect_legacy_protect_lines(post_rules)
     text_protect_allowed = _allow_text_protect(input_path, args)
     is_structured_protect_input = _is_structured_text_protect_input(input_path)
     allow_user_protect_customization = text_protect_allowed and not is_structured_protect_input
@@ -1553,22 +1609,18 @@ def main():
         if allow_user_protect_customization and protect_rule_enabled and not args.text_protect:
             print("[Auto-Config] Pre-rules text protection enabled.")
             args.text_protect = True
-        if allow_user_protect_customization and legacy_protect_lines and not args.text_protect:
-            print("[Auto-Config] Legacy protection rule detected. Enabling TextProtector.")
-            args.text_protect = True
         if allow_user_protect_customization and args.protect_patterns and not args.text_protect:
             print("[Auto-Config] protect_patterns provided. Enabling TextProtector.")
             args.text_protect = True
-        if is_structured_protect_input and (protect_rule_enabled or legacy_protect_lines or args.protect_patterns):
+        if is_structured_protect_input and (protect_rule_enabled or args.protect_patterns):
             print("[TextProtect] Structured input detected. Ignoring user custom protect rules; built-in patterns only.")
     else:
-        if args.text_protect or protect_rule_enabled or legacy_protect_lines or args.protect_patterns:
+        if args.text_protect or protect_rule_enabled or args.protect_patterns:
             print("[TextProtect] Disabled for unsupported input type.")
         args.text_protect = False
 
     if not allow_user_protect_customization:
         protect_rule_lines = []
-        legacy_protect_lines = []
         if is_structured_protect_input:
             args.protect_patterns = None
 
@@ -1576,7 +1628,7 @@ def main():
     if is_structured:
         # 规则熔断：针对字幕格式和对齐模式，剔除所有可能破坏换行或合并行数的规则
         # Alignment Mode 必须享受同等的规则熔断待遇，否则 PostProcess 会破坏 @id@ 结构
-        is_sub = input_path.lower().endswith(('.srt', '.ass', '.ssa')) or args.alignment_mode
+        is_sub = input_path.lower().endswith(('.srt', '.ass', '.ssa', '.xlsx')) or alignment_reconstruction
         if is_sub:
             melt_patterns = ['ensure_single_newline', 'ensure_double_newline', 'clean_empty_lines', 'merge_short_lines']
             original_count = len(post_rules)
@@ -1601,7 +1653,7 @@ def main():
             # [Specialized Rule] 针对 EPUB，保护 @id=ID@/@end=ID@ 锚点和可能残留的 HTML 标签
             custom_protector_patterns = [r'@id=\d+@', r'@end=\d+@', r'<[^>]+>']
             print("[Auto-Config] Using EPUB_ANCHOR_PATTERNS for @id=ID@ anchors.")
-        elif args.alignment_mode:
+        elif alignment_reconstruction:
             # [Specialized Rule] 对齐模式基于 TXT：默认规则 + @id 锚点
             anchor_patterns = [r'@id=\d+@', r'@end=\d+@']
             custom_protector_patterns = _merge_protect_patterns(
@@ -1616,10 +1668,6 @@ def main():
     if allow_user_protect_customization:
         if protect_rule_lines:
             add, rem = _parse_protect_pattern_lines(protect_rule_lines)
-            additions.extend(add)
-            removals.extend(rem)
-        if legacy_protect_lines:
-            add, rem = _parse_protect_pattern_lines(legacy_protect_lines)
             additions.extend(add)
             removals.extend(rem)
 
@@ -1649,6 +1697,13 @@ def main():
             doc = None # Not used here
         else:
             doc = DocumentFactory.get_document(input_path)
+            if hasattr(doc, "set_runtime_context"):
+                doc.set_runtime_context(
+                    engine_mode="v1",
+                    chunk_type=args.mode,
+                    document_role="input",
+                    alignment_mode=alignment_reconstruction,
+                )
             items = doc.load()
             
             # Source Lines Calculation (for Novel/Chunk mode)
@@ -1709,7 +1764,7 @@ def main():
                     # [封装] 使用 clear() 方法，避免直接操作内部结构
                     translation_cache.clear()
         
-        # Load legacy/custom protection patterns file if provided via CLI
+        # Load custom protection patterns file if provided via CLI
         if allow_user_protect_customization and args.protect_patterns and os.path.exists(args.protect_patterns):
              try:
                  with open(args.protect_patterns, 'r', encoding='utf-8') as f:
@@ -2237,7 +2292,7 @@ def main():
                         
                         # Emit preview as soon as a block finishes (out-of-order allowed)
                         if block_idx not in preview_sent:
-                            if args.alignment_mode:
+                            if alignment_reconstruction:
                                 preview_text = AlignmentHandler.process_result(result.get("out_text", ""))
                             else:
                                 preview_text = result.get("preview_text") or result.get("out_text", "")
@@ -2287,7 +2342,7 @@ def main():
                             # CRITICAL: Do NOT overwrite res["out_text"] with stripped version!
                             # We need the tags in "out_text" for save_reconstructed to work at the end.
                             # Only strip tags for the Preview/GUI.
-                            if args.alignment_mode:
+                            if alignment_reconstruction:
                                 if not res.get("preview_text"):
                                     res["preview_text"] = AlignmentHandler.process_result(res["out_text"])  
                             else:
@@ -2498,6 +2553,7 @@ def main():
         print(f"\n[System] Critical Error: {e}")
         import traceback
         traceback.print_exc()
+        sys.exit(1)
     finally:
         if 'temp_progress_file' in locals():
             try:

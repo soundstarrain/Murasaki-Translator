@@ -121,7 +121,7 @@ class PipelineRunner:
     @staticmethod
     def _normalize_chunk_type(value: Any) -> str:
         raw = str(value or "").strip().lower()
-        if raw in {"legacy", "chunk"}:
+        if raw == "chunk":
             return "block"
         if raw in {"line", "block"}:
             return raw
@@ -485,7 +485,7 @@ class PipelineRunner:
     @staticmethod
     def _resolve_protect_patterns_base(input_path: str) -> Optional[List[str]]:
         lower_input = str(input_path or "").lower()
-        if not lower_input.endswith(".txt"):
+        if not lower_input.endswith((".txt", ".xlsx")):
             return None
         from murasaki_translator.core.text_protector import TextProtector
 
@@ -494,7 +494,7 @@ class PipelineRunner:
     @staticmethod
     def _should_enable_text_protect_for_file(input_path: str) -> bool:
         lower_input = str(input_path or "").lower()
-        return lower_input.endswith(".txt")
+        return lower_input.endswith((".txt", ".xlsx"))
 
     @staticmethod
     def _detect_anchor_mode(input_path: str, source_text: str) -> str:
@@ -814,6 +814,12 @@ class PipelineRunner:
             return {}
         try:
             output_doc = DocumentFactory.get_document(output_path)
+            if hasattr(output_doc, "set_runtime_context"):
+                output_doc.set_runtime_context(
+                    engine_mode="v2",
+                    chunk_type=chunk_type,
+                    document_role="output",
+                )
             self._ensure_line_chunk_keeps_empty(output_doc, chunk_policy)
             output_items = output_doc.load()
             output_blocks = chunk_policy.chunk(output_items)
@@ -1028,9 +1034,7 @@ class PipelineRunner:
         )
         chunk_policy = self.chunk_policies.get_chunk_policy(chunk_policy_ref)
         chunk_type = self._normalize_chunk_type(
-            chunk_policy.profile.get("chunk_type")
-            or chunk_policy.profile.get("type")
-            or ""
+            chunk_policy.profile.get("chunk_type") or ""
         )
         chunk_options_raw = (
             chunk_policy.profile.get("options")
@@ -1043,7 +1047,7 @@ class PipelineRunner:
             else {}
         )
         if chunk_type not in {"line", "block"}:
-            # Keep behavior predictable for unknown/legacy values.
+            # Keep behavior predictable for unknown values.
             chunk_type = "block"
         output_path = self._resolve_output_path(
             input_path,
@@ -1072,6 +1076,13 @@ class PipelineRunner:
         _failed_line_lock = threading.Lock()
 
         doc = DocumentFactory.get_document(input_path)
+        if hasattr(doc, "set_runtime_context"):
+            doc.set_runtime_context(
+                engine_mode="v2",
+                chunk_type=chunk_type,
+                source_format=source_format,
+                document_role="input",
+            )
         self._ensure_line_chunk_keeps_empty(doc, chunk_policy)
         items = doc.load()
         source_lines = self._extract_source_lines(items)

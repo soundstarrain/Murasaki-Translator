@@ -243,6 +243,46 @@ async def test_translate_preserves_structured_output_extension(monkeypatch, tmp_
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_translate_xlsx_keeps_output_suffix(monkeypatch):
+    worker = TranslationWorker(model_path="model.gguf")
+
+    monkeypatch.setattr(worker, "is_ready", lambda: True)
+
+    captured = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        output_index = captured["cmd"].index("--output") + 1
+        Path(captured["cmd"][output_index]).write_bytes(b"\xff\xfePK")
+        return DummyProcess([])
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    uploads_dir = Path(__file__).resolve().parents[2] / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    input_path = uploads_dir / "sheet.xlsx"
+    input_path.write_bytes(b"PK")
+
+    task = TranslationTask(
+        task_id="xlsx1",
+        request=DummyRequest(text=None, file_path=str(input_path)),
+    )
+    outputs_dir = Path(__file__).resolve().parents[2] / "outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    output_path = outputs_dir / f"{task.task_id}_output.xlsx"
+
+    result = await worker.translate(task)
+
+    assert task.get_output_path() == str(output_path)
+    assert result == f"[Binary output: {output_path}]"
+    cmd = captured["cmd"]
+    assert "--output" in cmd
+    output_index = cmd.index("--output") + 1
+    assert cmd[output_index].endswith("_output.xlsx")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_translate_rejects_config_change_when_running(monkeypatch, tmp_path):
     worker = TranslationWorker(model_path="model.gguf")
     worker._current_config["ctx"] = 1024

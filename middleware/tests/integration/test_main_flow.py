@@ -191,6 +191,100 @@ def test_main_flow_anchor_repair_alignment_no_retry():
 
 
 @pytest.mark.integration
+def test_main_flow_alignment_txt_forces_anchor_retry_with_shared_max_retries():
+    args = _make_args(
+        max_retries=2,
+        anchor_check=False,
+        anchor_check_retries=0,
+        line_check=False,
+        line_tolerance_abs=99,
+        line_tolerance_pct=1.0,
+        alignment_mode=True,
+        file="comic.txt",
+    )
+    original = "@id=1@\nhello\n@end=1@"
+    result = _run_flow(original, ["你好", "@id=1@\n你好\n@end=1@"], args)
+    types = [item.get("type") for item in result["retry_history"]]
+    assert types == ["anchor_missing"]
+    assert "@id=1@" in result["out_text"]
+    assert "你好" in result["out_text"]
+    assert len(result.get("_engine_messages") or []) == 2
+
+
+@pytest.mark.integration
+def test_main_flow_alignment_txt_forces_strict_line_retry():
+    args = _make_args(
+        max_retries=2,
+        anchor_check=False,
+        line_check=False,
+        line_tolerance_abs=99,
+        line_tolerance_pct=1.0,
+        alignment_mode=True,
+        file="comic.txt",
+    )
+    original = "@id=1@\nfoo\n@end=1@\n@id=2@\nbar\n@end=2@"
+    result = _run_flow(
+        original,
+        [
+            "@id=1@\n甲\n@end=1@\n@id=2@\n乙\n丙\n@end=2@",
+            "@id=1@\n甲\n@end=1@\n@id=2@\n乙\n@end=2@",
+        ],
+        args,
+    )
+    types = [item.get("type") for item in result["retry_history"]]
+    assert types == ["strict_line_check"]
+    assert result["out_text"].count("@id=") == 2
+    assert len(result.get("_engine_messages") or []) == 2
+
+
+@pytest.mark.integration
+def test_main_flow_alignment_xlsx_forces_anchor_retry_with_shared_max_retries():
+    args = _make_args(
+        max_retries=2,
+        anchor_check=False,
+        anchor_check_retries=0,
+        line_check=False,
+        line_tolerance_abs=99,
+        line_tolerance_pct=1.0,
+        alignment_mode=False,
+        file="sheet.xlsx",
+    )
+    original = "@id=1@\nhello\n@end=1@"
+    result = _run_flow(original, ["你好", "@id=1@\n你好\n@end=1@"], args)
+    types = [item.get("type") for item in result["retry_history"]]
+    assert types == ["anchor_missing"]
+    assert "@id=1@" in result["out_text"]
+    assert "你好" in result["out_text"]
+    assert len(result.get("_engine_messages") or []) == 2
+
+
+@pytest.mark.integration
+def test_main_flow_alignment_xlsx_forces_strict_line_retry():
+    args = _make_args(
+        max_retries=2,
+        anchor_check=False,
+        line_check=False,
+        line_tolerance_abs=99,
+        line_tolerance_pct=1.0,
+        alignment_mode=False,
+        file="sheet.xlsx",
+    )
+    original = "@id=1@\nfoo\n@end=1@\n@id=2@\nbar\n@end=2@"
+    result = _run_flow(
+        original,
+        [
+            "@id=1@\n甲\n@end=1@\n@id=2@\n乙\n丙\n@end=2@",
+            "@id=1@\n甲\n@end=1@\n@id=2@\n乙\n@end=2@",
+        ],
+        args,
+    )
+    types = [item.get("type") for item in result["retry_history"]]
+    assert types == ["strict_line_check"]
+    assert result["out_text"].count("@id=") == 2
+    assert len(result.get("_engine_messages") or []) == 2
+
+
+@pytest.mark.integration
 def test_main_flow_anchor_repair_epub_no_retry():
     args = _make_args(anchor_check=True, anchor_check_retries=1, file="book.epub")
     original = "@id=1@\nhello\n@end=1@"
@@ -316,7 +410,7 @@ def test_translate_single_block_structured_ignores_user_custom_protect(monkeypat
             "type": "format",
             "pattern": "restore_protection",
             "active": True,
-            "options": {"customPattern": "+USER_POST_RULE"},
+            "options": {},
         }
     ]
 
@@ -396,6 +490,59 @@ def test_translate_single_block_structured_ignores_user_custom_protect(monkeypat
     assert captured.get("protector") is not None
     assert FakeProtector.last_patterns == [r"@id=\d+@", r"@end=\d+@", r"<[^>]+>"]
     assert "USER_PRE_RULE" not in "".join(FakeProtector.last_patterns or [])
-    assert "USER_POST_RULE" not in "".join(FakeProtector.last_patterns or [])
     assert "USER_FILE_PATTERN" not in "".join(FakeProtector.last_patterns or [])
     assert args.protect_patterns is None
+
+
+@pytest.mark.integration
+def test_main_exits_nonzero_on_critical_error(monkeypatch, tmp_path):
+    import murasaki_translator.main as main_mod
+
+    input_path = tmp_path / "broken.xlsx"
+    input_path.write_bytes(b"PK")
+    model_path = tmp_path / "dummy.gguf"
+    model_path.write_text("x", encoding="utf-8")
+    server_path = tmp_path / "llama-server.exe"
+    server_path.write_text("x", encoding="utf-8")
+
+    class FakeEngineSingle:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start_server(self):
+            return None
+
+        def stop_server(self):
+            return None
+
+    class BoomDocument:
+        def set_runtime_context(self, **kwargs):
+            return self
+
+        def load(self):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(main_mod, "InferenceEngine", FakeEngineSingle)
+    monkeypatch.setattr(main_mod, "load_glossary", lambda _path: {})
+    monkeypatch.setattr(main_mod, "load_rules", lambda _path: [])
+    monkeypatch.setattr(main_mod.DocumentFactory, "get_document", lambda _path: BoomDocument())
+    monkeypatch.setattr(
+        main_mod.sys,
+        "argv",
+        [
+            "main.py",
+            "--file",
+            str(input_path),
+            "--model",
+            str(model_path),
+            "--server",
+            str(server_path),
+            "--gpu-layers",
+            "0",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main_mod.main()
+
+    assert exc.value.code == 1

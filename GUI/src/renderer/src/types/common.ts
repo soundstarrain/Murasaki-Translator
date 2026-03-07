@@ -71,7 +71,7 @@ export interface QueueItem {
   id: string;
   path: string;
   fileName: string;
-  fileType: "txt" | "epub" | "srt" | "ass" | "ssa";
+  fileType: "txt" | "epub" | "srt" | "ass" | "ssa" | "xlsx";
   addedAt: string;
   status: "pending" | "processing" | "completed" | "failed" | "interrupted";
   config?: FileConfig;
@@ -83,7 +83,7 @@ export const generateId = () =>
 
 export const getFileType = (path: string): QueueItem["fileType"] => {
   const ext = path.split(".").pop()?.toLowerCase() || "";
-  if (["txt", "epub", "srt", "ass", "ssa"].includes(ext))
+  if (["txt", "epub", "srt", "ass", "ssa", "xlsx"].includes(ext))
     return ext as QueueItem["fileType"];
   return "txt";
 };

@@ -1247,7 +1247,7 @@ ipcMain.handle(
       defaultPath: options?.defaultPath,
       properties: ["openFile"],
       filters: options?.filters || [
-        { name: "Documents", extensions: ["txt", "epub", "srt", "ass", "ssa"] },
+        { name: "Documents", extensions: ["txt", "epub", "srt", "ass", "ssa", "xlsx"] },
       ],
     });
     if (canceled) return null;
@@ -1273,7 +1273,7 @@ ipcMain.handle("select-files", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     properties: ["openFile", "multiSelections"],
     filters: [
-      { name: "Documents", extensions: ["txt", "epub", "srt", "ass", "ssa"] },
+      { name: "Documents", extensions: ["txt", "epub", "srt", "ass", "ssa", "xlsx"] },
     ],
   });
   if (canceled) return [];
@@ -2105,7 +2105,7 @@ ipcMain.handle("select-folder-files", async () => {
   const folderPath = filePaths[0];
   const files = fs
     .readdirSync(folderPath)
-    .filter((f) => /\.(txt|epub|srt|ass|ssa)$/i.test(f))
+    .filter((f) => /\.(txt|epub|srt|ass|ssa|xlsx)$/i.test(f))
     .map((f) => join(folderPath, f));
   return files;
 });
@@ -2130,7 +2130,7 @@ const scanDirectoryAsync = async (
       if (entry.isSymbolicLink()) continue;
 
       if (entry.isFile()) {
-        if (/\.(txt|epub|srt|ass|ssa)$/i.test(fullPath)) {
+        if (/\.(txt|epub|srt|ass|ssa|xlsx)$/i.test(fullPath)) {
           results.push(fullPath);
         }
       } else if (entry.isDirectory() && recursive) {
@@ -2172,7 +2172,7 @@ ipcMain.handle(
 
       // If it's a file, return if supported
       if (stats.isFile()) {
-        return /\.(txt|epub|srt|ass|ssa)$/i.test(path) ? [path] : [];
+        return /\.(txt|epub|srt|ass|ssa|xlsx)$/i.test(path) ? [path] : [];
       }
 
       // If directory

@@ -120,3 +120,32 @@ def test_alignment_handler_save_reconstructed_single_unresolved_id_maps_by_order
 
     lines = out_path.read_text(encoding="utf-8").splitlines()
     assert lines == ["A", "B"]
+
+
+@pytest.mark.unit
+def test_alignment_handler_save_reconstructed_source_fallback(tmp_path: Path):
+    out_path = tmp_path / "out_source_fallback.txt"
+    translated_blocks = [
+        TextBlock(
+            id=1,
+            prompt_text="",
+            metadata=[],
+        )
+    ]
+    source_blocks = [
+        TextBlock(
+            id=1,
+            prompt_text="@id=1@ s1 @end=1@\n\n@id=2@ s2 @end=2@\n\n",
+            metadata=[],
+        )
+    ]
+    AlignmentHandler.save_reconstructed(
+        str(out_path),
+        translated_blocks,
+        structure_map={1: 0, 2: 1},
+        total_physical_lines=2,
+        source_blocks=source_blocks,
+    )
+
+    lines = out_path.read_text(encoding="utf-8").splitlines()
+    assert lines == ["s1", "s2"]
