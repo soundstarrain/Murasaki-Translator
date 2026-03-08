@@ -1,5 +1,21 @@
 # Murasaki Translator - Changelog
 
+## [2.2.1] - 2026-03-08
+
+### 变更
+
+#### [远程 V1 EPUB 链路] 收尾重建 fallback 类型错误修复
+- fix: 修复 `EpubDocument.save()` 在缺失 UID 的 fallback 分支里把 `set` 传给有序 UID 解析逻辑的问题，解决远程 V1 翻译 EPUB 在最终重建阶段触发 `'set' object is not subscriptable` 的报错。
+- fix: EPUB 缺失 UID 回填改为基于 `expected_uid_order` 构造有序 `remaining_order`，在避免类型错误的同时保持收尾重建的 UID 顺序语义稳定。
+
+#### [测试工程层] 远程 V1 EPUB 回归补齐
+- test: 新增 `middleware/tests/unit/test_epub_document.py` 回归，覆盖 EPUB 收尾重建里“首轮漏 UID、fallback 再补回”的分支级场景。
+- test: 新增 `middleware/tests/integration/test_api_server_remote_epub.py` 端到端回归，串联 `/api/v1/upload/file -> /api/v1/translate -> /api/v1/translate/{task_id} -> /api/v1/download/{task_id}`，覆盖远程 V1 EPUB 的上传、执行、轮询与结果下载主链。
+
+#### [工程质量层] Python 静态类型检查接入
+- chore: 新增 `middleware/mypy.ini`，为当前仓库接入项目级 `mypy` 检查，并对历史动态模块采用分层放宽策略，先让现有生产代码静态检查稳定落地。
+- chore: `middleware/requirements-test.txt` 新增 `mypy` 依赖，CI 新增 Python type check 步骤，在 `pytest` 前执行 `python -m mypy --config-file mypy.ini .`。
+
 ## [2.2.0] - 2026-03-08
 
 ### Changed
