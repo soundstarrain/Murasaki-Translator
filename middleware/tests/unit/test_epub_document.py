@@ -55,6 +55,36 @@ def test_epub_document_save_strips_ruby_wrappers(tmp_path: Path):
 
 
 @pytest.mark.unit
+def test_epub_document_save_recovers_missing_uid_from_ordered_fallback(tmp_path: Path):
+    epub_path = _make_epub(tmp_path)
+    doc = EpubDocument(str(epub_path))
+    items = doc.load()
+    output_path = tmp_path / "fallback.epub"
+
+    first_uid = items[0]["meta"]["uid"]
+    second_uid = items[1]["meta"]["uid"]
+    blocks = [
+        TextBlock(
+            id=1,
+            prompt_text=f"@id={first_uid}@translated-one@end={first_uid}@",
+            metadata=[items[0]["meta"], items[1]["meta"]],
+        ),
+        TextBlock(
+            id=2,
+            prompt_text=f"@id={second_uid}@translated-two@end={second_uid}@",
+            metadata=[items[0]["meta"]],
+        ),
+    ]
+
+    doc.save(str(output_path), blocks)
+
+    with zipfile.ZipFile(output_path, "r") as zf:
+        chapter = zf.read("Text/ch1.xhtml").decode("utf-8", errors="ignore")
+
+    assert "translated-one" in chapter
+    assert "translated-two" in chapter
+
+@pytest.mark.unit
 def test_epub_document_normalize_anchor_stream():
     doc = EpubDocument("dummy.epub")
     text = "＠ｉｄ＝１＠\nhello\n＠ｅｎｄ＝１＠"

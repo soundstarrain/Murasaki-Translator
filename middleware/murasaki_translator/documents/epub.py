@@ -169,8 +169,9 @@ class EpubDocument(BaseDocument):
                 return local_map
 
             normalized = self._normalize_anchor_stream(stream_text)
-            expected_uid_set = set(expected_uids) if expected_uids else None
-            expected_last_uid = expected_uids[-1] if expected_uids else None
+            expected_uid_list = list(expected_uids) if expected_uids else []
+            expected_uid_set = set(expected_uid_list) if expected_uid_list else None
+            expected_last_uid = expected_uid_list[-1] if expected_uid_list else None
 
             strict_re = re.compile(
                 r"@id=(\d+)@([\s\S]*?)@end=\1@",
@@ -287,9 +288,12 @@ class EpubDocument(BaseDocument):
                 for block in blocks:
                     if not remaining:
                         break
+                    remaining_order = [uid for uid in expected_uid_order if uid in remaining]
+                    if not remaining_order:
+                        break
                     parsed_block = _parse_stream_to_map(
                         getattr(block, "prompt_text", "") or "",
-                        remaining,
+                        remaining_order,
                     )
                     if not parsed_block:
                         continue
