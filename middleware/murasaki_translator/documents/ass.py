@@ -9,7 +9,7 @@ class AssDocument(BaseDocument):
     def __init__(self, path: str):
         super().__init__(path)
         self.headers = [] # Stores [Script Info], [V4+ Styles] etc.
-        self.events_header = None # "Format: Layer, Start, End..."
+        self.events_header: str | None = None # "Format: Layer, Start, End..."
         self.event_templates = [] # Stores (prefix, original_text) for reconstruction
         self.total_event_count = 0
 

@@ -112,9 +112,11 @@ class AlignmentHandler:
             mode="alignment",
         )
         if repair_meta.get("repaired"):
+            repair_steps_obj = repair_meta.get("repair_steps", [])
+            repair_steps = repair_steps_obj if isinstance(repair_steps_obj, list) else []
             logger.info(
                 "[Reconstruct] Alignment stream repaired: %s",
-                ",".join(repair_meta.get("repair_steps", [])),
+                ",".join(str(step) for step in repair_steps),
             )
         full_stream = repaired_stream
 

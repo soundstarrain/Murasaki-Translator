@@ -719,6 +719,7 @@ class TranslateResponse(BaseModel):
     """翻译响应"""
     task_id: str
     status: str
+    message: str = ""
 
 class HfDownloadRequest(BaseModel):
     repo_id: str
@@ -1038,7 +1039,8 @@ async def upload_file(file: UploadFile = File(...)):
     upload_dir.mkdir(exist_ok=True)
     
     file_id = str(uuid.uuid4())[:8]
-    file_ext = Path(file.filename).suffix
+    original_name = file.filename or "upload.bin"
+    file_ext = Path(original_name).suffix
     save_path = upload_dir / f"{file_id}{file_ext}"
     
     total_size = 0
@@ -1054,7 +1056,7 @@ async def upload_file(file: UploadFile = File(...)):
     return {
         "file_id": file_id,
         "file_path": str(save_path),
-        "original_name": file.filename,
+        "original_name": original_name,
         "size": total_size
     }
 

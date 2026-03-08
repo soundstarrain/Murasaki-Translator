@@ -25,6 +25,10 @@ jobs:
         run: |
           python -c "import fastapi, uvicorn, httpx, multipart, pydantic, openpyxl; print('python deps ok')"
 
+      - name: Run Python type check
+        working-directory: middleware
+        run: python -m mypy --config-file mypy.ini .
+
       - name: Run Python tests
         working-directory: middleware
         run: python -m pytest -m "unit or integration or contract"

@@ -18,9 +18,9 @@ class CacheBlock:
     src: str                    # 原文（可能多行）
     dst: str                    # 译文（可能多行，行数可能与原文不同）
     status: str = 'processed'   # 状态: none, processed, edited
-    warnings: List[str] = None  # 警告列表
+    warnings: Optional[List[str]] = None  # 警告列表
     cot: str = ''               # 思维链（调试用）
-    retry_history: List[Dict] = None  # 重试历史（调试用）
+    retry_history: Optional[List[Dict]] = None  # 重试历史（调试用）
     
     def __post_init__(self):
         if self.warnings is None:
@@ -100,7 +100,7 @@ class TranslationCache:
         self._lock = threading.Lock()
     
     def add_block(self, index: int, src: str, dst: str,
-                  warnings: List[str] = None, cot: str = '', retry_history: List[Dict] = None) -> CacheBlock:
+                  warnings: Optional[List[str]] = None, cot: str = '', retry_history: Optional[List[Dict]] = None) -> CacheBlock:
         """添加翻译 block，如果索引已存在则替换（线程安全，O(1)查找）"""
         block = CacheBlock(
             index=index,
@@ -216,7 +216,7 @@ class TranslationCache:
         return None
     
     def update_block(self, index: int, dst: str = None, status: str = None,
-                     warnings: List[str] = None) -> bool:
+                     warnings: Optional[List[str]] = None) -> bool:
         """更新 block（线程安全，避免死锁）"""
         # [并发安全] 使用锁保护 block 的修改
         # [修复] 不能在锁内调用 get_block（会导致死锁），直接在锁内查找
