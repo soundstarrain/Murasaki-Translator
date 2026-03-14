@@ -4,7 +4,7 @@ import zipfile
 import re
 import io
 import warnings
-from bs4 import BeautifulSoup, NavigableString, XMLParsedAsHTMLWarning, Comment
+from bs4 import BeautifulSoup, NavigableString, XMLParsedAsHTMLWarning, Comment, Tag
 from typing import List, Dict, Any, Optional
 from .base import BaseDocument
 from murasaki_translator.core.chunker import TextBlock
@@ -473,7 +473,7 @@ class EpubDocument(BaseDocument):
                         soup = BeautifulSoup(content, 'xml')
                         for node in soup.find_all('text'):
                             if node.get_text(strip=True):
-                                if uid in id_to_text:
+                                if uid in id_to_text and isinstance(node, Tag):
                                     node.string = id_to_text[uid]
                                 uid += 1
                         out_zip.writestr(zip_path, str(soup).encode('utf-8'))
