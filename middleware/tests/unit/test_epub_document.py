@@ -20,6 +20,24 @@ def _make_epub(tmp_path: Path) -> Path:
     return epub_path
 
 
+def _make_div_flow_epub(tmp_path: Path) -> Path:
+    epub_path = tmp_path / "div-flow.epub"
+    with zipfile.ZipFile(epub_path, "w") as zf:
+        content = """
+        <html><body>
+        <div class="main">
+          <h2>chapter title</h2>
+          <div>
+            <div><p>preface block</p></div>
+            body line 1<br/>body line 2<hr/><a href="#" id="page2"></a><br/>body line 3
+          </div>
+        </div>
+        </body></html>
+        """
+        zf.writestr("Text/ch1.xhtml", content)
+    return epub_path
+
+
 @pytest.mark.unit
 def test_epub_document_load_strips_ruby_wrappers(tmp_path: Path):
     epub_path = _make_epub(tmp_path)
@@ -83,6 +101,71 @@ def test_epub_document_save_recovers_missing_uid_from_ordered_fallback(tmp_path:
 
     assert "translated-one" in chapter
     assert "translated-two" in chapter
+
+
+@pytest.mark.unit
+def test_epub_document_load_extracts_div_flow_residual_text(tmp_path: Path):
+    epub_path = _make_div_flow_epub(tmp_path)
+    doc = EpubDocument(str(epub_path))
+
+    items = doc.load()
+    payloads = [item["text"] for item in items]
+    body_payloads = [payload for payload in payloads if "body line" in payload]
+
+    assert any("preface block" in payload for payload in payloads)
+    assert len(body_payloads) >= 2
+    assert all(
+        not (
+            "body line 1" in payload
+            and "body line 2" in payload
+            and "body line 3" in payload
+        )
+        for payload in body_payloads
+    )
+    assert any("body line 1" in payload for payload in body_payloads)
+    assert any("body line 2" in payload for payload in body_payloads)
+    assert any("body line 3" in payload for payload in body_payloads)
+
+
+@pytest.mark.unit
+def test_epub_document_save_updates_div_flow_residual_text(tmp_path: Path):
+    epub_path = _make_div_flow_epub(tmp_path)
+    doc = EpubDocument(str(epub_path))
+    items = doc.load()
+
+    preface_item = next(item for item in items if "preface block" in item["text"])
+    body_items = [item for item in items if "body line" in item["text"]]
+
+    translated_preface = preface_item["text"].replace(
+        "preface block", "translated preface block"
+    )
+    translated_body_items = [
+        item["text"]
+        .replace("body line 1", "translated body line 1")
+        .replace("body line 2", "translated body line 2")
+        .replace("body line 3", "translated body line 3")
+        for item in body_items
+    ]
+
+    output_path = tmp_path / "div-flow-out.epub"
+    doc.save(
+        str(output_path),
+        [
+            TextBlock(
+                id=1,
+                prompt_text="\n".join([translated_preface, *translated_body_items]),
+                metadata=[preface_item["meta"], *[item["meta"] for item in body_items]],
+            )
+        ],
+    )
+
+    with zipfile.ZipFile(output_path, "r") as zf:
+        chapter = zf.read("Text/ch1.xhtml").decode("utf-8", errors="ignore")
+
+    assert "translated preface block" in chapter
+    assert "translated body line 1" in chapter
+    assert "translated body line 2" in chapter
+    assert "translated body line 3" in chapter
 
 @pytest.mark.unit
 def test_epub_document_normalize_anchor_stream():

@@ -4,7 +4,7 @@ import zipfile
 import re
 import io
 import warnings
-from bs4 import BeautifulSoup, NavigableString, XMLParsedAsHTMLWarning
+from bs4 import BeautifulSoup, NavigableString, XMLParsedAsHTMLWarning, Comment
 from typing import List, Dict, Any, Optional
 from .base import BaseDocument
 from murasaki_translator.core.chunker import TextBlock
@@ -18,6 +18,18 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 class EpubDocument(BaseDocument):
     # Atomic translatable containers
     CONTAINERS = ("p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "td", "dt", "dd", "caption", "th")
+    RESIDUAL_SKIP_TAGS = (
+        "img",
+        "svg",
+        "audio",
+        "video",
+        "source",
+        "picture",
+        "script",
+        "style",
+        "link",
+        "meta",
+    )
 
     def __init__(self, path: str):
         super().__init__(path)
@@ -92,6 +104,108 @@ class EpubDocument(BaseDocument):
         """Normalize potentially mangled @id/@end anchors."""
         return _shared_normalize_anchor_stream(text)
 
+    def _has_descendant_container(self, node) -> bool:
+        for descendant in getattr(node, "descendants", []):
+            if getattr(descendant, "name", None) in self.CONTAINERS:
+                return True
+        return False
+
+    def _residual_nodes_have_text(self, residual_nodes) -> bool:
+        for item in residual_nodes:
+            if isinstance(item, NavigableString):
+                if str(item).strip():
+                    return True
+                continue
+            if getattr(item, "name", None) and item.get_text(strip=True):
+                return True
+        return False
+
+    def _is_residual_boundary_tag(self, node) -> bool:
+        node_name = getattr(node, "name", None)
+        if node_name in ("br", "hr"):
+            return True
+        if node_name != "a":
+            return False
+        if node.get_text(strip=True):
+            return False
+        return bool(node.get("id") or node.get("name"))
+
+    def _append_residual_segment(self, segments, parent, residual_nodes) -> None:
+        if not residual_nodes or not self._residual_nodes_have_text(residual_nodes):
+            return
+        html = "".join(str(item) for item in residual_nodes).strip()
+        if not html:
+            return
+        segments.append(
+            {
+                "kind": "residual",
+                "parent": parent,
+                "nodes": list(residual_nodes),
+                "html": html,
+            }
+        )
+
+    def _collect_translatable_segments(self, parent, segments) -> None:
+        residual_nodes = []
+        for child in getattr(parent, "children", []):
+            if isinstance(child, Comment):
+                continue
+            if isinstance(child, NavigableString):
+                if str(child).strip():
+                    residual_nodes.append(child)
+                continue
+
+            child_name = getattr(child, "name", None)
+            if not child_name:
+                continue
+
+            if child_name in self.CONTAINERS and self._is_topmost_container(child):
+                self._append_residual_segment(segments, parent, residual_nodes)
+                residual_nodes = []
+                inner_html = child.decode_contents().strip()
+                if inner_html:
+                    segments.append(
+                        {"kind": "container", "node": child, "html": inner_html}
+                    )
+                continue
+
+            if child_name in self.RESIDUAL_SKIP_TAGS:
+                self._append_residual_segment(segments, parent, residual_nodes)
+                residual_nodes = []
+                continue
+
+            if self._has_descendant_container(child):
+                self._append_residual_segment(segments, parent, residual_nodes)
+                residual_nodes = []
+                self._collect_translatable_segments(child, segments)
+                continue
+
+            child_text = child.get_text(strip=True)
+            if child_text or self._is_residual_boundary_tag(child):
+                residual_nodes.append(child)
+                if self._is_residual_boundary_tag(child):
+                    self._append_residual_segment(segments, parent, residual_nodes)
+                    residual_nodes = []
+
+        self._append_residual_segment(segments, parent, residual_nodes)
+
+    def _iter_translatable_segments(self, soup: BeautifulSoup):
+        root = soup.body if getattr(soup, "body", None) else soup
+        segments = []
+        self._collect_translatable_segments(root, segments)
+        return segments
+
+    def _replace_residual_segment(self, segment, replacement_html: str) -> None:
+        nodes = list(segment.get("nodes") or [])
+        if not nodes:
+            return
+        first_node = nodes[0]
+        new_content = BeautifulSoup(replacement_html, "html.parser")
+        for new_node in list(new_content.contents):
+            first_node.insert_before(new_node)
+        for node in nodes:
+            node.extract()
+
     def load(self) -> List[Dict[str, Any]]:
         """Extract topmost containers while preserving inner HTML for tag protection."""
         items = []
@@ -109,21 +223,17 @@ class EpubDocument(BaseDocument):
                             # Normalize ruby annotations to plain base text for translation.
                             self._strip_ruby_annotations(soup)
 
-                            # Extract topmost containers
-                            for node in soup.find_all(self.CONTAINERS):
-                                if self._is_topmost_container(node):
-                                    # Use decode_contents to include internal tags (<a>, <b>, etc.)
-                                    # These tags will be protected by TextProtector in main.py
-                                    inner_html = node.decode_contents().strip()
-                                    if inner_html:
-                                        items.append({
-                                            'text': f"@id={uid}@\n{inner_html}\n@end={uid}@\n",
-                                            'meta': {
-                                                'item_name': zip_path,
-                                                'uid': uid
-                                            }
-                                        })
-                                        uid += 1
+                            for segment in self._iter_translatable_segments(soup):
+                                inner_html = segment['html']
+                                if inner_html:
+                                    items.append({
+                                        'text': f"@id={uid}@\n{inner_html}\n@end={uid}@\n",
+                                        'meta': {
+                                            'item_name': zip_path,
+                                            'uid': uid
+                                        }
+                                    })
+                                    uid += 1
                         except Exception as e:
                             pass  # Skip malformed files silently (logged in debug if needed)
                     elif lower_path.endswith('.ncx'):
@@ -329,15 +439,17 @@ class EpubDocument(BaseDocument):
                         self._strip_ruby_annotations(soup)
                         
                         # Re-traverse in SAME order
-                        for node in soup.find_all(self.CONTAINERS):
-                            if self._is_topmost_container(node):
-                                if uid in id_to_text:
-                                    # REPLACEMENT: Clear and inject translated inner HTML
-                                    # Note: BeautifulSoup(text, 'html.parser') handles tag snippets correctly
+                        for segment in self._iter_translatable_segments(soup):
+                            if uid in id_to_text:
+                                replacement_html = id_to_text[uid]
+                                if segment.get('kind') == 'container':
+                                    node = segment['node']
                                     node.clear()
-                                    new_content = BeautifulSoup(id_to_text[uid], 'html.parser')
+                                    new_content = BeautifulSoup(replacement_html, 'html.parser')
                                     node.extend(new_content.contents)
-                                uid += 1
+                                else:
+                                    self._replace_residual_segment(segment, replacement_html)
+                            uid += 1
                         
                         # Post-processing
                         for body in soup.find_all('body'): self._cleanup_styles(body)
