@@ -26,10 +26,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -43,16 +43,13 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile llama-cuda.zip
           New-Item -ItemType Directory -Force -Path middleware/bin/win-cuda
           Expand-Archive -Path llama-cuda.zip -DestinationPath middleware/bin/win-cuda -Force
-          # 处理可能的嵌套目录
-          $nested = Get-ChildItem middleware/bin/win-cuda -Directory | Where-Object { $_.Name -like "llama-*" }
+          # 处理可能的嵌套目�?          $nested = Get-ChildItem middleware/bin/win-cuda -Directory | Where-Object { $_.Name -like "llama-*" }
           if ($nested) {
             Get-ChildItem $nested.FullName | Move-Item -Destination middleware/bin/win-cuda -Force
             Remove-Item $nested.FullName -Recurse
           }
           
-          # 下载 NVIDIA cuBLAS 运行时 DLL（cublasLt64_12.dll, cublas64_12.dll）
-          # llama.cpp CUDA 版本需要此 DLL，但官方包不再包含
-          $cublasUrl = "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-12.4.2.65-archive.zip"
+          # 下载 NVIDIA cuBLAS 运行�?DLL（cublasLt64_12.dll, cublas64_12.dll�?          # llama.cpp CUDA 版本需要此 DLL，但官方包不再包�?          $cublasUrl = "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-12.4.2.65-archive.zip"
           Write-Host "Downloading cuBLAS: $cublasUrl"
           Invoke-WebRequest -Uri $cublasUrl -OutFile cublas.zip
           Expand-Archive -Path cublas.zip -DestinationPath cublas-temp -Force
@@ -60,8 +57,7 @@ jobs:
           Copy-Item "cublas-temp/libcublas-windows-x86_64-12.4.2.65-archive/bin/cublas64_12.dll" -Destination middleware/bin/win-cuda/ -Force
           Remove-Item cublas-temp -Recurse -Force
           
-          # 下载 NVIDIA CUDA 运行时 DLL（cudart64_12.dll）
-          $cudartUrl = "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.4.99-archive.zip"
+          # 下载 NVIDIA CUDA 运行�?DLL（cudart64_12.dll�?          $cudartUrl = "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.4.99-archive.zip"
           Write-Host "Downloading CUDA Runtime: $cudartUrl"
           Invoke-WebRequest -Uri $cudartUrl -OutFile cudart.zip
           Expand-Archive -Path cudart.zip -DestinationPath cudart-temp -Force
@@ -130,10 +126,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -147,8 +143,7 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile llama-vulkan.zip
           New-Item -ItemType Directory -Force -Path middleware/bin/win-vulkan
           Expand-Archive -Path llama-vulkan.zip -DestinationPath middleware/bin/win-vulkan -Force
-          # 处理可能的嵌套目录
-          $nested = Get-ChildItem middleware/bin/win-vulkan -Directory | Where-Object { $_.Name -like "llama-*" }
+          # 处理可能的嵌套目�?          $nested = Get-ChildItem middleware/bin/win-vulkan -Directory | Where-Object { $_.Name -like "llama-*" }
           if ($nested) {
             Get-ChildItem $nested.FullName | Move-Item -Destination middleware/bin/win-vulkan -Force
             Remove-Item $nested.FullName -Recurse
@@ -207,10 +202,10 @@ jobs:
     runs-on: macos-14  # Apple Silicon runner
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -232,8 +227,7 @@ jobs:
             rm -rf middleware/bin/darwin-metal/bin
           fi
           
-          # 递归查找并移动 llama-server 到顶层
-          SERVER_PATH=$(find middleware/bin/darwin-metal -name "llama-server" -type f | head -1)
+          # 递归查找并移�?llama-server 到顶�?          SERVER_PATH=$(find middleware/bin/darwin-metal -name "llama-server" -type f | head -1)
           if [ -n "$SERVER_PATH" ] && [ "$SERVER_PATH" != "middleware/bin/darwin-metal/llama-server" ]; then
             echo "Moving llama-server from $SERVER_PATH to top level"
             mv "$SERVER_PATH" middleware/bin/darwin-metal/
@@ -254,21 +248,19 @@ jobs:
             rm -rf middleware/bin/darwin-x64/bin
           fi
           
-          # 递归查找并移动 llama-server 到顶层
-          SERVER_PATH=$(find middleware/bin/darwin-x64 -name "llama-server" -type f | head -1)
+          # 递归查找并移�?llama-server 到顶�?          SERVER_PATH=$(find middleware/bin/darwin-x64 -name "llama-server" -type f | head -1)
           if [ -n "$SERVER_PATH" ] && [ "$SERVER_PATH" != "middleware/bin/darwin-x64/llama-server" ]; then
             echo "Moving llama-server from $SERVER_PATH to top level"
             mv "$SERVER_PATH" middleware/bin/darwin-x64/
           fi
           chmod +x middleware/bin/darwin-x64/llama-server 2>/dev/null || true
           
-          # 验证二进制存在
-          echo "=== Metal (ARM64) binaries ==="
+          # 验证二进制存�?          echo "=== Metal (ARM64) binaries ==="
           ls -la middleware/bin/darwin-metal/
-          test -f middleware/bin/darwin-metal/llama-server && echo "✅ Metal llama-server found" || echo "❌ Metal llama-server NOT found"
+          test -f middleware/bin/darwin-metal/llama-server && echo "�?Metal llama-server found" || echo "�?Metal llama-server NOT found"
           echo "=== x64 (Intel) binaries ==="
           ls -la middleware/bin/darwin-x64/
-          test -f middleware/bin/darwin-x64/llama-server && echo "✅ x64 llama-server found" || echo "❌ x64 llama-server NOT found"
+          test -f middleware/bin/darwin-x64/llama-server && echo "�?x64 llama-server found" || echo "�?x64 llama-server NOT found"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -304,7 +296,7 @@ jobs:
             --add-data "rule_processor.py:." \
             murasaki_translator/main.py
           
-          # 移动到 bin 目录供 Electron 使用
+          # 移动�?bin 目录�?Electron 使用
           mkdir -p bin/python-bundle
           mv dist/murasaki-engine bin/python-bundle/
           chmod +x bin/python-bundle/murasaki-engine
@@ -350,10 +342,10 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -366,7 +358,7 @@ jobs:
           mkdir -p middleware/bin/linux-vulkan
           tar -xzf llama-vulkan.tar.gz -C middleware/bin/linux-vulkan --strip-components=1 || tar -xzf llama-vulkan.tar.gz -C middleware/bin/linux-vulkan
           
-          # 处理多层嵌套目录 (build/bin/ 或直接 bin/)
+          # 处理多层嵌套目录 (build/bin/ 或直�?bin/)
           if [ -d "middleware/bin/linux-vulkan/build/bin" ]; then
             mv middleware/bin/linux-vulkan/build/bin/* middleware/bin/linux-vulkan/ 2>/dev/null || true
             rm -rf middleware/bin/linux-vulkan/build
@@ -375,8 +367,7 @@ jobs:
             rm -rf middleware/bin/linux-vulkan/bin
           fi
           
-          # 递归查找并移动 llama-server 到顶层
-          SERVER_PATH=$(find middleware/bin/linux-vulkan -name "llama-server" -type f | head -1)
+          # 递归查找并移�?llama-server 到顶�?          SERVER_PATH=$(find middleware/bin/linux-vulkan -name "llama-server" -type f | head -1)
           if [ -n "$SERVER_PATH" ] && [ "$SERVER_PATH" != "middleware/bin/linux-vulkan/llama-server" ]; then
             echo "Moving llama-server from $SERVER_PATH to top level"
             mv "$SERVER_PATH" middleware/bin/linux-vulkan/
@@ -384,7 +375,7 @@ jobs:
           chmod +x middleware/bin/linux-vulkan/llama-server 2>/dev/null || true
           
           # CPU 版本 (Fallback / NVIDIA CUDA 用户需自行编译)
-          # 注意：llama.cpp 官方不提供 Linux CUDA 预编译包
+          # 注意：llama.cpp 官方不提�?Linux CUDA 预编译包
           curl -L -o llama-cpu.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.LLAMA_CPP_VERSION }}/llama-${{ env.LLAMA_CPP_VERSION }}-bin-ubuntu-x64.tar.gz"
           mkdir -p middleware/bin/linux-cpu
           tar -xzf llama-cpu.tar.gz -C middleware/bin/linux-cpu --strip-components=1 || tar -xzf llama-cpu.tar.gz -C middleware/bin/linux-cpu
@@ -398,21 +389,19 @@ jobs:
             rm -rf middleware/bin/linux-cpu/bin
           fi
           
-          # 递归查找并移动 llama-server 到顶层
-          SERVER_PATH=$(find middleware/bin/linux-cpu -name "llama-server" -type f | head -1)
+          # 递归查找并移�?llama-server 到顶�?          SERVER_PATH=$(find middleware/bin/linux-cpu -name "llama-server" -type f | head -1)
           if [ -n "$SERVER_PATH" ] && [ "$SERVER_PATH" != "middleware/bin/linux-cpu/llama-server" ]; then
             echo "Moving llama-server from $SERVER_PATH to top level"
             mv "$SERVER_PATH" middleware/bin/linux-cpu/
           fi
           chmod +x middleware/bin/linux-cpu/llama-server 2>/dev/null || true
           
-          # 验证二进制存在
-          echo "=== Vulkan binaries ==="
+          # 验证二进制存�?          echo "=== Vulkan binaries ==="
           ls -la middleware/bin/linux-vulkan/
-          test -f middleware/bin/linux-vulkan/llama-server && echo "✅ Vulkan llama-server found" || echo "❌ Vulkan llama-server NOT found"
+          test -f middleware/bin/linux-vulkan/llama-server && echo "�?Vulkan llama-server found" || echo "�?Vulkan llama-server NOT found"
           echo "=== CPU binaries ==="
           ls -la middleware/bin/linux-cpu/
-          test -f middleware/bin/linux-cpu/llama-server && echo "✅ CPU llama-server found" || echo "❌ CPU llama-server NOT found"
+          test -f middleware/bin/linux-cpu/llama-server && echo "�?CPU llama-server found" || echo "�?CPU llama-server NOT found"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -433,8 +422,7 @@ jobs:
           pip install pyinstaller
           cd middleware
           
-          # 创建 PyInstaller spec 用于打包（与 macOS 相同）
-          pyinstaller --onefile --name murasaki-engine \
+          # 创建 PyInstaller spec 用于打包（与 macOS 相同�?          pyinstaller --onefile --name murasaki-engine \
             --hidden-import opencc \
             --hidden-import chardet \
             --hidden-import regex \
@@ -448,7 +436,7 @@ jobs:
             --add-data "rule_processor.py:." \
             murasaki_translator/main.py
           
-          # 移动到 bin 目录供 Electron 使用
+          # 移动�?bin 目录�?Electron 使用
           mkdir -p bin/python-bundle
           mv dist/murasaki-engine bin/python-bundle/
           chmod +x bin/python-bundle/murasaki-engine
@@ -663,7 +651,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -694,14 +682,12 @@ jobs:
             | Windows | NVIDIA (CUDA) | `*-win-cuda-x64.zip` |
             | Windows | AMD/Intel (Vulkan) | `*-win-vulkan-x64.zip` |
             | macOS | Apple Silicon | `*-arm64.dmg` |
-            | macOS | Intel | `*.dmg` (无 arm64 后缀) |
+            | macOS | Intel | `*.dmg` (�?arm64 后缀) |
             | Linux | GUI (Vulkan) | `*.AppImage` |
-            | Linux | CLI 服务器 | `murasaki-server-*.tar.gz` |
+            | Linux | CLI 服务�?| `murasaki-server-*.tar.gz` |
             
-            ## 🖥️ Linux CLI 服务器
-            
-            用于无界面服务器部署，提供 OpenAI 兼容 API：
-            ```bash
+            ## 🖥�?Linux CLI 服务�?            
+            用于无界面服务器部署，提�?OpenAI 兼容 API�?            ```bash
             MODEL='/path/to/model.gguf'; API_KEY='replace-with-strong-key'; curl -fsSL https://github.com/soundstarrain/Murasaki-Translator/releases/latest/download/murasaki-server-linux-x64.tar.gz | tar -xz && cd murasaki-server && nohup ./start.sh --host 0.0.0.0 --port 8000 --model "$MODEL" --api-key "$API_KEY" --enable-openai-proxy --openai-port 8001 > server.log 2>&1 &
             ```
         env:
