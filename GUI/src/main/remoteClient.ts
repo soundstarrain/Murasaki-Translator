@@ -395,7 +395,7 @@ export class RemoteClient {
       chunk_size: options.chunkSize || 1000,
       ctx: options.ctx || 8192,
       gpu_layers: options.gpuLayers ?? -1,
-      temperature: options.temperature ?? 0.7,
+      temperature: options.temperature ?? 0.3,
       line_format: options.lineFormat || "single",
       strict_mode: options.strictMode || "off",
       line_check: options.lineCheck ?? true,

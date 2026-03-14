@@ -747,7 +747,7 @@ export default function ProofreadView({
   const [retryModelPath, setRetryModelPath] = useState("");
   const [retryGlossaryPath, setRetryGlossaryPath] = useState("");
   const [retryPreset, setRetryPreset] = useState("novel");
-  const [retryTemperature, setRetryTemperature] = useState(0.7);
+  const [retryTemperature, setRetryTemperature] = useState(0.3);
   const [retryRepPenaltyBase, setRetryRepPenaltyBase] = useState(1.0);
   const [retryRepPenaltyMax, setRetryRepPenaltyMax] = useState(1.5);
   const [retryRepPenaltyStep, setRetryRepPenaltyStep] = useState(0.1);
@@ -3779,7 +3779,11 @@ export default function ProofreadView({
                           value={retryForm.temperature}
                           onChange={(e) =>
                             updateRetryDraft({
-                              temperature: parseFloat(e.target.value) || 0.7,
+                              temperature: Number.isNaN(
+                                parseFloat(e.target.value),
+                              )
+                                ? 0.3
+                                : parseFloat(e.target.value),
                             })
                           }
                         />

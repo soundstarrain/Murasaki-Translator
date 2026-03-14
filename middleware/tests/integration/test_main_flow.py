@@ -19,7 +19,7 @@ class FakeEngine:
     def chat_completion(
         self,
         messages,
-        temperature=0.7,
+        temperature=0.3,
         stream=True,
         stream_callback=None,
         rep_base=1.0,
@@ -44,7 +44,7 @@ def _make_args(**overrides):
         coverage_retries=0,
         anchor_check=False,
         anchor_check_retries=0,
-        temperature=0.7,
+        temperature=0.3,
         rep_penalty_base=1.0,
         rep_penalty_max=1.5,
         rep_penalty_step=0.1,

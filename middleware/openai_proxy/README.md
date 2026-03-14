@@ -50,6 +50,6 @@ curl http://localhost:8000/v1/chat/completions \
   -d '{
     "model": "local",
     "messages": [{"role": "user", "content": "Hello!"}],
-    "temperature": 0.7
+    "temperature": 0.3
   }'
 ```

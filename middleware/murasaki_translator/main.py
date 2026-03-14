@@ -1257,7 +1257,7 @@ def main():
     parser.add_argument("--fix-punctuation", action="store_true", help="[Experimental] Normalize punctuation in output")
     
     # Quality Control Settings (高级质量控制)
-    parser.add_argument("--temperature", type=float, default=0.7, help="Model temperature (0.1-1.5, default 0.7)")
+    parser.add_argument("--temperature", type=float, default=0.3, help="Model temperature (0.1-1.5, default 0.3)")
     parser.add_argument("--line-check", action="store_true", help="Enable line count validation and auto-retry")
     parser.add_argument("--line-tolerance-abs", type=int, default=10, help="Line count absolute tolerance (default 10)")
     parser.add_argument("--line-tolerance-pct", type=float, default=0.2, help="Line count percent tolerance (default 0.2 = 20%%)")

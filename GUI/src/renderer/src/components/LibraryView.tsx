@@ -757,7 +757,7 @@ export function FileConfigModal({
   const globalOutputDir = localStorage.getItem("config_output_dir") || "";
   const globalCtx = localStorage.getItem("config_ctx") || "4096";
   const globalConcurrency = localStorage.getItem("config_concurrency") || "1";
-  const globalTemp = localStorage.getItem("config_temperature") || "0.7";
+  const globalTemp = localStorage.getItem("config_temperature") || "0.3";
   const globalGpu = localStorage.getItem("config_gpu") || "-1";
   const globalPreset = localStorage.getItem("config_preset") || "novel";
   const globalModel = isRemoteMode
@@ -1406,12 +1406,15 @@ export function FileConfigModal({
                     icon={Zap}
                     label={t.temperature}
                     value={config.temperature}
-                    onChange={(val) =>
+                    onChange={(val) => {
+                      const parsed = parseFloat(val);
                       setConfig((prev) => ({
                         ...prev,
-                        temperature: parseFloat(val) || undefined,
-                      }))
-                    }
+                        temperature: Number.isNaN(parsed)
+                          ? undefined
+                          : parsed,
+                      }));
+                    }}
                     type="number"
                     step={0.1}
                     min={0}

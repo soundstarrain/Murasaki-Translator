@@ -231,7 +231,7 @@ class InferenceEngine:
         }
 
 
-    def chat_completion(self, messages: List[Dict], temperature: float = 0.7, stream: bool = True, stream_callback=None, rep_base: float = 1.0, rep_max: float = 1.5, rep_step: float = 0.1, block_id: int = 0) -> str:
+    def chat_completion(self, messages: List[Dict], temperature: float = 0.3, stream: bool = True, stream_callback=None, rep_base: float = 1.0, rep_max: float = 1.5, rep_step: float = 0.1, block_id: int = 0) -> str:
         """
         调用 Chat Completion API (With Auto-Retry Strategy)
         Strategy:

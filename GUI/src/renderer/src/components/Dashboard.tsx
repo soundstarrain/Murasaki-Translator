@@ -2253,7 +2253,7 @@ export const Dashboard = forwardRef<any, DashboardProps>(
         // Quality Control Settings
         temperature:
           customConfig.temperature ??
-          parseFloat(localStorage.getItem("config_temperature") || "0.7"),
+          parseFloat(localStorage.getItem("config_temperature") || "0.3"),
 
         // Storage
         cacheDir: pickCustom(

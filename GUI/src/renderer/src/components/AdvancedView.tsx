@@ -66,7 +66,7 @@ export function AdvancedView({ lang, remoteRuntime }: AdvancedViewProps) {
   // Text Processing State
 
   // Quality Control Settings (高级质量控制)
-  const [temperature, setTemperature] = useState(0.7);
+  const [temperature, setTemperature] = useState(0.3);
   const [enableLineCheck, setEnableLineCheck] = useState(true);
   const [lineToleranceAbs, setLineToleranceAbs] = useState(10);
   const [lineTolerancePct, setLineTolerancePct] = useState(20);

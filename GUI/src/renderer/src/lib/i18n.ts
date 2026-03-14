@@ -648,7 +648,7 @@ export const translations = {
       qualityControl: "质量控制 (Quality Control)",
       recommendDefault: "推荐使用默认值",
       temperature: "温度 (Temperature)",
-      temperatureDesc: "控制输出随机性。较低值更稳定，较高值更有创意。默认 0.7",
+      temperatureDesc: "控制输出随机性。较低值更稳定，较高值更有创意。默认 0.3",
       modelInfoFail: "模型信息读取失败，已使用默认估算。",
       providerTitle: "API 提供方",
       providerTypeLlama: "本地 Llama / 兼容服务",
@@ -1280,7 +1280,7 @@ export const translations = {
         group: "例如:A组",
         members: "每行一个 API 配置 ID（多行默认轮询）",
         headers: '{ "": "" }',
-        params: '{ "temperature": 0.7 }',
+        params: '{ "temperature": 0.3 }',
       },
       formHints: {
         name: "仅用于显示，不影响实际调用",
@@ -3845,7 +3845,7 @@ export const translations = {
       recommendDefault: "Default Recommended",
       temperature: "Temperature",
       temperatureDesc:
-        "Controls randomness. Lower is stable, higher is creative. Default 0.7",
+        "Controls randomness. Lower is stable, higher is creative. Default 0.3",
       modelInfoFail: "Failed to load model info. Using default estimate.",
       providerTitle: "API Provider",
       providerTypeLlama: "Local Llama / Compatible",
@@ -4501,7 +4501,7 @@ export const translations = {
         group: "e.g. prod / team A",
         members: "One API profile ID per line (multi-line = rotate)",
         headers: '{ "": "" }',
-        params: '{ "temperature": 0.7 }',
+        params: '{ "temperature": 0.3 }',
       },
       formHints: {
         name: "Display only, no effect on calls",
@@ -7099,7 +7099,7 @@ export const translations = {
       recommendDefault: "推奨デフォルト",
       temperature: "温度 (Temperature)",
       temperatureDesc:
-        "ランダム性を制御。低いと安定、高いと創造的。デフォルト 0.7",
+        "ランダム性を制御。低いと安定、高いと創造的。デフォルト 0.3",
       modelInfoFail: "モデル情報の取得に失敗しました。既定値で推定します。",
       providerTitle: "API プロバイダー",
       providerTypeLlama: "ローカル Llama / 互換",
@@ -7742,7 +7742,7 @@ export const translations = {
         group: "例: prod / team A",
         members: "1行につき 1 つの API ID（複数行=ローテーション）",
         headers: '{ "": "" }',
-        params: '{ "temperature": 0.7 }',
+        params: '{ "temperature": 0.3 }',
       },
       formHints: {
         name: "表示のみで呼び出しに影響なし",

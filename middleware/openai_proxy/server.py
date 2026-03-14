@@ -72,7 +72,7 @@ class Message(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str = "local"
     messages: List[Message]
-    temperature: Optional[float] = 0.7
+    temperature: Optional[float] = 0.3
     max_tokens: Optional[int] = 2048
     stream: Optional[bool] = False
 
@@ -108,7 +108,9 @@ async def chat_completions(request: ChatCompletionRequest):
     llama_request = {
         "prompt": prompt,
         "n_predict": request.max_tokens or 2048,
-        "temperature": request.temperature or 0.7,
+        "temperature": (
+            request.temperature if request.temperature is not None else 0.3
+        ),
         "stop": ["User:", "\nUser:"],
         "stream": request.stream
     }

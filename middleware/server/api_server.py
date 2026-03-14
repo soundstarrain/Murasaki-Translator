@@ -631,7 +631,7 @@ class TranslateRequest(BaseModel):
     gpu_layers: int = Field(
         default_factory=lambda: _parse_env_int("MURASAKI_DEFAULT_GPU_LAYERS", -1)
     )
-    temperature: float = 0.7
+    temperature: float = 0.3
     
     # 高级选项
     line_format: str = "single"

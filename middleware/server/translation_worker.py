@@ -1053,7 +1053,7 @@ if __name__ == "__main__":
             chunk_size = 1000
             ctx = 8192
             gpu_layers = -1
-            temperature = 0.7
+            temperature = 0.3
             line_format = "single"
             strict_mode = "off"
             line_check = False

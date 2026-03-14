@@ -4339,7 +4339,7 @@ ipcMain.handle(
       }
 
       if (config.ctxSize) args.push("--ctx", config.ctxSize);
-      if (config.temperature)
+      if (config.temperature !== undefined)
         args.push("--temperature", config.temperature.toString());
       if (config.repPenaltyBase)
         args.push("--rep-penalty-base", config.repPenaltyBase.toString());
@@ -5153,7 +5153,7 @@ const buildRemoteTranslateOptionsFromConfig = (
     chunkSize: toInt(config?.chunkSize, 1000),
     ctx: toInt(config?.ctxSize, 8192),
     gpuLayers: config?.deviceMode === "cpu" ? 0 : parsedGpuLayers,
-    temperature: toFloat(config?.temperature, 0.7),
+    temperature: toFloat(config?.temperature, 0.3),
     lineFormat: config?.lineFormat || "single",
     strictMode: config?.strictMode || "off",
     lineCheck: config?.lineCheck !== false,

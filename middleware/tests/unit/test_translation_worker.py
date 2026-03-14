@@ -130,7 +130,7 @@ class DummyRequest:
         self.chunk_size = overrides.get("chunk_size", 1000)
         self.ctx = overrides.get("ctx", 2048)
         self.gpu_layers = overrides.get("gpu_layers", -1)
-        self.temperature = overrides.get("temperature", 0.7)
+        self.temperature = overrides.get("temperature", 0.3)
         self.line_format = overrides.get("line_format", "single")
         self.strict_mode = overrides.get("strict_mode", "off")
         self.line_check = overrides.get("line_check", False)
@@ -173,6 +173,11 @@ class DummyRequest:
         self.fix_kana = overrides.get("fix_kana", False)
         self.fix_punctuation = overrides.get("fix_punctuation", False)
         self.gpu_device_id = overrides.get("gpu_device_id")
+
+
+@pytest.mark.unit
+def test_dummy_request_defaults_temperature_to_point_three():
+    assert DummyRequest().temperature == 0.3
 
 
 @pytest.mark.unit
