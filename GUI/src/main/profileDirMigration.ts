@@ -1,9 +1,21 @@
-import { dirname } from "path";
+import { dirname, join } from "path";
+
+type FsStatLike = {
+  isDirectory: () => boolean;
+  isFile: () => boolean;
+};
 
 type FsLike = {
   existsSync: (path: string) => boolean;
   mkdirSync: (path: string, options?: { recursive?: boolean }) => void;
   renameSync: (oldPath: string, newPath: string) => void;
+  readdirSync: (path: string) => string[];
+  statSync: (path: string) => FsStatLike;
+  copyFileSync: (source: string, destination: string) => void;
+  rmSync: (
+    path: string,
+    options?: { recursive?: boolean; force?: boolean },
+  ) => void;
 };
 
 export interface ResolveProfilesDirInput {
@@ -17,6 +29,28 @@ export interface ResolveProfilesDirResult {
   usedLegacyFallback: boolean;
 }
 
+const copyLegacyDirIntoProfilesDir = (
+  sourceDir: string,
+  targetDir: string,
+  fsLike: FsLike,
+) => {
+  fsLike.mkdirSync(targetDir, { recursive: true });
+  for (const entry of fsLike.readdirSync(sourceDir)) {
+    const sourcePath = join(sourceDir, entry);
+    const targetPath = join(targetDir, entry);
+    const sourceStat = fsLike.statSync(sourcePath);
+
+    if (sourceStat.isDirectory()) {
+      copyLegacyDirIntoProfilesDir(sourcePath, targetPath, fsLike);
+      continue;
+    }
+
+    if (!sourceStat.isFile()) continue;
+    fsLike.mkdirSync(dirname(targetPath), { recursive: true });
+    fsLike.copyFileSync(sourcePath, targetPath);
+  }
+};
+
 export const resolveProfilesDirWithLegacyFallback = (
   input: ResolveProfilesDirInput,
 ): ResolveProfilesDirResult => {
@@ -24,18 +58,23 @@ export const resolveProfilesDirWithLegacyFallback = (
   let activeDir = profilesDir;
   let usedLegacyFallback = false;
 
-  if (
-    legacyDir !== profilesDir &&
-    fsLike.existsSync(legacyDir) &&
-    !fsLike.existsSync(profilesDir)
-  ) {
-    try {
-      fsLike.mkdirSync(dirname(profilesDir), { recursive: true });
-      fsLike.renameSync(legacyDir, profilesDir);
-    } catch {
-      // Fall back to legacy dir when migration cannot be completed immediately.
-      activeDir = legacyDir;
-      usedLegacyFallback = true;
+  if (legacyDir !== profilesDir && fsLike.existsSync(legacyDir)) {
+    if (!fsLike.existsSync(profilesDir)) {
+      try {
+        fsLike.mkdirSync(dirname(profilesDir), { recursive: true });
+        fsLike.renameSync(legacyDir, profilesDir);
+      } catch {
+        activeDir = legacyDir;
+        usedLegacyFallback = true;
+      }
+    } else {
+      try {
+        copyLegacyDirIntoProfilesDir(legacyDir, profilesDir, fsLike);
+        fsLike.rmSync(legacyDir, { recursive: true, force: true });
+      } catch {
+        activeDir = legacyDir;
+        usedLegacyFallback = true;
+      }
     }
   }
 

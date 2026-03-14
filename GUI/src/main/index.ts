@@ -799,12 +799,12 @@ app.whenReady().then(() => {
     const envDir =
       process.env.MURASAKI_PROFILES_DIR || process.env.PIPELINE_V2_PROFILES_DIR;
     if (envDir && envDir.trim()) return resolve(envDir.trim());
-    return getPipelineV2ProfilesDir();
+    return getPipelineV2ProfilesDir(getMiddlewarePath());
   };
   const profilesDir = resolveProfilesDir();
   let hasWarnedLegacyProfilesFallback = false;
   const ensureProfilesDir = () => {
-    const legacyDir = join(getMiddlewarePath(), "pipeline_v2_profiles");
+    const legacyDir = getPipelineV2ProfilesDir(app.getPath("userData"));
     const resolved = resolveProfilesDirWithLegacyFallback({
       profilesDir,
       legacyDir,
@@ -813,7 +813,7 @@ app.whenReady().then(() => {
     if (resolved.usedLegacyFallback && !hasWarnedLegacyProfilesFallback) {
       hasWarnedLegacyProfilesFallback = true;
       console.warn(
-        "[App] Profiles migration deferred: fallback to legacy directory.",
+        "[App] Profiles migration deferred: fallback to user-data profiles directory.",
       );
     }
     return resolved.activeDir;
@@ -4148,14 +4148,13 @@ ipcMain.handle(
         process.env.MURASAKI_PROFILES_DIR ||
         process.env.PIPELINE_V2_PROFILES_DIR ||
         "";
-      const profilesDir = envProfilesDir.trim()
-        ? resolve(envProfilesDir.trim())
-        : getPipelineV2ProfilesDir();
-      try {
-        fs.mkdirSync(profilesDir, { recursive: true });
-      } catch {
-        // ignore profiles dir mkdir failure
-      }
+      const profilesDir = resolveProfilesDirWithLegacyFallback({
+        profilesDir: envProfilesDir.trim()
+          ? resolve(envProfilesDir.trim())
+          : getPipelineV2ProfilesDir(getMiddlewarePath()),
+        legacyDir: getPipelineV2ProfilesDir(app.getPath("userData")),
+        fsLike: fs,
+      }).activeDir;
 
       const tempDir = join(getUserDataPath(), "temp");
       try {

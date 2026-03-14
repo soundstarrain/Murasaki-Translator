@@ -140,8 +140,8 @@ const buildNextProfileIndexCache = (
   return { ...cache, kinds: nextKinds };
 };
 
-export const getPipelineV2ProfilesDir = () =>
-  join(app.getPath("userData"), "pipeline_v2_profiles");
+export const getPipelineV2ProfilesDir = (baseDir?: string) =>
+  join(baseDir || app.getPath("userData"), "pipeline_v2_profiles");
 
 type PythonPath = { type: "python" | "bundle"; path: string };
 
@@ -1435,7 +1435,9 @@ const deleteProfileLocal = async (
 };
 
 export const registerPipelineV2Profiles = (deps: ProfileDeps) => {
-  const getProfilesDir = deps.getProfilesDir || getPipelineV2ProfilesDir;
+  const getProfilesDir =
+    deps.getProfilesDir ||
+    (() => getPipelineV2ProfilesDir(deps.getMiddlewarePath()));
 
   const ensureServer = async () => {
     const currentStatus = getPipelineV2Status();
