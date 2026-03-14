@@ -5,6 +5,7 @@ import {
   isProofreadV2LineCache,
   normalizeProofreadEngineMode,
   normalizeProofreadChunkType,
+  resolveAvailableProofreadPipelineId,
   resolveProofreadRetranslateOptions,
 } from "../proofreadViewConfig";
 
@@ -34,6 +35,26 @@ describe("resolveProofreadRetranslateOptions", () => {
         pipelineId: " pipeline_current ",
       }),
     ).toEqual({ useV2: true, pipelineId: "pipeline_current" });
+  });
+});
+
+describe("resolveAvailableProofreadPipelineId", () => {
+  it("prefers the first valid candidate", () => {
+    expect(
+      resolveAvailableProofreadPipelineId({
+        availablePipelineIds: ["ds", "claude"],
+        candidates: ["deepseek", " ds ", "claude"],
+      }),
+    ).toBe("ds");
+  });
+
+  it("returns empty string when no candidate is valid", () => {
+    expect(
+      resolveAvailableProofreadPipelineId({
+        availablePipelineIds: ["ds"],
+        candidates: ["deepseek", ""],
+      }),
+    ).toBe("");
   });
 });
 

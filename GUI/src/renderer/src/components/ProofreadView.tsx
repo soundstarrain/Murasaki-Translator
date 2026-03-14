@@ -157,6 +157,7 @@ import {
   buildProofreadLineLayoutMetrics,
   isProofreadV2LineCache,
   normalizeProofreadEngineMode,
+  resolveAvailableProofreadPipelineId,
   resolveProofreadRetranslateOptions,
 } from "../lib/proofreadViewConfig";
 import {
@@ -1138,8 +1139,20 @@ export default function ProofreadView({
       if (normalizedCacheEngineMode === "v2") {
         const cachePipelineId =
           typeof data?.pipelineId === "string" ? data.pipelineId.trim() : "";
-        if (cachePipelineId) {
-          setRetryV2PipelineId(cachePipelineId);
+        const currentPipelineId =
+          localStorage.getItem("config_v2_pipeline_id") || "";
+        const profiles = await loadRetryV2PipelineOptions();
+        if (profiles) {
+          syncRetryV2PipelineId({
+            profiles,
+            candidates: [currentPipelineId, cachePipelineId],
+            allowKeepCurrent: false,
+          });
+        } else {
+          const fallbackPipelineId =
+            String(currentPipelineId || "").trim() ||
+            String(cachePipelineId || "").trim();
+          setRetryV2PipelineId(fallbackPipelineId);
         }
       }
     }
@@ -1545,7 +1558,7 @@ export default function ProofreadView({
   const loadRetryV2PipelineOptions = useCallback(async () => {
     if (!window.api?.pipelineV2ProfilesList) {
       setRetryV2PipelineOptions([]);
-      return [] as V2PipelineOption[];
+      return null as V2PipelineOption[] | null;
     }
     setRetryV2PipelineLoading(true);
     try {
@@ -1563,11 +1576,35 @@ export default function ProofreadView({
     } catch (error) {
       console.error("Failed to load V2 pipelines for proofread retry:", error);
       setRetryV2PipelineOptions([]);
-      return [] as V2PipelineOption[];
+      return null as V2PipelineOption[] | null;
     } finally {
       setRetryV2PipelineLoading(false);
     }
   }, []);
+
+  const syncRetryV2PipelineId = useCallback(
+    ({
+      profiles,
+      candidates,
+      allowKeepCurrent = true,
+    }: {
+      profiles: V2PipelineOption[] | null;
+      candidates: unknown[];
+      allowKeepCurrent?: boolean;
+    }) => {
+      if (!profiles) {
+        if (allowKeepCurrent) return;
+        setRetryV2PipelineId("");
+        return;
+      }
+      const resolved = resolveAvailableProofreadPipelineId({
+        availablePipelineIds: profiles.map((item) => item.id),
+        candidates,
+      });
+      setRetryV2PipelineId((prev) => (prev === resolved ? prev : resolved));
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!showRetryPanel || retryDraft?.engineMode !== "v2") return;
@@ -1576,7 +1613,16 @@ export default function ProofreadView({
       if (cancelled) return;
       setRetryDraft((prev) => {
         if (!prev || prev.engineMode !== "v2") return prev;
-        if (prev.v2PipelineId || profiles.length === 0) return prev;
+        const resolved = resolveAvailableProofreadPipelineId({
+          availablePipelineIds: (profiles || []).map((item) => item.id),
+          candidates: [prev.v2PipelineId, retryV2PipelineId],
+        });
+        if (resolved) {
+          return prev.v2PipelineId === resolved
+            ? prev
+            : { ...prev, v2PipelineId: resolved };
+        }
+        if (!profiles || profiles.length === 0) return prev;
         return { ...prev, v2PipelineId: profiles[0].id };
       });
     });
@@ -1587,7 +1633,27 @@ export default function ProofreadView({
     loadRetryV2PipelineOptions,
     retryDraft?.engineMode,
     retryDraft?.v2PipelineId,
+    retryV2PipelineId,
     showRetryPanel,
+  ]);
+
+  useEffect(() => {
+    if (retryEngineMode !== "v2") return;
+    if (retryV2PipelineLoading) return;
+    if (retryV2PipelineOptions.length === 0) return;
+    syncRetryV2PipelineId({
+      profiles: retryV2PipelineOptions,
+      candidates: [
+        retryV2PipelineId,
+        localStorage.getItem("config_v2_pipeline_id"),
+      ],
+    });
+  }, [
+    retryEngineMode,
+    retryV2PipelineId,
+    retryV2PipelineLoading,
+    retryV2PipelineOptions,
+    syncRetryV2PipelineId,
   ]);
 
   const resolveV2RetranslateOptions = useCallback(() => {

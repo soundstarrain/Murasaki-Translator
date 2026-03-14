@@ -5,6 +5,11 @@ export interface ProofreadRetranslateOptions {
   pipelineId: string;
 }
 
+export interface ProofreadPipelineResolutionInput {
+  availablePipelineIds: unknown[];
+  candidates: unknown[];
+}
+
 export interface ProofreadLineLayoutMetrics {
   isSingleLineBlock: boolean;
   rowMinHeight: number;
@@ -48,6 +53,27 @@ export const resolveProofreadRetranslateOptions = ({
     useV2: true,
     pipelineId: trimString(pipelineId),
   };
+};
+
+export const resolveAvailableProofreadPipelineId = ({
+  availablePipelineIds,
+  candidates,
+}: ProofreadPipelineResolutionInput): string => {
+  const availableSet = new Set(
+    (Array.isArray(availablePipelineIds) ? availablePipelineIds : [])
+      .map((item) => trimString(item))
+      .filter(Boolean),
+  );
+  if (availableSet.size === 0) return "";
+
+  const candidateList = Array.isArray(candidates) ? candidates : [];
+  for (const candidate of candidateList) {
+    const normalized = trimString(candidate);
+    if (normalized && availableSet.has(normalized)) {
+      return normalized;
+    }
+  }
+  return "";
 };
 
 export const normalizeProofreadChunkType = (
