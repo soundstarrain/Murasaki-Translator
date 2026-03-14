@@ -15,6 +15,7 @@ import {
 import { Button } from "./ui/core";
 import { cn } from "../lib/utils";
 import { translations } from "../lib/i18n";
+import { sortHfDownloadRepos } from "../lib/hfDownloadRepos";
 
 interface HFRepo {
   id: string;
@@ -264,7 +265,7 @@ export function HFDownloadModal({
         payload = await window.api?.hfListRepos?.(orgName);
       }
       if (payload?.repos) {
-        setRepos(payload.repos);
+        setRepos(sortHfDownloadRepos(payload.repos));
       } else if (payload?.error) {
         setError(payload.error);
       }
@@ -545,7 +546,14 @@ export function HFDownloadModal({
               <span className="bg-indigo-500/10 text-indigo-700 px-2 py-0.5 rounded font-medium flex-shrink-0">
                 {text.vramTitle}
               </span>
-              <div className="flex items-center gap-4 text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  Murasaki-4B:{" "}
+                  <span className="text-foreground font-semibold">
+                    {text.vram4b}
+                  </span>
+                </span>
+                <span className="w-px h-3 bg-border" />
                 <span className="flex items-center gap-1.5">
                   Murasaki-8B:{" "}
                   <span className="text-foreground font-semibold">
