@@ -62,6 +62,8 @@ const api = {
       config,
       runId,
     }),
+  reportActiveView: (view: string) =>
+    ipcRenderer.send("renderer-active-view", view),
   pipelineV2ProfilesPath: () => ipcRenderer.invoke("pipelinev2-profiles-path"),
   pipelineV2ProfilesList: (kind: string, options?: { preferLocal?: boolean }) =>
     ipcRenderer.invoke("pipelinev2-profiles-list", kind, options),

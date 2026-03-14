@@ -61,6 +61,96 @@ let hardwareSpecsCache: {
   data: any;
 } | null = null;
 const HARDWARE_SPECS_CACHE_TTL_MS = 12000;
+const ADVANCED_VIEW_RECOVERY_FILE = join(
+  app.getPath("userData"),
+  "advanced-view-recovery.json",
+);
+
+interface AdvancedViewRecoveryState {
+  enabled: boolean;
+  pendingRelaunch: boolean;
+  updatedAt: number;
+  trigger?: string;
+}
+
+const readAdvancedViewRecoveryState = (): AdvancedViewRecoveryState | null => {
+  try {
+    if (!fs.existsSync(ADVANCED_VIEW_RECOVERY_FILE)) {
+      return null;
+    }
+    const raw = fs.readFileSync(ADVANCED_VIEW_RECOVERY_FILE, "utf8");
+    const parsed = JSON.parse(raw) as Partial<AdvancedViewRecoveryState>;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return {
+      enabled: parsed.enabled === true,
+      pendingRelaunch: parsed.pendingRelaunch === true,
+      updatedAt:
+        typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now(),
+      trigger:
+        typeof parsed.trigger === "string" ? parsed.trigger : undefined,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeAdvancedViewRecoveryState = (
+  state: AdvancedViewRecoveryState | null,
+): void => {
+  try {
+    if (!state) {
+      if (fs.existsSync(ADVANCED_VIEW_RECOVERY_FILE)) {
+        fs.unlinkSync(ADVANCED_VIEW_RECOVERY_FILE);
+      }
+      return;
+    }
+    fs.mkdirSync(dirname(ADVANCED_VIEW_RECOVERY_FILE), { recursive: true });
+    fs.writeFileSync(
+      ADVANCED_VIEW_RECOVERY_FILE,
+      JSON.stringify(state, null, 2),
+      "utf8",
+    );
+  } catch (error) {
+    console.warn("[AdvancedViewRecovery] Failed to persist state:", error);
+  }
+};
+
+const initialAdvancedViewRecoveryState = readAdvancedViewRecoveryState();
+if (initialAdvancedViewRecoveryState?.enabled) {
+  app.disableHardwareAcceleration();
+}
+
+let lastRendererView = "dashboard";
+
+const scheduleAdvancedViewRecoveryRelaunch = (
+  trigger: string,
+  details?: Record<string, unknown>,
+) => {
+  if (shutdownInProgress || lastRendererView !== "advanced") {
+    return;
+  }
+  const current = readAdvancedViewRecoveryState();
+  if (current?.enabled) {
+    return;
+  }
+  const nextState: AdvancedViewRecoveryState = {
+    enabled: true,
+    pendingRelaunch: true,
+    updatedAt: Date.now(),
+    trigger,
+  };
+  writeAdvancedViewRecoveryState(nextState);
+  console.error("[AdvancedViewRecovery] Enabling GPU-safe relaunch", {
+    trigger,
+    lastRendererView,
+    ...(details || {}),
+  });
+  app.relaunch();
+  app.exit(0);
+};
+
 let envCheckInFlight: Promise<
   | { ok: true; report: any }
   | { ok: false; error: string; output?: string; errorOutput?: string }
@@ -480,6 +570,10 @@ function createWindow(): void {
       reason: details.reason,
       exitCode: details.exitCode,
     });
+    scheduleAdvancedViewRecoveryRelaunch("render-process-gone", {
+      reason: details.reason,
+      exitCode: details.exitCode,
+    });
   });
   mainWindow.webContents.on("unresponsive", () => {
     console.warn("[RendererUnresponsive] window became unresponsive");
@@ -644,6 +738,15 @@ async function setupMacOSGPUMonitoring(): Promise<void> {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  const activeRecoveryState = readAdvancedViewRecoveryState();
+  if (activeRecoveryState?.enabled && activeRecoveryState.pendingRelaunch) {
+    writeAdvancedViewRecoveryState({
+      ...activeRecoveryState,
+      pendingRelaunch: false,
+      updatedAt: Date.now(),
+    });
+  }
+
   // Clean up any residual temp files from crashed sessions
   cleanupTempDirectory();
 
@@ -670,9 +773,16 @@ app.whenReady().then(() => {
   );
 
   createWindow();
+  ipcMain.on("renderer-active-view", (_event, view: string) => {
+    lastRendererView = typeof view === "string" ? view : "unknown";
+  });
   app.on("child-process-gone", (_event, details) => {
     if (details.type === "GPU") {
       console.error("[GpuProcessGone]", {
+        reason: details.reason,
+        exitCode: details.exitCode,
+      });
+      scheduleAdvancedViewRecoveryRelaunch("gpu-process-gone", {
         reason: details.reason,
         exitCode: details.exitCode,
       });

@@ -431,6 +431,7 @@ export interface ElectronAPI {
   openGlossaryFolder: () => Promise<void>;
   createGlossaryFile: (
     arg: string | { filename: string; content?: string },
+  reportActiveView: (view: string) => void;
   ) => Promise<{ success: boolean; path?: string; error?: string }>;
   getModelInfo: (modelName: string) => Promise<any>;
 

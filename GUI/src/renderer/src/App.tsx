@@ -104,6 +104,7 @@ function AppContent() {
 
       if (validViews.includes(newView as View)) {
         const executeSwitch = () => {
+          window.api?.reportActiveView?.(newView as View);
           setView(newView as View);
         };
 
@@ -132,6 +133,10 @@ function AppContent() {
     onStopTranslation: () => dashboardRef.current?.stopTranslation?.(),
     onSwitchView: handleSwitchView,
   });
+
+  useEffect(() => {
+    window.api?.reportActiveView?.(view);
+  }, [view]);
 
   useEffect(() => {
     const unsubscribe = window.api?.onWatchFolderFileAdded?.((payload) => {
