@@ -1,5 +1,41 @@
 # Murasaki Translator - Changelog
 
+## [2.2.2] - 2026-03-14
+
+### 变更
+
+#### [校对与 V2 配置链路] 重翻沿用失效 Pipeline 的状态修复
+- fix: 校对页重翻现在会先校验当前 `config_v2_pipeline_id` 是否仍然存在，再按需回退到 cache 中记录的 `pipelineId`，避免 profile 改名 / 改 id 后继续沿用过期引用。
+- fix: 校对页加载 V2 Pipeline 列表后会同步收敛当前选择，只保留仍然有效的 Pipeline id；当全局配置与历史 cache 都失效时，重翻不再静默带着旧 id 运行。
+
+#### [EPUB 文档引擎] 章节前言可见但正文漏读的结构兼容补齐
+- fix: `EpubDocument` 在原有 `p/h1-h6/li/td/...` 容器之外，新增对 `div/section/article/blockquote` 直系文本流的 residual segment 提取，兼容正文依赖 `<br>` / `<hr>` / 页锚点 `<a id>` 分段的 EPUB 章节结构。
+- fix: residual 正文 segment 现在会按 `<br>` / `<hr>` / 空页锚点 `<a id>` 做结构边界细分，仅对特殊 residual 路径生效，避免这类 EPUB 生成超大单块，同时不改变正常 `<p>` 型 EPUB 的提取与原有切块范围。
+- fix: EPUB 读取与回写现在共用同一套 segment 遍历顺序，避免“读取阶段能抽出正文、保存阶段因遍历顺序不一致导致回填错位”的问题。
+
+#### [GUI 队列链路] Electron 40 文件拖拽路径解析兼容修复
+- fix: Dashboard、队列页与术语提取弹窗的文件拖拽入口改为统一走 Electron 40 推荐的 `webUtils.getPathForFile()`，不再依赖旧的 `File.path` 语义，修复新版运行时下“拖入文件但未真正加入队列”的问题。
+- fix: 拖拽路径提取统一收敛到共享 helper，并对 `dataTransfer.items` 与 `dataTransfer.files` 结果做去重归一化，降低不同拖拽源 / 外壳行为差异带来的入队不稳定性。
+
+#### [高级页稳定性] renderer / GPU 崩溃后的定点恢复链路
+- fix: 主进程新增高级页活跃视图上报与崩溃恢复状态；当 `advanced` 视图下发生 `render-process-gone` 或 GPU 进程退出时，会自动记录恢复状态并触发一次定点 relaunch。
+- fix: 高级页崩溃后的恢复只对已命中该故障的用户生效，不改变大多数用户的默认业务路径；下次启动前仅在该恢复场景下启用 GPU-safe 恢复模式。
+
+#### [V2 配置目录] 默认切换到 middleware 并自动迁移旧用户目录
+- change: Pipeline V2 profiles 默认目录统一切换到 `middleware/pipeline_v2_profiles`，避免用户误以为配置写在 `AppData/Roaming/...` 但运行时又读另一套目录。
+- fix: 启动时如果检测到旧的用户目录 `AppData/Roaming/murasaki-translator/pipeline_v2_profiles`，现在会自动迁移到 `middleware/pipeline_v2_profiles`；当目标目录已存在时会先合并旧配置，再清理旧目录。
+- fix: 校对页重翻与其他直接运行 V2 pipeline 的入口现在共用同一套 profiles 目录解析结果，不再各自走不同默认目录。
+
+#### [默认采样配置] 系统默认温度下调到 0.3
+- change: GUI 高级设置、Dashboard/队列默认配置、校对页重翻默认配置、本地 V1 CLI、主进程 fallback、远程请求 fallback 与 API Server 默认温度统一从 `0.7` 调整为 `0.3`，让新任务在未显式覆盖温度时默认更稳定。
+- change: 仅调整“默认值”和空配置 fallback；已有用户已保存的 `config_temperature` 或显式传入温度不会被强制改写，主进程本地参数链路、库页单文件配置与代理转发链路也统一按 nullish 语义处理，显式传入 `0` 会继续按 `0` 处理。
+
+#### [测试工程层] GUI 与 EPUB 回归补齐
+- test: 新增 `GUI/src/renderer/src/lib/__tests__/proofreadViewConfig.test.ts` 回归，覆盖校对页 V2 Pipeline 选择只接受当前有效 id 的状态收敛逻辑。
+- test: 新增 `GUI/src/renderer/src/lib/__tests__/dragDropPaths.test.ts` 回归，覆盖 Electron 文件拖拽路径提取在 `items/files` 双通道下的兼容与去重行为。
+- test: 扩充 `middleware/tests/unit/test_epub_document.py`，覆盖 `div + br/hr/a` 型 EPUB 正文流的读取、细分与回写，确保章节正文不再只剩前言可见，且不会被重新合并成异常超大单块。
+- test: 更新 `middleware/tests/unit/test_translation_worker.py` 与 `middleware/tests/integration/test_main_flow.py` 中的默认温度夹具，并新增默认值断言，锁定系统默认温度为 `0.3`。
+
 ## [2.2.1] - 2026-03-08
 
 ### 变更
