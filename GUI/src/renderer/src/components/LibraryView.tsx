@@ -57,6 +57,7 @@ import {
   loadLibraryQueueWithLegacyMigration,
   persistLibraryQueue,
 } from "../lib/libraryQueueStorage";
+import { extractElectronDragPaths } from "../lib/dragDropPaths";
 import {
   filterWatchFilesByTypes,
   isLikelyTranslatedOutput,
@@ -2650,17 +2651,7 @@ export function LibraryView({
 
       setIsDragOver(false);
 
-      const items = Array.from(e.dataTransfer.items);
-      const paths: string[] = [];
-
-      for (const item of items) {
-        if (item.kind === "file") {
-          const file = item.getAsFile();
-          if (file && (file as any).path) {
-            paths.push((file as any).path);
-          }
-        }
-      }
+      const paths = extractElectronDragPaths(e.dataTransfer);
 
       if (paths.length > 0) {
         const finalPaths: string[] = [];

@@ -102,8 +102,7 @@ export function TermExtractModal({
       const file = files[0];
       const ext = file.name.split(".").pop()?.toLowerCase();
       if (ext === "txt" || ext === "epub" || ext === "ass" || ext === "srt") {
-        // @ts-ignore - Electron provides path property
-        const filePath = file.path;
+        const filePath = window.electron?.webUtils?.getPathForFile?.(file) || "";
         if (filePath) {
           setSelectedFile(filePath);
           setSourceType("upload");

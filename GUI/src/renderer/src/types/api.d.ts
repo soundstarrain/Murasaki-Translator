@@ -431,9 +431,9 @@ export interface ElectronAPI {
   openGlossaryFolder: () => Promise<void>;
   createGlossaryFile: (
     arg: string | { filename: string; content?: string },
-  reportActiveView: (view: string) => void;
   ) => Promise<{ success: boolean; path?: string; error?: string }>;
   getModelInfo: (modelName: string) => Promise<any>;
+  reportActiveView: (view: string) => void;
 
   // File Operations
   selectFile: (options?: {
@@ -968,9 +968,16 @@ export interface ElectronAPI {
   hfCheckNetwork: () => Promise<any>;
 }
 
+export interface ToolkitElectronAPI {
+  webUtils: {
+    getPathForFile: (file: File) => string;
+  };
+}
+
 declare global {
   interface Window {
     api: ElectronAPI;
+    electron: ToolkitElectronAPI;
   }
 }
 
