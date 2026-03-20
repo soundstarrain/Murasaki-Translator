@@ -209,6 +209,10 @@ ssh -N -L 8000:127.0.0.1:8000 user@your-server
 
 ---
 
+## Star趋势
+
+[![Star历史图表](https://starchart.cc/soundstarrain/Murasaki-Translator.svg)](https://starchart.cc/soundstarrain/Murasaki-Translator)
+
 ## 协议与致谢
 
 - **软件代码**: [Apache-2.0 License](./LICENSE)
